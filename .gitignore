@@ -1,0 +1,55 @@
+# --- SekaiDesk ---
+
+# Build artifacts
+build/
+build-*/
+out/
+dist/
+*.o
+*.obj
+*.exe.bak
+CMakeLists.txt.user
+CMakeCache.txt
+CMakeFiles/
+cmake-build-*/
+compile_commands.json
+.qt/
+
+# Qt / qsb generated
+*.qsb.bak
+qmlcachegen/
+*.qm
+
+# IDE
+.idea/
+.vs/
+.vscode/
+*.user
+*.pro.user
+
+# Logs / temp
+*.log
+*.tmp
+*.swp
+
+# --- Excluded heavy folders ---
+
+# Prebuilt Qt runtime binaries (vendor, not source)
+bin/
+
+# Dead Rust prototype (archived, never compiled again)
+prototype test (failed - no use i think)/
+
+# Colab build zips dropped here for testing
+*.zip
+*.7z
+
+# Wallpaper / large media staged for packaging
+# (assets under SekaiPop/ stay tracked — they are the 1:1 UI source)
+
+# Upstream SekaiPop git history backup (removed from SekaiPop/ to vendor it)
+.upstream-backup/
+
+# Local secrets / personal config
+config/sekaidesk.json
+config/restore.json
