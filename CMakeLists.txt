@@ -99,7 +99,7 @@ target_link_libraries(SekaiDesk PRIVATE
 
 if(WIN32)
     target_link_libraries(SekaiDesk PRIVATE
-        dwmapi user32 shell32 ole32 oleaut32 ws2_32
+        dwmapi user32 shell32 ole32 oleaut32 ws2_32 winhttp
     )
 endif()
 

@@ -3,6 +3,7 @@
 
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QStandardPaths>
 #include <QVariantMap>
@@ -34,6 +35,7 @@ void AppLauncher::reload()
                     m_pinnedApps << v;
             }
         }
+        m_usageCounts = m_settings->get(QStringLiteral("launcher.usage")).toMap();
     }
     if (!hasKey)
         seedDefaultsIfEmpty();
@@ -95,6 +97,16 @@ void AppLauncher::savePinnedApps()
         m_settings->set(QStringLiteral("dock.pinnedApps"), m_pinnedApps);
 }
 
+void AppLauncher::recordUsage(const QString& target)
+{
+    const QString key = target.trimmed().toLower();
+    if (key.isEmpty())
+        return;
+    m_usageCounts.insert(key, m_usageCounts.value(key, 0).toInt() + 1);
+    if (m_settings)
+        m_settings->set(QStringLiteral("launcher.usage"), m_usageCounts);
+}
+
 bool AppLauncher::launch(const QString& target, const QString& args)
 {
     if (target.trimmed().isEmpty())
@@ -115,9 +127,47 @@ bool AppLauncher::launch(const QString& target, const QString& args)
                  qPrintable(target), static_cast<long long>(code));
         return false;
     }
+    recordUsage(target);
     return true;
 #else
     Q_UNUSED(args);
+    return false;
+#endif
+}
+
+bool AppLauncher::runElevated(const QString& target, const QString& args)
+{
+#ifdef Q_OS_WIN
+    if (target.trimmed().isEmpty())
+        return false;
+    const HINSTANCE res = ShellExecuteW(
+        nullptr,
+        L"runas",
+        reinterpret_cast<const wchar_t*>(target.utf16()),
+        args.isEmpty() ? nullptr : reinterpret_cast<const wchar_t*>(args.utf16()),
+        nullptr,
+        SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(res) > 32;
+#else
+    Q_UNUSED(target);
+    Q_UNUSED(args);
+    return false;
+#endif
+}
+
+bool AppLauncher::revealInExplorer(const QString& target)
+{
+#ifdef Q_OS_WIN
+    const QString clean = QDir::toNativeSeparators(target.trimmed());
+    if (clean.isEmpty() || !QFileInfo::exists(clean))
+        return false;
+    const QString arg = QStringLiteral("/select,\"%1\"").arg(clean);
+    ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                  reinterpret_cast<const wchar_t*>(arg.utf16()),
+                  nullptr, SW_SHOWNORMAL);
+    return true;
+#else
+    Q_UNUSED(target);
     return false;
 #endif
 }
@@ -325,35 +375,133 @@ void AppLauncher::refreshInstalledApps()
     emit installedAppsChanged();
 }
 
+static int fuzzyMatchScore(const QString& nameRaw, const QString& query)
+{
+    const QString name = nameRaw.toLower();
+    if (name == query)
+        return 1000;
+    if (name.startsWith(query))
+        return 850 - qMin(100, name.size() - query.size());
+
+    // Word-boundary or CamelCase acronym matching ("vsc" -> "Visual Studio Code")
+    QString initials;
+    QStringList words = name.split(QRegularExpression(QStringLiteral("[\\s\\-_\\.]+")), Qt::SkipEmptyParts);
+    for (const QString& w : words)
+        initials.append(w.at(0));
+    if (initials.startsWith(query))
+        return 760;
+
+    const int subIdx = name.indexOf(query);
+    if (subIdx >= 0) {
+        const bool atWordStart = (subIdx == 0 || !name.at(subIdx - 1).isLetterOrNumber());
+        return (atWordStart ? 680 : 540) - qMin(80, subIdx);
+    }
+
+    // Tight subsequence fuzzy match
+    int qi = 0;
+    int lastMatch = -1;
+    int gapSum = 0;
+    for (int ni = 0; ni < name.size() && qi < query.size(); ++ni) {
+        if (name.at(ni) == query.at(qi)) {
+            if (lastMatch >= 0)
+                gapSum += (ni - lastMatch - 1);
+            lastMatch = ni;
+            ++qi;
+        }
+    }
+    if (qi == query.size() && gapSum <= name.size())
+        return qMax(120, 420 - gapSum * 8);
+
+    return 0;
+}
+
 QVariantList AppLauncher::searchApps(const QString& query) const
 {
     const QString q = query.trimmed().toLower();
     if (q.isEmpty()) {
-        QVariantList top;
-        for (int i = 0; i < m_pinnedApps.size() && top.size() < 8; ++i) {
-            QVariantMap pm = m_pinnedApps.at(i).toMap();
-            if (pm.value(QStringLiteral("kind")).toString() == QStringLiteral("separator"))
-                continue;
-            pm.insert(QStringLiteral("category"), QStringLiteral("Pinned"));
-            top.append(pm);
-        }
-        return top;
+        QVariantList ranked = m_installedApps;
+        std::stable_sort(ranked.begin(), ranked.end(), [this](const QVariant& a, const QVariant& b) {
+            const QVariantMap ma = a.toMap();
+            const QVariantMap mb = b.toMap();
+            const int ua = m_usageCounts.value(ma.value(QStringLiteral("target")).toString().toLower(), 0).toInt();
+            const int ub = m_usageCounts.value(mb.value(QStringLiteral("target")).toString().toLower(), 0).toInt();
+            if (ua != ub)
+                return ua > ub;
+            const bool pa = ma.value(QStringLiteral("category")).toString() == QStringLiteral("Pinned");
+            const bool pb = mb.value(QStringLiteral("category")).toString() == QStringLiteral("Pinned");
+            return pa && !pb;
+        });
+        return ranked.size() > 8 ? ranked.mid(0, 8) : ranked;
     }
 
-    QVariantList startsWith;
-    QVariantList contains;
+    struct Scored {
+        int score;
+        QVariantMap item;
+    };
+    QList<Scored> matches;
     for (const QVariant& v : m_installedApps) {
-        const QVariantMap m = v.toMap();
-        const QString name = m.value(QStringLiteral("name")).toString().toLower();
-        if (name.startsWith(q))
-            startsWith.append(m);
-        else if (name.contains(q))
-            contains.append(m);
+        QVariantMap m = v.toMap();
+        const int base = fuzzyMatchScore(m.value(QStringLiteral("name")).toString(), q);
+        if (base <= 0)
+            continue;
+        const int usage = m_usageCounts.value(m.value(QStringLiteral("target")).toString().toLower(), 0).toInt();
+        const int bonus = qMin(180, usage * 25) + (m.value(QStringLiteral("category")).toString() == QStringLiteral("Pinned") ? 30 : 0);
+        m.insert(QStringLiteral("score"), base + bonus);
+        matches.append({ base + bonus, m });
     }
 
-    QVariantList res = startsWith;
-    res.append(contains);
-    if (res.size() > 14)
-        res = res.mid(0, 14);
+    std::sort(matches.begin(), matches.end(), [](const Scored& a, const Scored& b) {
+        if (a.score != b.score)
+            return a.score > b.score;
+        return a.item.value(QStringLiteral("name")).toString() < b.item.value(QStringLiteral("name")).toString();
+    });
+
+    QVariantList res;
+    for (int i = 0; i < matches.size() && i < 12; ++i)
+        res.append(matches.at(i).item);
     return res;
+}
+
+QVariantList AppLauncher::listPathSuggestions(const QString& rawPath) const
+{
+    QVariantList out;
+    QString p = rawPath.trimmed();
+    if (p.startsWith(QLatin1Char('~')))
+        p = qEnvironmentVariable("USERPROFILE") + p.mid(1);
+    p.replace(QLatin1Char('/'), QLatin1Char('\\'));
+
+    QFileInfo direct(p);
+    QString dirPath;
+    QString prefix;
+    if (direct.exists() && direct.isDir()) {
+        dirPath = direct.absoluteFilePath();
+    } else {
+        const int slash = p.lastIndexOf(QLatin1Char('\\'));
+        if (slash < 0)
+            return out;
+        dirPath = p.left(slash + 1);
+        prefix = p.mid(slash + 1).toLower();
+    }
+
+    QDir dir(dirPath);
+    if (!dir.exists())
+        return out;
+
+    const QFileInfoList entries = dir.entryInfoList(
+        QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot,
+        QDir::DirsFirst | QDir::Name | QDir::IgnoreCase);
+    for (const QFileInfo& fi : entries) {
+        if (!prefix.isEmpty() && !fi.fileName().toLower().contains(prefix))
+            continue;
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), fi.fileName());
+        m.insert(QStringLiteral("target"), QDir::toNativeSeparators(fi.absoluteFilePath()));
+        m.insert(QStringLiteral("args"), QString());
+        m.insert(QStringLiteral("category"), fi.isDir() ? QStringLiteral("Folder") : QStringLiteral("File"));
+        m.insert(QStringLiteral("isPath"), true);
+        out.append(m);
+        if (out.size() >= 10)
+            break;
+    }
+    return out;
 }

@@ -197,8 +197,6 @@ PanelWindow {
         for (let k = 0; k < extra.length; ++k)
             items.push(extra[k])
 
-        items.push({ kind: "divider" })
-        items.push({ kind: "quit" })
         return items
     }
 
@@ -210,7 +208,7 @@ PanelWindow {
             const it = list[i]
             const bw = (it.kind === "app" || it.kind === "trash")
                 ? baseTileSize
-                : (it.kind === "media" ? 124 : (it.kind === "quit" ? 34 : 8))
+                : (it.kind === "media" ? 124 : 8)
             bx += bw + (i < n - 1 ? tileGap : 0)
         }
         return Math.max(1, bx)
@@ -226,7 +224,7 @@ PanelWindow {
             const it = list[i]
             const bw = (it.kind === "app" || it.kind === "trash")
                 ? baseTileSize
-                : (it.kind === "media" ? 124 : (it.kind === "quit" ? 34 : 8))
+                : (it.kind === "media" ? 124 : 8)
             baseCenters.push(bx + bw * 0.5)
             bx += bw + (i < n - 1 ? tileGap : 0)
         }
@@ -247,7 +245,7 @@ PanelWindow {
             weights.push(w)
             const curW = (it.kind === "app" || it.kind === "trash")
                 ? (baseTileSize + (maxTileSize - baseTileSize) * w)
-                : (it.kind === "media" ? 124 : (it.kind === "quit" ? 34 : 8))
+                : (it.kind === "media" ? 124 : 8)
             widths.push(curW)
             xs.push(cx)
             cx += curW + (i < n - 1 ? tileGap : 0)
@@ -956,35 +954,6 @@ PanelWindow {
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    // --- Compact Quit Button ---
-                    Rectangle {
-                        visible: slot.modelData.kind === "quit"
-                        anchors.centerIn: parent
-                        width: 30
-                        height: 30
-                        radius: 15
-                        color: quitArea.containsMouse ? "#FEE2E2" : "#E2E8F0"
-                        border.width: 1.5
-                        border.color: quitArea.containsMouse ? "#EF4444" : "#1A1B2E"
-
-                        Text {
-                            anchors.centerIn: parent
-                            text: "×"
-                            color: quitArea.containsMouse ? "#B91C1C" : "#1A1B2E"
-                            font.family: "Segoe UI"
-                            font.pixelSize: 15
-                            font.bold: true
-                        }
-
-                        MouseArea {
-                            id: quitArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: Qt.quit()
                         }
                     }
                 }
@@ -3492,13 +3461,14 @@ PanelWindow {
                             Rectangle {
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
-                                width: dmTxt.implicitWidth + 14
-                                height: 20
+                                width: dmRow.implicitWidth + 16
+                                height: 22
                                 radius: 8
                                 color: SystemControl.darkMode ? themeHub.accentB : "#F1F5F9"
                                 border.width: 1.5
                                 border.color: "#1A1B2E"
                                 Row {
+                                    id: dmRow
                                     anchors.centerIn: parent
                                     spacing: 5
                                     Image {

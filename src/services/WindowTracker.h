@@ -21,6 +21,9 @@ class WindowTracker : public QObject {
     Q_PROPERTY(int ramUsage READ ramUsage NOTIFY statsChanged)
     Q_PROPERTY(int cpuTemp READ cpuTemp NOTIFY statsChanged)
     Q_PROPERTY(int gpuTemp READ gpuTemp NOTIFY statsChanged)
+    Q_PROPERTY(QString uptimeText READ uptimeText NOTIFY statsChanged)
+    Q_PROPERTY(QString machineName READ machineName CONSTANT)
+    Q_PROPERTY(QString userName READ userName CONSTANT)
 
 public:
     explicit WindowTracker(QObject* parent = nullptr);
@@ -36,6 +39,9 @@ public:
     int ramUsage() const { return m_ramUsage; }
     int cpuTemp() const { return m_cpuTemp; }
     int gpuTemp() const { return m_gpuTemp; }
+    QString uptimeText() const { return m_uptimeText; }
+    QString machineName() const { return m_machineName; }
+    QString userName() const { return m_userName; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE QVariantMap stateForTarget(const QString& target) const;
@@ -44,6 +50,10 @@ public:
     Q_INVOKABLE bool activateHwnd(qulonglong hwnd);
     Q_INVOKABLE bool minimizeHwnd(qulonglong hwnd);
     Q_INVOKABLE bool closeHwnd(qulonglong hwnd);
+    Q_INVOKABLE bool openSpecialFolder(const QString& kind);
+    Q_INVOKABLE void lockWorkstation();
+    Q_INVOKABLE void sleepComputer();
+    Q_INVOKABLE void takeScreenshot();
 
 signals:
     void runningAppsChanged();
@@ -79,6 +89,9 @@ private:
     int m_ramUsage = 0;
     int m_cpuTemp = -1;
     int m_gpuTemp = -1;
+    QString m_uptimeText = QStringLiteral("0m");
+    QString m_machineName;
+    QString m_userName;
     quint64 m_prevIdleTime = 0;
     quint64 m_prevKernelTime = 0;
     quint64 m_prevUserTime = 0;

@@ -23,16 +23,17 @@ public:
     Q_INVOKABLE void set(const QString& key, const QVariant& value);
     Q_INVOKABLE bool has(const QString& key) const;
     Q_INVOKABLE void remove(const QString& key);
+    Q_INVOKABLE void flush();
 
     // Dotted-path helper for nested keys, e.g. get("dock.iconSize").
     static QVariant lookupPath(const QJsonObject& root, const QString& dottedPath);
     static void writePath(QJsonObject& root, const QString& dottedPath,
                           const QJsonValue& value);
 
-    // C++-side typed accessors for core services.
-    bool boolValue(const QString& dottedPath, bool fallback = false) const;
-    int intValue(const QString& dottedPath, int fallback = 0) const;
-    QString stringValue(const QString& dottedPath, const QString& fallback = {}) const;
+    // Typed accessors callable from both C++ and QML (`ConfigStore.boolValue(...)`).
+    Q_INVOKABLE bool boolValue(const QString& dottedPath, bool fallback = false) const;
+    Q_INVOKABLE int intValue(const QString& dottedPath, int fallback = 0) const;
+    Q_INVOKABLE QString stringValue(const QString& dottedPath, const QString& fallback = {}) const;
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

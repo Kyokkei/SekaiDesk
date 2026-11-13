@@ -38,6 +38,7 @@ int main(int argc, char* argv[])
     app.setOrganizationName(QStringLiteral("SekaiDesk"));
     app.setApplicationName(QStringLiteral("SekaiDesk"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setQuitOnLastWindowClosed(false);
 
     static SettingsStore settings;
     settings.ensureLoaded();

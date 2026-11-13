@@ -128,12 +128,15 @@ PanelWindow::PanelWindow(QWindow* parent)
             applyClickThrough();
             updateMask();
             applyBlurBehind();
+            applyFileDrops();
             if (m_reserveTopBar)
                 registerOrUpdateAppBar();
         } else {
             unregisterAppBar();
         }
     });
+    m_fsGuardTimer.setInterval(300);
+    connect(&m_fsGuardTimer, &QTimer::timeout, this, &PanelWindow::verifyFullscreenState);
     connect(this, &QWindow::screenChanged, this, [this](QScreen*) {
         recomputeGeometry();
         updateMask();
@@ -475,56 +478,127 @@ void PanelWindow::unregisterAppBar()
 #endif
 }
 
+#ifdef Q_OS_WIN
+static bool isGenuineFullscreenForeground()
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg || !IsWindow(fg) || !IsWindowVisible(fg) || IsIconic(fg))
+        return false;
+
+    wchar_t cls[64]{};
+    GetClassNameW(fg, cls, 64);
+    if (wcscmp(cls, L"Progman") == 0
+        || wcscmp(cls, L"WorkerW") == 0
+        || wcscmp(cls, L"Shell_TrayWnd") == 0
+        || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0
+        || wcscmp(cls, L"NotifyIconOverflowWindow") == 0) {
+        return false;
+    }
+
+    DWORD fgPid = 0;
+    GetWindowThreadProcessId(fg, &fgPid);
+    if (fgPid == GetCurrentProcessId())
+        return false;
+    if (fgPid != 0) {
+        HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, fgPid);
+        if (hProc) {
+            wchar_t exePath[MAX_PATH]{};
+            DWORD sz = MAX_PATH;
+            if (QueryFullProcessImageNameW(hProc, 0, exePath, &sz)) {
+                const wchar_t* base = wcsrchr(exePath, L'\\');
+                const wchar_t* name = base ? base + 1 : exePath;
+                if (_wcsicmp(name, L"wallpaper64.exe") == 0
+                    || _wcsicmp(name, L"wallpaper32.exe") == 0
+                    || _wcsicmp(name, L"explorer.exe") == 0) {
+                    CloseHandle(hProc);
+                    return false;
+                }
+            }
+            CloseHandle(hProc);
+        }
+    }
+
+    const HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(mon, &mi))
+        return false;
+
+    RECT rc{};
+    if (!GetWindowRect(fg, &rc))
+        return false;
+
+    // Normal maximized app with titlebar respects TopBar work area or sits above taskbar: not exclusive fullscreen
+    const LONG_PTR style = GetWindowLongPtrW(fg, GWL_STYLE);
+    if ((style & WS_CAPTION) == WS_CAPTION)
+        return false;
+
+    return rc.left <= mi.rcMonitor.left
+        && rc.top <= mi.rcMonitor.top
+        && rc.right >= mi.rcMonitor.right
+        && rc.bottom >= mi.rcMonitor.bottom;
+}
+#endif
+
+void PanelWindow::verifyFullscreenState()
+{
+#ifdef Q_OS_WIN
+    if (m_fullscreenActive && !isGenuineFullscreenForeground()) {
+        m_fullscreenActive = false;
+        m_fsGuardTimer.stop();
+        emit fullscreenActiveChanged();
+        if (!m_desktopLayer && isVisible()) {
+            HWND hwnd = reinterpret_cast<HWND>(winId());
+            if (hwnd) {
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+    }
+#endif
+}
+
 bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
 {
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
         const MSG* msg = static_cast<const MSG*>(message);
+        if (msg && msg->message == WM_DROPFILES && m_acceptFileDrops) {
+            HDROP hDrop = reinterpret_cast<HDROP>(msg->wParam);
+            const UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+            QStringList dropped;
+            for (UINT i = 0; i < count; ++i) {
+                const UINT len = DragQueryFileW(hDrop, i, nullptr, 0);
+                if (len == 0)
+                    continue;
+                QString path(static_cast<int>(len), Qt::Uninitialized);
+                DragQueryFileW(hDrop, i, reinterpret_cast<wchar_t*>(path.data()), len + 1);
+                dropped << path;
+            }
+            DragFinish(hDrop);
+            if (!dropped.isEmpty())
+                emit filesDropped(dropped);
+            if (result)
+                *result = 0;
+            return true;
+        }
         if (msg && msg->message == kAppBarCallbackMsg) {
             if (msg->wParam == ABN_POSCHANGED && m_reserveTopBar && isVisible()) {
                 registerOrUpdateAppBar();
-            } else if (msg->wParam == ABN_FULLSCREENAPP) {
-                bool fs = (msg->lParam != 0);
-                if (fs) {
-                    HWND fg = GetForegroundWindow();
-                    if (!fg) {
-                        fs = false;
-                    } else {
-                        wchar_t cls[64]{};
-                        GetClassNameW(fg, cls, 64);
-                        if (wcscmp(cls, L"Progman") == 0
-                            || wcscmp(cls, L"WorkerW") == 0
-                            || wcscmp(cls, L"Shell_TrayWnd") == 0
-                            || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0
-                            || wcscmp(cls, L"NotifyIconOverflowWindow") == 0) {
-                            fs = false;
-                        } else {
-                            DWORD fgPid = 0;
-                            GetWindowThreadProcessId(fg, &fgPid);
-                            if (fgPid == GetCurrentProcessId()) {
-                                fs = false;
-                            } else if (fgPid != 0) {
-                                HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, fgPid);
-                                if (hProc) {
-                                    wchar_t exePath[MAX_PATH]{};
-                                    DWORD sz = MAX_PATH;
-                                    if (QueryFullProcessImageNameW(hProc, 0, exePath, &sz)) {
-                                        const wchar_t* base = wcsrchr(exePath, L'\\');
-                                        const wchar_t* name = base ? base + 1 : exePath;
-                                        if (_wcsicmp(name, L"wallpaper64.exe") == 0
-                                            || _wcsicmp(name, L"wallpaper32.exe") == 0
-                                            || _wcsicmp(name, L"explorer.exe") == 0) {
-                                            fs = false;
-                                        }
-                                    }
-                                    CloseHandle(hProc);
-                                }
-                            }
-                        }
-                    }
+                if (!m_fullscreenActive && !m_desktopLayer) {
+                    HWND hwnd = reinterpret_cast<HWND>(winId());
+                    if (hwnd)
+                        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 }
+            } else if (msg->wParam == ABN_FULLSCREENAPP) {
+                bool fs = (msg->lParam != 0) && isGenuineFullscreenForeground();
                 if (m_fullscreenActive != fs) {
                     m_fullscreenActive = fs;
+                    if (fs)
+                        m_fsGuardTimer.start();
+                    else
+                        m_fsGuardTimer.stop();
                     emit fullscreenActiveChanged();
                 }
             }
@@ -593,6 +667,38 @@ void PanelWindow::raiseOnDesktop()
         return;
     SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+#endif
+}
+
+void PanelWindow::setAcceptFileDrops(bool on)
+{
+    if (m_acceptFileDrops == on)
+        return;
+    m_acceptFileDrops = on;
+    applyFileDrops();
+    emit acceptFileDropsChanged();
+}
+
+void PanelWindow::applyFileDrops()
+{
+#ifdef Q_OS_WIN
+    if (!isVisible())
+        return;
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd)
+        return;
+    DragAcceptFiles(hwnd, m_acceptFileDrops ? TRUE : FALSE);
+    if (m_acceptFileDrops) {
+        using FnFilterEx = BOOL(WINAPI*)(HWND, UINT, DWORD, void*);
+        static auto fnFilter = reinterpret_cast<FnFilterEx>(
+            GetProcAddress(GetModuleHandleW(L"user32.dll"), "ChangeWindowMessageFilterEx"));
+        if (fnFilter) {
+            // Allow drag-drop from medium-integrity Explorer even if SekaiDesk runs elevated
+            fnFilter(hwnd, WM_DROPFILES, 1 /*MSGFLT_ALLOW*/, nullptr);
+            fnFilter(hwnd, WM_COPYDATA, 1 /*MSGFLT_ALLOW*/, nullptr);
+            fnFilter(hwnd, 0x0049 /*WM_COPYGLOBALDATA*/, 1 /*MSGFLT_ALLOW*/, nullptr);
+        }
+    }
 #endif
 }
 

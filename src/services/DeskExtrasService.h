@@ -1,9 +1,9 @@
 #pragma once
-// DeskExtrasService — LyricsService (LRCLIB synced/plain lyrics),
-// WeatherService (Open-Meteo + IP city), and DropShelfService (temp file tray).
+// DeskExtrasService — LyricsService (LRCLIB synced/plain lyrics via native WinHTTP),
+// WeatherService (Open-Meteo + IP city via native WinHTTP), and DropShelfService (temp file tray).
 
-#include <QNetworkAccessManager>
 #include <QObject>
+#include <QStringList>
 #include <QTimer>
 #include <QVariantList>
 
@@ -19,6 +19,7 @@ class LyricsService : public QObject {
     Q_PROPERTY(QString plainText READ plainText NOTIFY lyricsChanged)
     Q_PROPERTY(int activeIndex READ activeIndex NOTIFY activeIndexChanged)
     Q_PROPERTY(QString trackKey READ trackKey NOTIFY lyricsChanged)
+    Q_PROPERTY(QString statusText READ statusText NOTIFY lyricsChanged)
 
 public:
     explicit LyricsService(MediaService* media, QObject* parent = nullptr);
@@ -30,8 +31,10 @@ public:
     QString plainText() const { return m_plainText; }
     int activeIndex() const { return m_activeIndex; }
     QString trackKey() const { return m_trackKey; }
+    QString statusText() const { return m_statusText; }
 
     Q_INVOKABLE void refresh();
+    Q_INVOKABLE void searchManual(const QString& query);
 
 signals:
     void lyricsChanged();
@@ -41,11 +44,12 @@ private:
     void onMediaUpdated();
     void onTimelineUpdated();
     void updateActiveLine();
-    void fetchLyrics(const QString& title, const QString& artist, double durationSec);
+    void fetchLyrics(const QString& title, const QString& artist, double durationSec, bool force = false);
+    void fetchSearchFallback(const QString& query, double targetDuration, uint64_t gen);
+    bool applyTrackJson(const QByteArray& body, bool allowArray);
     void parseLrc(const QString& lrcText);
 
     MediaService* m_media = nullptr;
-    QNetworkAccessManager m_nam;
     QTimer m_tickTimer;
     bool m_loading = false;
     bool m_synced = false;
@@ -54,8 +58,10 @@ private:
     int m_activeIndex = -1;
     QString m_trackKey;
     QString m_pendingKey;
+    QString m_statusText;
     double m_anchorPosSec = 0.0;
     qint64 m_anchorMs = 0;
+    uint64_t m_requestGen = 0;
 };
 
 class WeatherService : public QObject {
@@ -67,11 +73,13 @@ class WeatherService : public QObject {
     Q_PROPERTY(int feelsLike READ feelsLike NOTIFY weatherChanged)
     Q_PROPERTY(int humidity READ humidity NOTIFY weatherChanged)
     Q_PROPERTY(int windSpeed READ windSpeed NOTIFY weatherChanged)
+    Q_PROPERTY(int uvIndex READ uvIndex NOTIFY weatherChanged)
     Q_PROPERTY(int tempMin READ tempMin NOTIFY weatherChanged)
     Q_PROPERTY(int tempMax READ tempMax NOTIFY weatherChanged)
     Q_PROPERTY(int weatherCode READ weatherCode NOTIFY weatherChanged)
     Q_PROPERTY(QString conditionText READ conditionText NOTIFY weatherChanged)
     Q_PROPERTY(bool isDay READ isDay NOTIFY weatherChanged)
+    Q_PROPERTY(QVariantList hourlyForecast READ hourlyForecast NOTIFY weatherChanged)
 
 public:
     explicit WeatherService(SettingsStore* settings, QObject* parent = nullptr);
@@ -83,11 +91,13 @@ public:
     int feelsLike() const { return m_feelsLike; }
     int humidity() const { return m_humidity; }
     int windSpeed() const { return m_windSpeed; }
+    int uvIndex() const { return m_uvIndex; }
     int tempMin() const { return m_tempMin; }
     int tempMax() const { return m_tempMax; }
     int weatherCode() const { return m_weatherCode; }
     QString conditionText() const { return m_conditionText; }
     bool isDay() const { return m_isDay; }
+    QVariantList hourlyForecast() const { return m_hourlyForecast; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void setCity(const QString& cityName);
@@ -101,7 +111,6 @@ private:
     static QString describeWmo(int code);
 
     SettingsStore* m_settings = nullptr;
-    QNetworkAccessManager m_nam;
     QTimer m_refreshTimer;
     bool m_loading = false;
     bool m_ready = false;
@@ -112,11 +121,14 @@ private:
     int m_feelsLike = 30;
     int m_humidity = 75;
     int m_windSpeed = 8;
+    int m_uvIndex = 4;
     int m_tempMin = 24;
     int m_tempMax = 33;
     int m_weatherCode = 2;
     QString m_conditionText = QStringLiteral("Partly Cloudy");
     bool m_isDay = true;
+    QVariantList m_hourlyForecast;
+    uint64_t m_requestGen = 0;
 };
 
 class DropShelfService : public QObject {
@@ -131,6 +143,7 @@ public:
     int count() const { return m_items.size(); }
 
     Q_INVOKABLE void addUrls(const QVariantList& urls);
+    Q_INVOKABLE void addPaths(const QStringList& paths);
     Q_INVOKABLE void openItem(int index);
     Q_INVOKABLE void revealItem(int index);
     Q_INVOKABLE void copyAllPaths();
@@ -141,5 +154,6 @@ signals:
     void itemsChanged();
 
 private:
+    void appendSinglePath(const QString& rawPath);
     QVariantList m_items;
 };

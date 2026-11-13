@@ -4,6 +4,7 @@
 
 #include <QObject>
 #include <QVariantList>
+#include <QVariantMap>
 
 class SettingsStore;
 
@@ -19,7 +20,11 @@ public:
     QVariantList installedApps() const { return m_installedApps; }
 
     Q_INVOKABLE bool launch(const QString& target, const QString& args = {});
+    Q_INVOKABLE bool runElevated(const QString& target, const QString& args = {});
+    Q_INVOKABLE bool revealInExplorer(const QString& target);
+    Q_INVOKABLE void recordUsage(const QString& target);
     Q_INVOKABLE QVariantList searchApps(const QString& query) const;
+    Q_INVOKABLE QVariantList listPathSuggestions(const QString& rawPath) const;
     Q_INVOKABLE void refreshInstalledApps();
     Q_INVOKABLE void addPinnedApp(const QString& name, const QString& target,
                                   const QString& args = {});
@@ -44,4 +49,5 @@ private:
     SettingsStore* m_settings = nullptr;
     QVariantList m_pinnedApps;
     QVariantList m_installedApps;
+    QVariantMap m_usageCounts;
 };

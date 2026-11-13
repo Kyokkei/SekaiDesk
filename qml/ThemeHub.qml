@@ -144,19 +144,33 @@ Item {
     property bool wLyricsVisible: ConfigStore.boolValue("widgets.lyrics.visible", false)
     property bool wProfileVisible: ConfigStore.boolValue("widgets.profile.visible", false)
 
-    // Desktop widgets coordinates
-    property int wClockX: ConfigStore.intValue("widgets.clock.x", 28)
-    property int wClockY: ConfigStore.intValue("widgets.clock.y", 48)
-    property int wWeatherX: ConfigStore.intValue("widgets.weather.x", 28)
-    property int wWeatherY: ConfigStore.intValue("widgets.weather.y", 184)
-    property int wProfileX: ConfigStore.intValue("widgets.profile.x", 28)
-    property int wProfileY: ConfigStore.intValue("widgets.profile.y", 352)
-    property int wTodoX: ConfigStore.intValue("widgets.todo.x", Math.max(320, screenW - 295))
-    property int wTodoY: ConfigStore.intValue("widgets.todo.y", 48)
-    property int wNotesX: ConfigStore.intValue("widgets.notes.x", Math.max(320, screenW - 295))
-    property int wNotesY: ConfigStore.intValue("widgets.notes.y", 332)
-    property int wLyricsX: ConfigStore.intValue("widgets.lyrics.x", Math.max(320, screenW - 340))
-    property int wLyricsY: ConfigStore.intValue("widgets.lyrics.y", 568)
+    // Clock widget style ("stack" | "keys") and format
+    property string clockStyle: ConfigStore.stringValue("widgets.clock.style", "stack")
+    property bool clockUse24h: ConfigStore.boolValue("widgets.clock.use24h", false)
+
+    function setClockStyle(st) {
+        clockStyle = (st === "keys") ? "keys" : "stack"
+        ConfigStore.set("widgets.clock.style", clockStyle)
+    }
+
+    function setClockUse24h(v) {
+        clockUse24h = !!v
+        ConfigStore.set("widgets.clock.use24h", clockUse24h)
+    }
+
+    // Desktop widgets coordinates (clamped so nothing spawns trapped under TopBar)
+    property int wClockX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.clock.x", Math.max(320, screenW - 210))))
+    property int wClockY: Math.max(54, ConfigStore.intValue("widgets.clock.y", 68))
+    property int wWeatherX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.weather.x", 28)))
+    property int wWeatherY: Math.max(54, ConfigStore.intValue("widgets.weather.y", 346))
+    property int wProfileX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.profile.x", 28)))
+    property int wProfileY: Math.max(54, ConfigStore.intValue("widgets.profile.y", 56))
+    property int wTodoX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.todo.x", Math.max(320, screenW - 310))))
+    property int wTodoY: Math.max(54, ConfigStore.intValue("widgets.todo.y", 280))
+    property int wNotesX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.notes.x", Math.max(320, screenW - 310))))
+    property int wNotesY: Math.max(54, ConfigStore.intValue("widgets.notes.y", 568))
+    property int wLyricsX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.lyrics.x", Math.max(320, Math.round((screenW - 360) * 0.5)))))
+    property int wLyricsY: Math.max(54, ConfigStore.intValue("widgets.lyrics.y", Math.max(400, screenH - 280)))
 
     function setWidgetVisible(key, vis) {
         const v = !!vis
@@ -170,8 +184,8 @@ Item {
     }
 
     function saveWidgetPos(key, nx, ny) {
-        const cx = Math.max(0, Math.round(nx))
-        const cy = Math.max(28, Math.round(ny))
+        const cx = Math.max(8, Math.min(screenW - 100, Math.round(nx)))
+        const cy = Math.max(52, Math.min(screenH - 80, Math.round(ny)))
         ConfigStore.set("widgets." + key + ".x", cx)
         ConfigStore.set("widgets." + key + ".y", cy)
         if (key === "clock") { wClockX = cx; wClockY = cy }
@@ -183,13 +197,15 @@ Item {
     }
 
     function resetWidgetPositions() {
-        saveWidgetPos("clock", 28, 48)
-        saveWidgetPos("weather", 28, 184)
-        saveWidgetPos("profile", 28, 352)
-        saveWidgetPos("todo", Math.max(320, screenW - 295), 48)
-        saveWidgetPos("notes", Math.max(320, screenW - 295), 332)
-        saveWidgetPos("lyrics", Math.max(320, screenW - 340), 568)
+        saveWidgetPos("profile", 28, 56)
+        saveWidgetPos("weather", 28, 346)
+        saveWidgetPos("clock", Math.max(320, screenW - 210), 68)
+        saveWidgetPos("todo", Math.max(320, screenW - 310), 280)
+        saveWidgetPos("notes", Math.max(320, screenW - 310), 568)
+        saveWidgetPos("lyrics", Math.max(320, Math.round((screenW - 360) * 0.5)), Math.max(400, screenH - 280))
     }
+
+    Component.onDestruction: ConfigStore.flush()
 
     // Todo data
     property var todoItems: {

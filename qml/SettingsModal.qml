@@ -393,21 +393,56 @@ PanelWindow {
                 }
             }
 
-            // Quick hotkeys footer
-            Rectangle {
+            // Quick hotkeys + Quit/Reset footer
+            Row {
                 width: parent.width
-                height: 30
-                radius: 8
-                color: themeHub.bandDeep
-                border.width: 1.5
-                border.color: themeHub.darkInk
-                Text {
-                    anchors.centerIn: parent
-                    text: "Alt+Space: Spotlight   •   Ctrl+Alt+V: Clipboard   •   Alt+Q: QuickPanel"
-                    font.family: "Consolas"
-                    font.pixelSize: 10
-                    font.weight: Font.Bold
-                    color: themeHub.accentA
+                spacing: 6
+
+                Rectangle {
+                    width: parent.width - 96
+                    height: 30
+                    radius: 8
+                    color: themeHub.bandDeep
+                    border.width: 1.5
+                    border.color: themeHub.darkInk
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Alt+Space: Spotlight  •  Ctrl+Alt+V: Clipboard  •  Alt+Q: QuickPanel"
+                        font.family: "Consolas"
+                        font.pixelSize: 10
+                        font.weight: Font.Bold
+                        color: themeHub.accentA
+                        elide: Text.ElideRight
+                        width: parent.width - 12
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+
+                Rectangle {
+                    width: 90
+                    height: 30
+                    radius: 8
+                    color: quitHubMa.containsMouse ? "#FEE2E2" : "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#DC2626"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Quit Shell"
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        color: "#DC2626"
+                    }
+                    MouseArea {
+                        id: quitHubMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            ConfigStore.flush()
+                            Qt.quit()
+                        }
+                    }
                 }
             }
         }

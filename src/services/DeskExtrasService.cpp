@@ -4,88 +4,255 @@
 
 #include <QClipboard>
 #include <QDateTime>
+#include <QDesktopServices>
 #include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkReply>
-#include <QNetworkRequest>
+#include <QMetaObject>
+#include <QPointer>
+#include <QProcess>
 #include <QRegularExpression>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVariantMap>
 
+#include <algorithm>
+#include <cmath>
+#include <functional>
+#include <thread>
+
 #ifdef Q_OS_WIN
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
 #include <windows.h>
-#include <shellapi.h>
+#include <winhttp.h>
 #endif
 
-// ===========================================================================
+namespace {
+
+struct HttpResult {
+    int statusCode = 0;
+    QByteArray body;
+    QString error;
+};
+
+HttpResult winHttpGetSync(const QString& urlStr)
+{
+    HttpResult res;
+#ifdef Q_OS_WIN
+    const QUrl url(urlStr);
+    if (!url.isValid() || url.host().isEmpty()) {
+        res.error = QStringLiteral("Invalid URL");
+        return res;
+    }
+
+    const bool isHttps = (url.scheme().compare(QStringLiteral("https"), Qt::CaseInsensitive) == 0);
+    const std::wstring hostW = url.host().toStdWString();
+    QString pathAndQuery = url.path(QUrl::FullyEncoded);
+    if (pathAndQuery.isEmpty())
+        pathAndQuery = QStringLiteral("/");
+    if (url.hasQuery())
+        pathAndQuery += QStringLiteral("?") + url.query(QUrl::FullyEncoded);
+    const std::wstring pathW = pathAndQuery.toStdWString();
+    const INTERNET_PORT port = url.port(isHttps ? INTERNET_DEFAULT_HTTPS_PORT : INTERNET_DEFAULT_HTTP_PORT);
+
+    HINTERNET hSession = WinHttpOpen(
+        L"SekaiDesk/0.2",
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+        WINHTTP_NO_PROXY_NAME,
+        WINHTTP_NO_PROXY_BYPASS,
+        0);
+    if (!hSession) {
+        res.error = QStringLiteral("WinHttpOpen failed (%1)").arg(GetLastError());
+        return res;
+    }
+
+    WinHttpSetTimeouts(hSession, 8000, 8000, 8000, 10000);
+    DWORD redirPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
+    WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirPolicy, sizeof(redirPolicy));
+
+    HINTERNET hConnect = WinHttpConnect(hSession, hostW.c_str(), port, 0);
+    if (!hConnect) {
+        res.error = QStringLiteral("WinHttpConnect failed (%1)").arg(GetLastError());
+        WinHttpCloseHandle(hSession);
+        return res;
+    }
+
+    HINTERNET hRequest = WinHttpOpenRequest(
+        hConnect,
+        L"GET",
+        pathW.c_str(),
+        nullptr,
+        WINHTTP_NO_REFERER,
+        WINHTTP_DEFAULT_ACCEPT_TYPES,
+        isHttps ? WINHTTP_FLAG_SECURE : 0);
+    if (!hRequest) {
+        res.error = QStringLiteral("WinHttpOpenRequest failed (%1)").arg(GetLastError());
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return res;
+    }
+
+    const wchar_t* headers = L"Accept: application/json\r\nUser-Agent: SekaiDesk/0.2 (Windows NT)\r\n";
+    if (!WinHttpSendRequest(hRequest, headers, static_cast<DWORD>(-1L), WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(hRequest, nullptr)) {
+        res.error = QStringLiteral("HTTP request failed (%1)").arg(GetLastError());
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        WinHttpCloseHandle(hSession);
+        return res;
+    }
+
+    DWORD statusCode = 0;
+    DWORD statusSize = sizeof(statusCode);
+    if (WinHttpQueryHeaders(hRequest,
+                            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX,
+                            &statusCode,
+                            &statusSize,
+                            WINHTTP_NO_HEADER_INDEX)) {
+        res.statusCode = static_cast<int>(statusCode);
+    }
+
+    DWORD avail = 0;
+    while (WinHttpQueryDataAvailable(hRequest, &avail) && avail > 0) {
+        const DWORD toRead = qMin<DWORD>(avail, 65536);
+        QByteArray chunk(static_cast<int>(toRead), Qt::Uninitialized);
+        DWORD readBytes = 0;
+        if (!WinHttpReadData(hRequest, chunk.data(), toRead, &readBytes) || readBytes == 0)
+            break;
+        chunk.truncate(static_cast<int>(readBytes));
+        res.body.append(chunk);
+        if (res.body.size() > 4 * 1024 * 1024)
+            break;
+    }
+
+    WinHttpCloseHandle(hRequest);
+    WinHttpCloseHandle(hConnect);
+    WinHttpCloseHandle(hSession);
+#else
+    res.error = QStringLiteral("Unsupported platform");
+#endif
+    return res;
+}
+
+void runHttpAsync(QObject* receiver, const QString& url, std::function<void(HttpResult)> onDone)
+{
+    QPointer<QObject> guard(receiver);
+    std::thread([guard, url, cb = std::move(onDone)]() mutable {
+        HttpResult result = winHttpGetSync(url);
+        if (!guard)
+            return;
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, result = std::move(result), cb = std::move(cb)]() mutable {
+                if (guard)
+                    cb(result);
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+QString sanitizeTrackText(QString raw)
+{
+    static const QRegularExpression kParenRe(QStringLiteral("\\s*[\\[(](?:official|lyrics|audio|mv|music video|hd|4k|remix|feat\\.|ft\\.|explicit|ver\\.|version|visualizer)[^\\])]*[\\])]"), QRegularExpression::CaseInsensitiveOption);
+    raw.remove(kParenRe);
+    static const QRegularExpression kFeatRe(QStringLiteral("\\s+(?:feat\\.|ft\\.)\\s+.*$"), QRegularExpression::CaseInsensitiveOption);
+    raw.remove(kFeatRe);
+    return raw.simplified().trimmed();
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
 // LyricsService
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 LyricsService::LyricsService(MediaService* media, QObject* parent)
     : QObject(parent)
     , m_media(media)
 {
-    m_tickTimer.setInterval(250);
+    m_tickTimer.setInterval(120);
+    m_tickTimer.setTimerType(Qt::CoarseTimer);
     connect(&m_tickTimer, &QTimer::timeout, this, &LyricsService::updateActiveLine);
 
     if (m_media) {
         connect(m_media, &MediaService::mediaChanged, this, &LyricsService::onMediaUpdated);
         connect(m_media, &MediaService::timelineChanged, this, &LyricsService::onTimelineUpdated);
-        onMediaUpdated();
     }
+    onMediaUpdated();
 }
 
 void LyricsService::refresh()
 {
-    m_trackKey.clear();
-    onMediaUpdated();
+    if (!m_media || m_media->title().trimmed().isEmpty()) {
+        m_loading = false;
+        m_synced = false;
+        m_lines.clear();
+        m_plainText.clear();
+        m_activeIndex = -1;
+        m_trackKey.clear();
+        m_statusText = QStringLiteral("No track playing");
+        m_tickTimer.stop();
+        emit lyricsChanged();
+        emit activeIndexChanged();
+        return;
+    }
+    m_pendingKey.clear();
+    fetchLyrics(m_media->title().trimmed(), m_media->artist().trimmed(), m_media->durationSec(), true);
+}
+
+void LyricsService::searchManual(const QString& query)
+{
+    const QString cleaned = query.trimmed();
+    if (cleaned.isEmpty())
+        return;
+
+    ++m_requestGen;
+    const uint64_t gen = m_requestGen;
+    m_loading = true;
+    m_synced = false;
+    m_lines.clear();
+    m_plainText.clear();
+    m_activeIndex = -1;
+    m_trackKey = cleaned;
+    m_pendingKey = cleaned;
+    m_statusText = QStringLiteral("Searching \"%1\"...").arg(cleaned);
+    m_tickTimer.stop();
+    emit lyricsChanged();
+    emit activeIndexChanged();
+
+    const double targetDuration = (m_media && m_media->hasSession()) ? m_media->durationSec() : 0.0;
+    fetchSearchFallback(cleaned, targetDuration, gen);
 }
 
 void LyricsService::onMediaUpdated()
 {
-    if (!m_media || !m_media->hasSession()) {
+    if (!m_media || !m_media->hasSession() || m_media->title().trimmed().isEmpty()) {
+        ++m_requestGen;
+        const bool wasEmpty = m_lines.isEmpty() && m_plainText.isEmpty() && !m_loading;
+        m_loading = false;
+        m_synced = false;
+        m_lines.clear();
+        m_plainText.clear();
+        m_activeIndex = -1;
+        m_trackKey.clear();
+        m_pendingKey.clear();
+        m_statusText = QStringLiteral("Play music or search manually");
         m_tickTimer.stop();
-        if (!m_lines.isEmpty() || !m_plainText.isEmpty() || !m_trackKey.isEmpty() || m_loading) {
-            m_lines.clear();
-            m_plainText.clear();
-            m_trackKey.clear();
-            m_synced = false;
-            m_loading = false;
-            m_activeIndex = -1;
+        if (!wasEmpty) {
             emit lyricsChanged();
             emit activeIndexChanged();
         }
         return;
     }
 
-    if (m_media->isPlaying()) {
-        m_anchorPosSec = m_media->positionSec();
-        m_anchorMs = QDateTime::currentMSecsSinceEpoch();
-        if (!m_tickTimer.isActive())
-            m_tickTimer.start();
-    } else {
-        m_tickTimer.stop();
-        m_anchorPosSec = m_media->positionSec();
-        m_anchorMs = QDateTime::currentMSecsSinceEpoch();
-        updateActiveLine();
-    }
+    onTimelineUpdated();
 
-    const QString title = m_media->title().trimmed();
-    const QString artist = m_media->artist().trimmed();
-    const QString nextKey = artist + QStringLiteral(" — ") + title;
-    if (title.isEmpty() || nextKey == m_trackKey)
-        return;
-
-    m_trackKey = nextKey;
-    fetchLyrics(title, artist, m_media->durationSec());
+    const QString key = m_media->title().trimmed() + QStringLiteral("|") + m_media->artist().trimmed();
+    if (key != m_pendingKey)
+        fetchLyrics(m_media->title().trimmed(), m_media->artist().trimmed(), m_media->durationSec());
 }
 
 void LyricsService::onTimelineUpdated()
@@ -94,277 +261,469 @@ void LyricsService::onTimelineUpdated()
         return;
     m_anchorPosSec = m_media->positionSec();
     m_anchorMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_synced && !m_lines.isEmpty()) {
+        if (m_media->isPlaying() && !m_tickTimer.isActive())
+            m_tickTimer.start();
+        else if (!m_media->isPlaying() && m_tickTimer.isActive())
+            m_tickTimer.stop();
+    }
     updateActiveLine();
 }
 
-void LyricsService::updateActiveLine()
+void LyricsService::fetchLyrics(const QString& title, const QString& artist, double durationSec, bool force)
 {
-    if (!m_synced || m_lines.isEmpty() || !m_media)
+    const QString key = title + QStringLiteral("|") + artist;
+    if (!force && key == m_pendingKey)
         return;
 
-    double sec = m_anchorPosSec;
-    if (m_media->isPlaying() && m_anchorMs > 0)
-        sec += static_cast<double>(QDateTime::currentMSecsSinceEpoch() - m_anchorMs) / 1000.0;
-    const qint64 posMs = static_cast<qint64>(sec * 1000.0) + 180; // slight visual lead
+    ++m_requestGen;
+    const uint64_t gen = m_requestGen;
 
-    int nextIdx = -1;
-    for (int i = 0; i < m_lines.size(); ++i) {
-        const qint64 t = m_lines.at(i).toMap().value(QStringLiteral("timeMs")).toLongLong();
-        if (t <= posMs)
-            nextIdx = i;
-        else
-            break;
-    }
-    if (nextIdx != m_activeIndex) {
-        m_activeIndex = nextIdx;
-        emit activeIndexChanged();
-    }
-}
-
-void LyricsService::fetchLyrics(const QString& title, const QString& artist, double durationSec)
-{
+    m_pendingKey = key;
+    m_trackKey = key;
     m_loading = true;
+    m_synced = false;
     m_lines.clear();
     m_plainText.clear();
-    m_synced = false;
     m_activeIndex = -1;
-    const QString reqKey = m_trackKey;
-    m_pendingKey = reqKey;
+    m_statusText = QStringLiteral("Fetching lyrics...");
+    m_tickTimer.stop();
     emit lyricsChanged();
     emit activeIndexChanged();
 
-    // Clean common noise like " - YouTube", "(Official Video)", etc.
-    auto cleanStr = [](QString s) {
-        s.remove(QRegularExpression(QStringLiteral("\\s*[\\(\\[]\\s*(official|lyric|audio|mv|music video|hq|hd|remix).*?[\\)\\]]"),
-                                    QRegularExpression::CaseInsensitiveOption));
-        s.remove(QRegularExpression(QStringLiteral("\\s*-\\s*(YouTube|Topic).*$"),
-                                    QRegularExpression::CaseInsensitiveOption));
-        return s.trimmed();
-    };
-
-    const QString cleanTitle = cleanStr(title);
-    const QString cleanArtist = cleanStr(artist);
-
-    QUrl url(QStringLiteral("https://lrclib.net/api/search"));
+    QUrl url(QStringLiteral("https://lrclib.net/api/get"));
     QUrlQuery q;
-    q.addQueryItem(QStringLiteral("track_name"), cleanTitle);
-    if (!cleanArtist.isEmpty())
-        q.addQueryItem(QStringLiteral("artist_name"), cleanArtist);
-    Q_UNUSED(durationSec);
+    q.addQueryItem(QStringLiteral("track_name"), title);
+    if (!artist.isEmpty())
+        q.addQueryItem(QStringLiteral("artist_name"), artist);
+    if (durationSec > 10.0)
+        q.addQueryItem(QStringLiteral("duration"), QString::number(qRound(durationSec)));
     url.setQuery(q);
 
-    QNetworkRequest req(url);
-    req.setHeader(QNetworkRequest::UserAgentHeader, QStringLiteral("SekaiDesk/0.1 (Windows Desktop Shell)"));
-    QNetworkReply* reply = m_nam.get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply, reqKey, cleanTitle]() {
-        reply->deleteLater();
-        if (reqKey != m_pendingKey)
+    runHttpAsync(this, url.toString(QUrl::FullyEncoded), [this, gen, title, artist, durationSec](const HttpResult& res) {
+        if (gen != m_requestGen)
+            return;
+
+        if (res.statusCode == 200 && applyTrackJson(res.body, false)) {
+            m_loading = false;
+            emit lyricsChanged();
+            updateActiveLine();
+            return;
+        }
+
+        // Clean up YouTube / Spotify suffixes for search fallback
+        QString searchQ = sanitizeTrackText(title);
+        const QString cleanArtist = sanitizeTrackText(artist);
+        if (!cleanArtist.isEmpty() && !searchQ.contains(cleanArtist, Qt::CaseInsensitive))
+            searchQ = searchQ + QStringLiteral(" ") + cleanArtist;
+        if (searchQ.isEmpty())
+            searchQ = title;
+
+        fetchSearchFallback(searchQ, durationSec, gen);
+    });
+}
+
+void LyricsService::fetchSearchFallback(const QString& query, double targetDuration, uint64_t gen)
+{
+    QUrl url(QStringLiteral("https://lrclib.net/api/search"));
+    QUrlQuery q;
+    q.addQueryItem(QStringLiteral("q"), query);
+    url.setQuery(q);
+
+    runHttpAsync(this, url.toString(QUrl::FullyEncoded), [this, gen, targetDuration](const HttpResult& res) {
+        if (gen != m_requestGen)
             return;
 
         m_loading = false;
-        if (reply->error() == QNetworkReply::NoError) {
-            const QJsonDocument doc = QJsonDocument::fromJson(reply->readAll());
+        if (res.statusCode == 200 && !res.body.isEmpty()) {
+            const QJsonDocument doc = QJsonDocument::fromJson(res.body);
             if (doc.isArray()) {
                 const QJsonArray arr = doc.array();
-                QString bestSynced;
-                QString bestPlain;
-                for (const QJsonValue& v : arr) {
-                    const QJsonObject obj = v.toObject();
-                    const QString sy = obj.value(QStringLiteral("syncedLyrics")).toString();
-                    const QString pl = obj.value(QStringLiteral("plainLyrics")).toString();
-                    if (!sy.isEmpty() && bestSynced.isEmpty())
-                        bestSynced = sy;
-                    if (!pl.isEmpty() && bestPlain.isEmpty())
-                        bestPlain = pl;
-                    if (!bestSynced.isEmpty())
-                        break;
-                }
-                if (!bestSynced.isEmpty()) {
-                    parseLrc(bestSynced);
-                } else if (!bestPlain.isEmpty()) {
-                    m_plainText = bestPlain.trimmed();
-                    const QStringList rawLines = m_plainText.split(QLatin1Char('\n'));
-                    for (const QString& ln : rawLines) {
-                        const QString t = ln.trimmed();
-                        if (!t.isEmpty()) {
-                            QVariantMap m;
-                            m.insert(QStringLiteral("timeMs"), -1);
-                            m.insert(QStringLiteral("text"), t);
-                            m_lines.append(m);
-                        }
+                int bestIdx = -1;
+                double bestScore = -1e9;
+                for (int i = 0; i < arr.size(); ++i) {
+                    const QJsonObject obj = arr.at(i).toObject();
+                    const bool hasSync = !obj.value(QStringLiteral("syncedLyrics")).toString().trimmed().isEmpty();
+                    const bool hasPlain = !obj.value(QStringLiteral("plainLyrics")).toString().trimmed().isEmpty();
+                    if (!hasSync && !hasPlain)
+                        continue;
+                    double score = hasSync ? 100.0 : 20.0;
+                    const double d = obj.value(QStringLiteral("duration")).toDouble();
+                    if (targetDuration > 10.0 && d > 10.0)
+                        score -= std::abs(d - targetDuration) * 0.5;
+                    if (score > bestScore) {
+                        bestScore = score;
+                        bestIdx = i;
                     }
-                    m_synced = false;
+                }
+                if (bestIdx >= 0) {
+                    const QJsonObject chosen = arr.at(bestIdx).toObject();
+                    const QString syncedLrc = chosen.value(QStringLiteral("syncedLyrics")).toString().trimmed();
+                    const QString plainLrc = chosen.value(QStringLiteral("plainLyrics")).toString().trimmed();
+                    if (!syncedLrc.isEmpty()) {
+                        parseLrc(syncedLrc);
+                        m_synced = !m_lines.isEmpty();
+                        m_statusText = m_synced ? QStringLiteral("Synced") : QStringLiteral("Plain");
+                    } else if (!plainLrc.isEmpty()) {
+                        m_plainText = plainLrc;
+                        const QStringList splitLines = plainLrc.split(QLatin1Char('\n'));
+                        for (const QString& ln : splitLines) {
+                            const QString t = ln.trimmed();
+                            if (!t.isEmpty()) {
+                                QVariantMap row;
+                                row[QStringLiteral("time")] = -1.0;
+                                row[QStringLiteral("text")] = t;
+                                m_lines.append(row);
+                            }
+                        }
+                        m_synced = false;
+                        m_statusText = QStringLiteral("Plain lyrics");
+                    }
+                    emit lyricsChanged();
+                    updateActiveLine();
+                    return;
                 }
             }
         }
-        Q_UNUSED(cleanTitle);
+
+        m_synced = false;
+        m_lines.clear();
+        m_plainText.clear();
+        m_statusText = res.error.isEmpty()
+            ? QStringLiteral("No lyrics found on LRCLIB")
+            : QStringLiteral("Lyrics offline (%1)").arg(res.error);
         emit lyricsChanged();
-        updateActiveLine();
+        emit activeIndexChanged();
     });
+}
+
+bool LyricsService::applyTrackJson(const QByteArray& body, bool allowArray)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(body);
+    QJsonObject obj;
+    if (doc.isObject()) {
+        obj = doc.object();
+    } else if (allowArray && doc.isArray() && !doc.array().isEmpty()) {
+        obj = doc.array().first().toObject();
+    } else {
+        return false;
+    }
+
+    const QString syncedLrc = obj.value(QStringLiteral("syncedLyrics")).toString().trimmed();
+    const QString plainLrc = obj.value(QStringLiteral("plainLyrics")).toString().trimmed();
+
+    if (!syncedLrc.isEmpty()) {
+        parseLrc(syncedLrc);
+        if (!m_lines.isEmpty()) {
+            m_synced = true;
+            m_statusText = QStringLiteral("Synced");
+            return true;
+        }
+    }
+    if (!plainLrc.isEmpty()) {
+        m_plainText = plainLrc;
+        const QStringList splitLines = plainLrc.split(QLatin1Char('\n'));
+        for (const QString& ln : splitLines) {
+            const QString t = ln.trimmed();
+            if (!t.isEmpty()) {
+                QVariantMap row;
+                row[QStringLiteral("time")] = -1.0;
+                row[QStringLiteral("text")] = t;
+                m_lines.append(row);
+            }
+        }
+        m_synced = false;
+        m_statusText = QStringLiteral("Plain lyrics");
+        return !m_lines.isEmpty();
+    }
+    return false;
 }
 
 void LyricsService::parseLrc(const QString& lrcText)
 {
-    static const QRegularExpression rx(QStringLiteral("^\\[(\\d+):(\\d+(?:\\.\\d+)?)\\]\\s*(.*)$"));
+    m_lines.clear();
+    static const QRegularExpression kTimeTag(QStringLiteral("\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]"));
+
     const QStringList rawLines = lrcText.split(QLatin1Char('\n'));
-    QVariantList parsed;
-    QStringList plainAcc;
-    for (const QString& line : rawLines) {
-        const QRegularExpressionMatch m = rx.match(line.trimmed());
-        if (!m.hasMatch())
+    QList<QPair<double, QString>> entries;
+
+    for (const QString& raw : rawLines) {
+        QList<double> times;
+        int lastEnd = 0;
+        QRegularExpressionMatchIterator it = kTimeTag.globalMatch(raw);
+        while (it.hasNext()) {
+            const QRegularExpressionMatch m = it.next();
+            const int mins = m.captured(1).toInt();
+            const int secs = m.captured(2).toInt();
+            const QString fracStr = m.captured(3);
+            double frac = 0.0;
+            if (fracStr.length() == 1)
+                frac = fracStr.toInt() / 10.0;
+            else if (fracStr.length() == 2)
+                frac = fracStr.toInt() / 100.0;
+            else if (fracStr.length() >= 3)
+                frac = fracStr.left(3).toInt() / 1000.0;
+            times.append(mins * 60.0 + secs + frac);
+            lastEnd = m.capturedEnd();
+        }
+        if (times.isEmpty())
             continue;
-        const qint64 mins = m.captured(1).toLongLong();
-        const double secs = m.captured(2).toDouble();
-        const QString text = m.captured(3).trimmed();
+        QString text = raw.mid(lastEnd).trimmed();
         if (text.isEmpty())
-            continue;
-        const qint64 ms = mins * 60000LL + static_cast<qint64>(secs * 1000.0);
-        QVariantMap row;
-        row.insert(QStringLiteral("timeMs"), ms);
-        row.insert(QStringLiteral("text"), text);
-        parsed.append(row);
-        plainAcc << text;
+            text = QStringLiteral("♪");
+        for (double t : times)
+            entries.append(qMakePair(t, text));
     }
-    m_lines = std::move(parsed);
-    m_plainText = plainAcc.join(QLatin1Char('\n'));
-    m_synced = !m_lines.isEmpty();
+
+    std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+        return a.first < b.first;
+    });
+
+    for (const auto& entry : entries) {
+        QVariantMap row;
+        row[QStringLiteral("time")] = entry.first;
+        row[QStringLiteral("text")] = entry.second;
+        m_lines.append(row);
+    }
+
+    if (m_media && m_media->isPlaying() && !m_lines.isEmpty())
+        m_tickTimer.start();
 }
 
-// ===========================================================================
+void LyricsService::updateActiveLine()
+{
+    if (!m_synced || m_lines.isEmpty()) {
+        if (m_activeIndex != -1) {
+            m_activeIndex = -1;
+            emit activeIndexChanged();
+        }
+        return;
+    }
+
+    double currentPos = m_anchorPosSec;
+    if (m_media && m_media->isPlaying() && m_anchorMs > 0) {
+        const qint64 elapsed = QDateTime::currentMSecsSinceEpoch() - m_anchorMs;
+        if (elapsed > 0 && elapsed < 300000)
+            currentPos += elapsed / 1000.0;
+    }
+
+    int idx = -1;
+    for (int i = 0; i < m_lines.size(); ++i) {
+        const double t = m_lines.at(i).toMap().value(QStringLiteral("time")).toDouble();
+        if (t <= currentPos + 0.15)
+            idx = i;
+        else
+            break;
+    }
+
+    if (idx != m_activeIndex) {
+        m_activeIndex = idx;
+        emit activeIndexChanged();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // WeatherService
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 WeatherService::WeatherService(SettingsStore* settings, QObject* parent)
     : QObject(parent)
     , m_settings(settings)
 {
     if (m_settings) {
-        const QString savedCity = m_settings->stringValue(QStringLiteral("weather.city"));
+        const QString savedCity = m_settings->get(QStringLiteral("weather.city"), QStringLiteral("Ho Chi Minh")).toString().trimmed();
         if (!savedCity.isEmpty())
             m_city = savedCity;
-        const QVariant latV = m_settings->get(QStringLiteral("weather.lat"));
-        const QVariant lonV = m_settings->get(QStringLiteral("weather.lon"));
-        if (latV.isValid() && lonV.isValid()) {
-            m_lat = latV.toDouble();
-            m_lon = lonV.toDouble();
-        }
+        m_lat = m_settings->get(QStringLiteral("weather.lat"), 10.8231).toDouble();
+        m_lon = m_settings->get(QStringLiteral("weather.lon"), 106.6297).toDouble();
     }
 
-    m_refreshTimer.setInterval(30 * 60 * 1000);
+    m_refreshTimer.setInterval(20 * 60 * 1000);
     connect(&m_refreshTimer, &QTimer::timeout, this, &WeatherService::refresh);
     m_refreshTimer.start();
 
-    QTimer::singleShot(1200, this, &WeatherService::refresh);
+    QTimer::singleShot(900, this, &WeatherService::refresh);
 }
 
 void WeatherService::refresh()
 {
-    if (m_settings && m_settings->has(QStringLiteral("weather.lat"))
-        && m_settings->has(QStringLiteral("weather.lon"))) {
-        fetchForecast(m_lat, m_lon, m_city);
-    } else {
+    if (m_city.trimmed().isEmpty()) {
         locateAndFetch();
-    }
-}
-
-void WeatherService::locateAndFetch()
-{
-    m_loading = true;
-    emit weatherChanged();
-
-    QNetworkRequest req(QUrl(QStringLiteral("http://ip-api.com/json/?fields=status,city,lat,lon")));
-    QNetworkReply* reply = m_nam.get(req);
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        reply->deleteLater();
-        if (reply->error() == QNetworkReply::NoError) {
-            const QJsonObject obj = QJsonDocument::fromJson(reply->readAll()).object();
-            if (obj.value(QStringLiteral("status")).toString() == QStringLiteral("success")) {
-                m_city = obj.value(QStringLiteral("city")).toString(m_city);
-                m_lat = obj.value(QStringLiteral("lat")).toDouble(m_lat);
-                m_lon = obj.value(QStringLiteral("lon")).toDouble(m_lon);
-                if (m_settings) {
-                    m_settings->set(QStringLiteral("weather.city"), m_city);
-                    m_settings->set(QStringLiteral("weather.lat"), m_lat);
-                    m_settings->set(QStringLiteral("weather.lon"), m_lon);
-                }
-            }
-        }
+    } else {
         fetchForecast(m_lat, m_lon, m_city);
-    });
+    }
 }
 
 void WeatherService::setCity(const QString& cityName)
 {
-    const QString clean = cityName.trimmed();
-    if (clean.isEmpty())
+    const QString cleaned = cityName.trimmed();
+    if (cleaned.isEmpty()) {
+        if (m_settings)
+            m_settings->set(QStringLiteral("weather.city"), QString());
+        locateAndFetch();
         return;
+    }
 
+    ++m_requestGen;
+    const uint64_t gen = m_requestGen;
     m_loading = true;
     emit weatherChanged();
 
     QUrl url(QStringLiteral("https://geocoding-api.open-meteo.com/v1/search"));
     QUrlQuery q;
-    q.addQueryItem(QStringLiteral("name"), clean);
+    q.addQueryItem(QStringLiteral("name"), cleaned);
     q.addQueryItem(QStringLiteral("count"), QStringLiteral("1"));
+    q.addQueryItem(QStringLiteral("language"), QStringLiteral("en"));
     url.setQuery(q);
 
-    QNetworkReply* reply = m_nam.get(QNetworkRequest(url));
-    connect(reply, &QNetworkReply::finished, this, [this, reply, clean]() {
-        reply->deleteLater();
-        if (reply->error() == QNetworkReply::NoError) {
-            const QJsonArray arr = QJsonDocument::fromJson(reply->readAll()).object().value(QStringLiteral("results")).toArray();
-            if (!arr.isEmpty()) {
-                const QJsonObject first = arr.first().toObject();
-                m_city = first.value(QStringLiteral("name")).toString(clean);
-                m_lat = first.value(QStringLiteral("latitude")).toDouble(m_lat);
-                m_lon = first.value(QStringLiteral("longitude")).toDouble(m_lon);
+    runHttpAsync(this, url.toString(QUrl::FullyEncoded), [this, gen, cleaned](const HttpResult& res) {
+        if (gen != m_requestGen)
+            return;
+
+        if (res.statusCode == 200) {
+            const QJsonDocument doc = QJsonDocument::fromJson(res.body);
+            const QJsonArray results = doc.object().value(QStringLiteral("results")).toArray();
+            if (!results.isEmpty()) {
+                const QJsonObject first = results.first().toObject();
+                const double lat = first.value(QStringLiteral("latitude")).toDouble(m_lat);
+                const double lon = first.value(QStringLiteral("longitude")).toDouble(m_lon);
+                const QString name = first.value(QStringLiteral("name")).toString(cleaned);
+                m_city = name;
+                m_lat = lat;
+                m_lon = lon;
                 if (m_settings) {
-                    m_settings->set(QStringLiteral("weather.city"), m_city);
-                    m_settings->set(QStringLiteral("weather.lat"), m_lat);
-                    m_settings->set(QStringLiteral("weather.lon"), m_lon);
+                    m_settings->set(QStringLiteral("weather.city"), name);
+                    m_settings->set(QStringLiteral("weather.lat"), lat);
+                    m_settings->set(QStringLiteral("weather.lon"), lon);
                 }
+                fetchForecast(lat, lon, name);
+                return;
             }
         }
-        fetchForecast(m_lat, m_lon, m_city);
+        m_loading = false;
+        emit weatherChanged();
+    });
+}
+
+void WeatherService::locateAndFetch()
+{
+    ++m_requestGen;
+    const uint64_t gen = m_requestGen;
+    m_loading = true;
+    emit weatherChanged();
+
+    runHttpAsync(this, QStringLiteral("https://ipwho.is/"), [this, gen](const HttpResult& res) {
+        if (gen != m_requestGen)
+            return;
+
+        double lat = m_lat;
+        double lon = m_lon;
+        QString city = m_city;
+
+        if (res.statusCode == 200) {
+            const QJsonObject obj = QJsonDocument::fromJson(res.body).object();
+            if (obj.value(QStringLiteral("success")).toBool(true)) {
+                lat = obj.value(QStringLiteral("latitude")).toDouble(lat);
+                lon = obj.value(QStringLiteral("longitude")).toDouble(lon);
+                const QString detected = obj.value(QStringLiteral("city")).toString().trimmed();
+                if (!detected.isEmpty())
+                    city = detected;
+            }
+        }
+
+        m_lat = lat;
+        m_lon = lon;
+        m_city = city;
+        if (m_settings) {
+            m_settings->set(QStringLiteral("weather.city"), city);
+            m_settings->set(QStringLiteral("weather.lat"), lat);
+            m_settings->set(QStringLiteral("weather.lon"), lon);
+        }
+        fetchForecast(lat, lon, city);
     });
 }
 
 void WeatherService::fetchForecast(double lat, double lon, const QString& cityLabel)
 {
+    ++m_requestGen;
+    const uint64_t gen = m_requestGen;
     m_loading = true;
-    m_city = cityLabel;
     emit weatherChanged();
 
     const QString urlStr = QStringLiteral(
         "https://api.open-meteo.com/v1/forecast?latitude=%1&longitude=%2"
         "&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m"
-        "&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1")
-                               .arg(lat, 0, 'f', 4)
-                               .arg(lon, 0, 'f', 4);
+        "&hourly=temperature_2m,weather_code,uv_index,is_day"
+        "&daily=temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto&forecast_days=2")
+        .arg(lat, 0, 'f', 4)
+        .arg(lon, 0, 'f', 4);
 
-    QNetworkReply* reply = m_nam.get(QNetworkRequest(QUrl(urlStr)));
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        reply->deleteLater();
+    runHttpAsync(this, urlStr, [this, gen, cityLabel](const HttpResult& res) {
+        if (gen != m_requestGen)
+            return;
+
         m_loading = false;
-        if (reply->error() == QNetworkReply::NoError) {
-            const QJsonObject root = QJsonDocument::fromJson(reply->readAll()).object();
+        if (res.statusCode == 200) {
+            const QJsonObject root = QJsonDocument::fromJson(res.body).object();
             const QJsonObject cur = root.value(QStringLiteral("current")).toObject();
-            const QJsonObject daily = root.value(QStringLiteral("daily")).toObject();
-            m_temperature = qRound(cur.value(QStringLiteral("temperature_2m")).toDouble(28.0));
-            m_feelsLike = qRound(cur.value(QStringLiteral("apparent_temperature")).toDouble(30.0));
-            m_humidity = qRound(cur.value(QStringLiteral("relative_humidity_2m")).toDouble(75.0));
-            m_windSpeed = qRound(cur.value(QStringLiteral("wind_speed_10m")).toDouble(8.0));
-            m_weatherCode = cur.value(QStringLiteral("weather_code")).toInt(0);
-            m_isDay = cur.value(QStringLiteral("is_day")).toInt(1) != 0;
-            m_conditionText = describeWmo(m_weatherCode);
+            if (!cur.isEmpty()) {
+                m_city = cityLabel;
+                m_temperature = qRound(cur.value(QStringLiteral("temperature_2m")).toDouble(28.0));
+                m_feelsLike = qRound(cur.value(QStringLiteral("apparent_temperature")).toDouble(m_temperature));
+                m_humidity = qRound(cur.value(QStringLiteral("relative_humidity_2m")).toDouble(70.0));
+                m_windSpeed = qRound(cur.value(QStringLiteral("wind_speed_10m")).toDouble(8.0));
+                m_isDay = (cur.value(QStringLiteral("is_day")).toInt(1) != 0);
+                m_weatherCode = cur.value(QStringLiteral("weather_code")).toInt(2);
+                m_conditionText = describeWmo(m_weatherCode);
 
-            const QJsonArray maxArr = daily.value(QStringLiteral("temperature_2m_max")).toArray();
-            const QJsonArray minArr = daily.value(QStringLiteral("temperature_2m_min")).toArray();
-            if (!maxArr.isEmpty())
-                m_tempMax = qRound(maxArr.first().toDouble(m_temperature + 3));
-            if (!minArr.isEmpty())
-                m_tempMin = qRound(minArr.first().toDouble(m_temperature - 3));
-            m_ready = true;
+                const QJsonObject daily = root.value(QStringLiteral("daily")).toObject();
+                const QJsonArray maxArr = daily.value(QStringLiteral("temperature_2m_max")).toArray();
+                const QJsonArray minArr = daily.value(QStringLiteral("temperature_2m_min")).toArray();
+                const QJsonArray uvDailyArr = daily.value(QStringLiteral("uv_index_max")).toArray();
+                if (!maxArr.isEmpty())
+                    m_tempMax = qRound(maxArr.first().toDouble(m_temperature + 3));
+                if (!minArr.isEmpty())
+                    m_tempMin = qRound(minArr.first().toDouble(m_temperature - 4));
+                if (!uvDailyArr.isEmpty())
+                    m_uvIndex = qRound(uvDailyArr.first().toDouble(4.0));
+
+                // Build next 6 hourly slots starting from current local hour
+                m_hourlyForecast.clear();
+                const QJsonObject hourly = root.value(QStringLiteral("hourly")).toObject();
+                const QJsonArray hTimes = hourly.value(QStringLiteral("time")).toArray();
+                const QJsonArray hTemps = hourly.value(QStringLiteral("temperature_2m")).toArray();
+                const QJsonArray hCodes = hourly.value(QStringLiteral("weather_code")).toArray();
+                const QJsonArray hUvs = hourly.value(QStringLiteral("uv_index")).toArray();
+                const QJsonArray hIsDay = hourly.value(QStringLiteral("is_day")).toArray();
+
+                const QString curTimeIso = cur.value(QStringLiteral("time")).toString();
+                const QString curHourPrefix = curTimeIso.left(13);
+                int startIdx = 0;
+                for (int i = 0; i < hTimes.size(); ++i) {
+                    if (hTimes.at(i).toString().left(13) >= curHourPrefix) {
+                        startIdx = i;
+                        break;
+                    }
+                }
+                if (startIdx < hUvs.size())
+                    m_uvIndex = qRound(hUvs.at(startIdx).toDouble(m_uvIndex));
+
+                for (int k = 0; k < 6 && (startIdx + k) < hTimes.size(); ++k) {
+                    const int idx = startIdx + k;
+                    const QString tStr = hTimes.at(idx).toString();
+                    QString hh = tStr.mid(11, 5);
+                    if (hh.isEmpty())
+                        hh = QStringLiteral("--:--");
+                    QVariantMap slot;
+                    slot[QStringLiteral("time")] = (k == 0) ? QStringLiteral("Now") : hh.left(2) + QStringLiteral("h");
+                    slot[QStringLiteral("temp")] = idx < hTemps.size() ? qRound(hTemps.at(idx).toDouble()) : m_temperature;
+                    slot[QStringLiteral("code")] = idx < hCodes.size() ? hCodes.at(idx).toInt() : m_weatherCode;
+                    slot[QStringLiteral("isDay")] = idx < hIsDay.size() ? (hIsDay.at(idx).toInt(1) != 0) : m_isDay;
+                    m_hourlyForecast.append(slot);
+                }
+
+                m_ready = true;
+            }
         }
         emit weatherChanged();
     });
@@ -373,68 +732,88 @@ void WeatherService::fetchForecast(double lat, double lon, const QString& cityLa
 QString WeatherService::describeWmo(int code)
 {
     if (code == 0) return QStringLiteral("Clear Sky");
-    if (code == 1 || code == 2) return QStringLiteral("Partly Cloudy");
+    if (code == 1) return QStringLiteral("Mainly Clear");
+    if (code == 2) return QStringLiteral("Partly Cloudy");
     if (code == 3) return QStringLiteral("Overcast");
     if (code == 45 || code == 48) return QStringLiteral("Foggy");
     if (code >= 51 && code <= 57) return QStringLiteral("Drizzle");
-    if ((code >= 61 && code <= 67) || (code >= 80 && code <= 82)) return QStringLiteral("Rain");
+    if (code >= 61 && code <= 67) return QStringLiteral("Rain");
     if (code >= 71 && code <= 77) return QStringLiteral("Snow");
+    if (code >= 80 && code <= 82) return QStringLiteral("Rain Showers");
+    if (code >= 85 && code <= 86) return QStringLiteral("Snow Showers");
     if (code >= 95) return QStringLiteral("Thunderstorm");
     return QStringLiteral("Cloudy");
 }
 
-// ===========================================================================
+// ---------------------------------------------------------------------------
 // DropShelfService
-// ===========================================================================
+// ---------------------------------------------------------------------------
 
 DropShelfService::DropShelfService(QObject* parent)
     : QObject(parent)
 {
 }
 
+void DropShelfService::appendSinglePath(const QString& rawPath)
+{
+    if (rawPath.trimmed().isEmpty())
+        return;
+
+    const QString path = QDir::toNativeSeparators(rawPath.trimmed());
+    for (const QVariant& existing : m_items) {
+        if (existing.toMap().value(QStringLiteral("path")).toString().compare(path, Qt::CaseInsensitive) == 0)
+            return;
+    }
+
+    const QFileInfo fi(path);
+    QVariantMap entry;
+    entry[QStringLiteral("path")] = path;
+    entry[QStringLiteral("name")] = fi.fileName().isEmpty() ? path : fi.fileName();
+    entry[QStringLiteral("isDir")] = fi.isDir();
+
+    if (fi.exists() && !fi.isDir()) {
+        const qint64 sz = fi.size();
+        if (sz < 1024)
+            entry[QStringLiteral("sizeText")] = QStringLiteral("%1 B").arg(sz);
+        else if (sz < 1024 * 1024)
+            entry[QStringLiteral("sizeText")] = QStringLiteral("%1 KB").arg(sz / 1024);
+        else
+            entry[QStringLiteral("sizeText")] = QStringLiteral("%1 MB").arg(sz / (1024.0 * 1024.0), 0, 'f', 1);
+    } else {
+        entry[QStringLiteral("sizeText")] = fi.isDir() ? QStringLiteral("Folder") : QStringLiteral("File");
+    }
+
+    m_items.prepend(entry);
+}
+
 void DropShelfService::addUrls(const QVariantList& urls)
 {
     bool changed = false;
     for (const QVariant& v : urls) {
-        const QUrl u = v.toUrl().isValid() ? v.toUrl() : QUrl(v.toString());
-        const QString local = u.isLocalFile() ? QDir::toNativeSeparators(u.toLocalFile()) : v.toString();
-        if (local.trimmed().isEmpty())
-            continue;
-
-        bool dup = false;
-        for (const QVariant& ex : m_items) {
-            if (ex.toMap().value(QStringLiteral("path")).toString().compare(local, Qt::CaseInsensitive) == 0) {
-                dup = true;
-                break;
-            }
-        }
-        if (dup)
-            continue;
-
-        const QFileInfo fi(local);
-        QString sizeStr;
-        if (fi.isDir()) {
-            sizeStr = QStringLiteral("Folder");
+        QString path;
+        if (v.canConvert<QUrl>()) {
+            const QUrl u = v.toUrl();
+            path = u.isLocalFile() ? u.toLocalFile() : u.toString();
         } else {
-            const qint64 bytes = fi.size();
-            if (bytes < 1024)
-                sizeStr = QStringLiteral("%1 B").arg(bytes);
-            else if (bytes < 1024 * 1024)
-                sizeStr = QStringLiteral("%1 KB").arg(bytes / 1024);
-            else
-                sizeStr = QStringLiteral("%1 MB").arg(static_cast<double>(bytes) / (1024.0 * 1024.0), 0, 'f', 1);
+            const QString s = v.toString();
+            const QUrl u(s);
+            path = u.isLocalFile() ? u.toLocalFile() : s;
         }
-
-        QVariantMap m;
-        m.insert(QStringLiteral("name"), fi.fileName().isEmpty() ? local : fi.fileName());
-        m.insert(QStringLiteral("path"), local);
-        m.insert(QStringLiteral("ext"), fi.suffix().toUpper());
-        m.insert(QStringLiteral("isDir"), fi.isDir());
-        m.insert(QStringLiteral("sizeText"), sizeStr);
-        m_items.prepend(m);
-        changed = true;
+        const int before = m_items.size();
+        appendSinglePath(path);
+        if (m_items.size() != before)
+            changed = true;
     }
     if (changed)
+        emit itemsChanged();
+}
+
+void DropShelfService::addPaths(const QStringList& paths)
+{
+    const int before = m_items.size();
+    for (const QString& p : paths)
+        appendSinglePath(p);
+    if (m_items.size() != before)
         emit itemsChanged();
 }
 
@@ -442,31 +821,27 @@ void DropShelfService::openItem(int index)
 {
     if (index < 0 || index >= m_items.size())
         return;
-#ifdef Q_OS_WIN
     const QString path = m_items.at(index).toMap().value(QStringLiteral("path")).toString();
-    ShellExecuteW(nullptr, L"open", reinterpret_cast<const wchar_t*>(path.utf16()), nullptr, nullptr, SW_SHOWNORMAL);
-#endif
+    if (!path.isEmpty())
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
 }
 
 void DropShelfService::revealItem(int index)
 {
     if (index < 0 || index >= m_items.size())
         return;
-#ifdef Q_OS_WIN
     const QString path = m_items.at(index).toMap().value(QStringLiteral("path")).toString();
-    const QString arg = QStringLiteral("/select,\"%1\"").arg(path);
-    ShellExecuteW(nullptr, L"open", L"explorer.exe", reinterpret_cast<const wchar_t*>(arg.utf16()), nullptr, SW_SHOWNORMAL);
-#endif
+    if (path.isEmpty())
+        return;
+    QProcess::startDetached(QStringLiteral("explorer.exe"), { QStringLiteral("/select,"), QDir::toNativeSeparators(path) });
 }
 
 void DropShelfService::copyAllPaths()
 {
     QStringList list;
-    for (const QVariant& v : m_items)
-        list << v.toMap().value(QStringLiteral("path")).toString();
-    if (list.isEmpty())
-        return;
-    if (QClipboard* cb = QGuiApplication::clipboard())
+    for (const QVariant& item : m_items)
+        list.append(item.toMap().value(QStringLiteral("path")).toString());
+    if (auto* cb = QGuiApplication::clipboard())
         cb->setText(list.join(QLatin1Char('\n')));
 }
 

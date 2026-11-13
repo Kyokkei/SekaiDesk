@@ -12,6 +12,8 @@
 #include <QQuickItem>
 #include <QQuickWindow>
 #include <QRegion>
+#include <QStringList>
+#include <QTimer>
 #include <QVariant>
 
 // ---------------------------------------------------------------------------
@@ -143,6 +145,7 @@ class PanelWindow : public QQuickWindow {
     Q_PROPERTY(int blurInsetBottom READ blurInsetBottom WRITE setBlurInsetBottom NOTIFY blurChanged)
     Q_PROPERTY(QColor blurTint READ blurTint WRITE setBlurTint NOTIFY blurChanged)
     Q_PROPERTY(bool desktopLayer READ desktopLayer WRITE setDesktopLayer NOTIFY desktopLayerChanged)
+    Q_PROPERTY(bool acceptFileDrops READ acceptFileDrops WRITE setAcceptFileDrops NOTIFY acceptFileDropsChanged)
 
 public:
     explicit PanelWindow(QWindow* parent = nullptr);
@@ -152,6 +155,8 @@ public:
 
     bool desktopLayer() const { return m_desktopLayer; }
     void setDesktopLayer(bool on);
+    bool acceptFileDrops() const { return m_acceptFileDrops; }
+    void setAcceptFileDrops(bool on);
     Q_INVOKABLE void raiseOnDesktop();
     Q_INVOKABLE void focusActivate();
 
@@ -205,6 +210,8 @@ signals:
     void windowDeactivated();
     void blurChanged();
     void desktopLayerChanged();
+    void acceptFileDropsChanged();
+    void filesDropped(const QStringList& paths);
 
 protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
@@ -213,6 +220,8 @@ private:
     void recomputeGeometry();
     void applyClickThrough();
     void applyBlurBehind();
+    void applyFileDrops();
+    void verifyFullscreenState();
     void updateMask();
     void registerOrUpdateAppBar();
     void unregisterAppBar();
@@ -236,5 +245,7 @@ private:
     int m_blurInsetBottom = 0;
     QColor m_blurTint = QColor(20, 26, 42, 165);
     bool m_desktopLayer = false;
+    bool m_acceptFileDrops = false;
+    QTimer m_fsGuardTimer;
     QMetaObject::Connection m_screenGeoConn;
 };

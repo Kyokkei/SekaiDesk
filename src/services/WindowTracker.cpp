@@ -7,6 +7,7 @@
 #include <dwmapi.h>
 #include <pdh.h>
 #include <psapi.h>
+#include <shellapi.h>
 #endif
 
 namespace {
@@ -125,6 +126,18 @@ static BOOL CALLBACK enumWindowsProc(HWND hwnd, LPARAM lParam)
 WindowTracker::WindowTracker(QObject* parent)
     : QObject(parent)
 {
+#ifdef Q_OS_WIN
+    wchar_t comp[128] = {};
+    DWORD compLen = 128;
+    if (GetComputerNameW(comp, &compLen))
+        m_machineName = QString::fromWCharArray(comp, static_cast<int>(compLen));
+    m_userName = qEnvironmentVariable("USERNAME");
+#endif
+    if (m_machineName.isEmpty())
+        m_machineName = QStringLiteral("Windows");
+    if (m_userName.isEmpty())
+        m_userName = QStringLiteral("User");
+
     m_pollTimer.setInterval(350);
     connect(&m_pollTimer, &QTimer::timeout, this, &WindowTracker::refresh);
     m_pollTimer.start();
@@ -425,12 +438,27 @@ void WindowTracker::updateSystemStats()
     }
     ++s_tempTick;
 
+    // System uptime from GetTickCount64()
+    const quint64 totalMins = GetTickCount64() / 60000ULL;
+    const quint64 days = totalMins / (60ULL * 24ULL);
+    const quint64 hrs = (totalMins / 60ULL) % 24ULL;
+    const quint64 mins = totalMins % 60ULL;
+    QString nextUptime;
+    if (days > 0)
+        nextUptime = QStringLiteral("%1d %2h").arg(days).arg(hrs);
+    else if (hrs > 0)
+        nextUptime = QStringLiteral("%1h %2m").arg(hrs).arg(mins);
+    else
+        nextUptime = QStringLiteral("%1m").arg(mins);
+
     if (nextCpu != m_cpuUsage || nextRam != m_ramUsage
-        || nextCpuTemp != m_cpuTemp || nextGpuTemp != m_gpuTemp) {
+        || nextCpuTemp != m_cpuTemp || nextGpuTemp != m_gpuTemp
+        || nextUptime != m_uptimeText) {
         m_cpuUsage = nextCpu;
         m_ramUsage = nextRam;
         m_cpuTemp = nextCpuTemp;
         m_gpuTemp = nextGpuTemp;
+        m_uptimeText = nextUptime;
         emit statsChanged();
     }
 #endif
@@ -624,5 +652,54 @@ bool WindowTracker::closeHwnd(qulonglong hwnd)
 #else
     Q_UNUSED(hwnd);
     return false;
+#endif
+}
+
+bool WindowTracker::openSpecialFolder(const QString& kind)
+{
+#ifdef Q_OS_WIN
+    const QString home = qEnvironmentVariable("USERPROFILE");
+    QString target = home;
+    if (kind == QStringLiteral("downloads"))
+        target = home + QStringLiteral("\\Downloads");
+    else if (kind == QStringLiteral("desktop"))
+        target = home + QStringLiteral("\\Desktop");
+    else if (kind == QStringLiteral("documents"))
+        target = home + QStringLiteral("\\Documents");
+    else if (kind == QStringLiteral("pictures"))
+        target = home + QStringLiteral("\\Pictures");
+    else if (kind == QStringLiteral("recyclebin"))
+        target = QStringLiteral("shell:RecycleBinFolder");
+
+    if (target.isEmpty())
+        return false;
+    ShellExecuteW(nullptr, L"open", reinterpret_cast<const wchar_t*>(target.utf16()),
+                  nullptr, nullptr, SW_SHOWNORMAL);
+    return true;
+#else
+    Q_UNUSED(kind);
+    return false;
+#endif
+}
+
+void WindowTracker::lockWorkstation()
+{
+#ifdef Q_OS_WIN
+    LockWorkStation();
+#endif
+}
+
+void WindowTracker::sleepComputer()
+{
+#ifdef Q_OS_WIN
+    ShellExecuteW(nullptr, L"open", L"rundll32.exe",
+                  L"powrprof.dll,SetSuspendState 0,1,0", nullptr, SW_HIDE);
+#endif
+}
+
+void WindowTracker::takeScreenshot()
+{
+#ifdef Q_OS_WIN
+    ShellExecuteW(nullptr, L"open", L"ms-screenclip:", nullptr, nullptr, SW_SHOWNORMAL);
 #endif
 }

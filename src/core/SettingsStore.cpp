@@ -3,7 +3,9 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
+#include <QSaveFile>
 #include <QStandardPaths>
 
 SettingsStore::SettingsStore(QObject* parent)
@@ -16,18 +18,48 @@ QString SettingsStore::resolveFilePath() const
     if (!m_filePath.isEmpty())
         return m_filePath;
 
-    // Portable-first: <exe dir>/config/sekaidesk.json
-    const QDir appDir(QCoreApplication::applicationDirPath());
-    const QString portable = appDir.absoluteFilePath(
-        QStringLiteral("config/sekaidesk.json"));
-    if (QDir().mkpath(appDir.absoluteFilePath(QStringLiteral("config"))))
-        return portable;
-
-    // Fallback: platform app-data location.
-    const QString dataDir = QStandardPaths::writableLocation(
-        QStandardPaths::AppDataLocation);
+    // Single canonical user config path: %APPDATA%\SekaiDesk\sekaidesk.json
+    // (using GenericDataLocation avoids Windows AppData\SekaiDesk\SekaiDesk nesting).
+    QString baseData = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+    if (baseData.isEmpty())
+        baseData = QCoreApplication::applicationDirPath();
+    const QString dataDir = QDir(baseData).absoluteFilePath(QStringLiteral("SekaiDesk"));
     QDir().mkpath(dataDir);
-    return QDir(dataDir).absoluteFilePath(QStringLiteral("sekaidesk.json"));
+    const QString canonical = QDir(dataDir).absoluteFilePath(QStringLiteral("sekaidesk.json"));
+
+    if (!QFileInfo::exists(canonical)) {
+        // Migrate existing nested or portable config on first launch.
+        const QDir appDir(QCoreApplication::applicationDirPath());
+        const QString nested = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)
+            + QStringLiteral("/sekaidesk.json");
+        const QStringList candidates = {
+            nested,
+            appDir.absoluteFilePath(QStringLiteral("config/sekaidesk.json")),
+            QStringLiteral("D:/coding/SekaiDesk/dist/SekaiDesk/config/sekaidesk.json"),
+            QStringLiteral("D:/coding/SekaiDesk/package/SekaiDesk/config/sekaidesk.json")
+        };
+        QJsonObject merged;
+        for (const QString& cand : candidates) {
+            QFile f(cand);
+            if (!f.exists() || !f.open(QIODevice::ReadOnly))
+                continue;
+            const QJsonObject obj = QJsonDocument::fromJson(f.readAll()).object();
+            f.close();
+            for (auto it = obj.begin(); it != obj.end(); ++it) {
+                if (!merged.contains(it.key()))
+                    merged.insert(it.key(), it.value());
+            }
+        }
+        if (!merged.isEmpty()) {
+            QSaveFile sf(canonical);
+            if (sf.open(QIODevice::WriteOnly)) {
+                sf.write(QJsonDocument(merged).toJson(QJsonDocument::Indented));
+                sf.commit();
+            }
+        }
+    }
+
+    return canonical;
 }
 
 void SettingsStore::ensureLoaded()
@@ -39,6 +71,8 @@ void SettingsStore::ensureLoaded()
         const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
         m_root = doc.object();
         file.close();
+    } else {
+        saveToDisk();
     }
 }
 
@@ -93,18 +127,26 @@ bool SettingsStore::has(const QString& key) const
     return lookupPath(m_root, key).isValid();
 }
 
+static QJsonObject removePathHelper(const QJsonObject& node, const QStringList& parts, int index)
+{
+    QJsonObject out = node;
+    if (index == parts.size() - 1) {
+        out.remove(parts.at(index));
+        return out;
+    }
+    const QJsonValue existing = node.value(parts.at(index));
+    if (!existing.isObject())
+        return out;
+    out.insert(parts.at(index), removePathHelper(existing.toObject(), parts, index + 1));
+    return out;
+}
+
 void SettingsStore::remove(const QString& key)
 {
-    QJsonObject node = m_root;
     const QStringList parts = key.split(QLatin1Char('.'));
-    for (int i = 0; i < parts.size() - 1; ++i) {
-        const QJsonValue v = node.value(parts.at(i));
-        if (!v.isObject())
-            return;
-        node = v.toObject();
-    }
-    node.remove(parts.last());
-    m_root = node;
+    if (parts.isEmpty() || parts.first().isEmpty())
+        return;
+    m_root = removePathHelper(m_root, parts, 0);
     saveToDisk();
     emit settingChanged(key, {});
 }
@@ -116,19 +158,28 @@ void SettingsStore::set(const QString& key, const QVariant& value)
         emit settingChanged(key, value);
 }
 
+void SettingsStore::flush()
+{
+    saveToDisk();
+}
+
 bool SettingsStore::saveToDisk()
 {
     if (m_filePath.isEmpty())
         m_filePath = resolveFilePath();
 
-    QFile file(m_filePath);
+    QSaveFile file(m_filePath);
     if (!file.open(QIODevice::WriteOnly)) {
         qWarning("SettingsStore: cannot write %s: %s",
                  qPrintable(m_filePath), qPrintable(file.errorString()));
         return false;
     }
     file.write(QJsonDocument(m_root).toJson(QJsonDocument::Indented));
-    file.close();
+    if (!file.commit()) {
+        qWarning("SettingsStore: cannot commit %s: %s",
+                 qPrintable(m_filePath), qPrintable(file.errorString()));
+        return false;
+    }
     return true;
 }
 
