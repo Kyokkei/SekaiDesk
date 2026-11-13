@@ -102,7 +102,7 @@ class QsFileView : public QObject {
     Q_OBJECT
     Q_PROPERTY(QString path READ path WRITE setPath NOTIFY pathChanged)
     Q_PROPERTY(QString text READ text WRITE setText NOTIFY textChanged)
-    Q_PROPERTY(bool loaded READ loaded NOTIFY loadedChanged)
+    Q_PROPERTY(bool loaded READ isLoaded NOTIFY loadedChanged)
 
 public:
     explicit QsFileView(QObject* parent = nullptr);
@@ -113,7 +113,7 @@ public:
     QString text() const { return m_text; }
     void setText(const QString& text);
 
-    bool loaded() const { return m_loaded; }
+    bool isLoaded() const { return m_loaded; }
 
     Q_INVOKABLE bool save();
     Q_INVOKABLE void reload();

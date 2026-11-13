@@ -69,22 +69,12 @@ QsProcess::QsProcess(QObject* parent)
     });
 }
 
-QVariantList QsProcess::command() const
-{
-    return m_command;
-}
-
 void QsProcess::setCommand(const QVariantList& command)
 {
     if (m_command == command)
         return;
     m_command = command;
     emit commandChanged();
-}
-
-QString QsProcess::cwd() const
-{
-    return m_cwd;
 }
 
 void QsProcess::setCwd(const QString& cwd)
@@ -103,19 +93,9 @@ bool QsProcess::running() const
     return m_running;
 }
 
-QObject* QsProcess::stdoutTarget() const
-{
-    return m_stdoutTarget;
-}
-
 void QsProcess::setStdoutTarget(QObject* target)
 {
     m_stdoutTarget = target;
-}
-
-QObject* QsProcess::stderrTarget() const
-{
-    return m_stderrTarget;
 }
 
 void QsProcess::setStderrTarget(QObject* target)
@@ -244,13 +224,13 @@ void QsFileView::loadFromDisk()
     setLoaded(true);
 }
 
-void QsFileView::setLoaded(bool loaded)
+void QsFileView::setLoaded(bool isLoaded)
 {
-    if (m_loaded == loaded)
+    if (m_loaded == isLoaded)
         return;
-    m_loaded = loaded;
+    m_loaded = isLoaded;
     emit loadedChanged();
-    if (loaded)
+    if (isLoaded)
         emit loaded();
 }
 

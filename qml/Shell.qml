@@ -1,175 +1,1393 @@
 import QtQuick
-import QtCore
 import Quickshell
-import Quickshell.Io
 import SekaiDesk
 
 // ===========================================================================
-// PHASE 0 SMOKE TEST — SekaiDesk shell skeleton
+// PHASE 1c — Live DWM Window Thumbnails + Zero-Churn Cosine Magnification
 //
-// Validates the survival-critical Win32 window behavior before any real UI:
-//   1. Frameless, translucent, always-on-top panel hugging its content
-//      (NO full-screen overlay).
-//   2. setMask cuts the rounded corners: right-clicking a transparent corner
-//      must open the native Explorer desktop context menu.
-//   3. clickThrough toggle switches WS_EX_TRANSPARENT live.
-//   4. Process (cmd.exe echo) and FileView (JSON roundtrip) prove the
-//      Quickshell.Io compat layer on Windows.
-//
-// Acceptance (blueprint Phase 0 "Done When" — window subset):
-//   - runs >= 60s with zero binding loops / TypeErrors in the log
-//   - right-click on empty desktop beside the pill opens Explorer menu
-//   - right-click in the pill's transparent corner opens Explorer menu
+// - Fixed-width PanelWindow during hover sweep: zero SetWindowPos / SetWindowRgn
+//   churn on mouse move (CPU & DWM stay flat).
+// - Clamped Cosine Magnification Wave (48px -> 82px keycaps).
+// - Live DWM 60fps Window Preview popup when hovering any running app.
 // ===========================================================================
 
 PanelWindow {
-    id: win
-
+    id: dockWindow
     visible: true
-    color: "transparent"
 
-    // Bottom-center pill — dock placeholder geometry (hugs content).
-    anchors {
-        left: true
-        right: true
-        bottom: true
-        margins {
-            left: 12
-            right: 12
-            bottom: 12
+    readonly property int baseTileSize: 48
+    readonly property int maxTileSize: 82
+    readonly property int baseIconSize: 34
+    readonly property int maxIconSize: 64
+    readonly property int tileGap: 8
+    readonly property int pillPadX: 14
+    readonly property int pillPadY: 10
+    readonly property int shadowOffset: 4
+    readonly property int headroom: maxTileSize - baseTileSize + 14
+    readonly property int hoverPadX: 96
+
+    readonly property real waveRadius: 128.0
+    property bool dockHovered: pillHover.hovered
+    property real pointerX: 0
+    property real waveStrength: (dockHovered && dragFromSlot < 0) ? 1.0 : 0.0
+
+    // Phase 3: Dock Auto-Hide / Dodge Active Window
+    property bool dockAutoHideEnabled: true
+    readonly property bool dockShouldHide: dockAutoHideEnabled
+        && WindowTracker.dockOverlap
+        && !WindowTracker.bottomEdgeHovered
+        && !dockHovered
+        && dragFromSlot < 0
+        && !ctxOpen
+        && activePreviewTarget === ""
+        && !previewCardHovered
+    property real hideProgress: dockShouldHide ? 1.0 : 0.0
+    Behavior on hideProgress {
+        NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
+    }
+    readonly property real hideOffsetY: hideProgress * (baseTileSize + pillPadY * 2 + shadowOffset + 20)
+
+    // Preview state for Phase 1c
+    property string hoveredAppTarget: ""
+    property string hoveredAppName: ""
+    property real hoveredIconCenterX: 0
+    property string activePreviewTarget: ""
+    property string activePreviewName: ""
+    property var activePreviewWindows: []
+    property bool previewCardHovered: false
+
+    // Phase 2: Right-click context menu state
+    property bool ctxOpen: false
+    property string ctxTarget: ""
+    property string ctxName: ""
+    property string ctxArgs: ""
+    property bool ctxPinned: false
+    property bool ctxRunning: false
+    property bool ctxIsSeparator: false
+    property int ctxPinnedIndex: -1
+    property real ctxCenterX: 0
+
+    // Phase 2b: Smooth unified drag-to-reorder across the entire app row
+    property int dragFromSlot: -1
+    property int dragHoverSlot: -1
+    property real dragLiveX: 0
+    property real dragGrabOffsetX: 24
+    property real dragItemWidth: 48
+    property var frozenDockItems: null
+
+    function appSlotCount() {
+        const list = dockItems
+        let count = 0
+        for (let i = 0; i < list.length; ++i) {
+            if (list[i].kind === "app")
+                count++
+            else
+                break
+        }
+        return count
+    }
+
+    function updateDragHover(curCenterRowX) {
+        const list = dockItems
+        if (dragFromSlot < 0)
+            return
+        let bestIdx = dragFromSlot
+        let bestDist = 1e9
+        const step = baseTileSize + tileGap
+        for (let i = 0; i < list.length; ++i) {
+            if (list[i].kind !== "app")
+                break
+            const cx = i * step + baseTileSize * 0.5
+            const d = Math.abs(curCenterRowX - cx)
+            if (d < bestDist) {
+                bestDist = d
+                bestIdx = i
+            }
+        }
+        dragHoverSlot = bestIdx
+    }
+
+    function finishDrag() {
+        const from = dragFromSlot
+        const to = dragHoverSlot
+        const list = frozenDockItems || dockItems
+        frozenDockItems = null
+        dragFromSlot = -1
+        dragHoverSlot = -1
+        dragLiveX = 0
+        if (from >= 0 && to >= 0 && from !== to) {
+            const apps = []
+            for (let i = 0; i < list.length; ++i) {
+                const it = list[i]
+                if (it.kind !== "app")
+                    break
+                apps.push({
+                    name: it.name || "App",
+                    target: it.target || "",
+                    args: it.args || "",
+                    pinned: !!it.pinned
+                })
+            }
+            AppLauncher.reorderDock(apps, from, to)
         }
     }
-    height: 84
 
-    clickThrough: false
-    mask: Region {
-        item: pillBody
+    Behavior on waveStrength {
+        NumberAnimation { duration: 130; easing.type: Easing.OutCubic }
     }
 
-    Rectangle {
-        id: pillBody
-        anchors.fill: parent
-        radius: 42
-        color: "#F0121A2A"          // navy sticker style, near-opaque
-        border.color: "#3E5A96"     // navy 2px sticker border
-        border.width: 2
+    // Combined list: pinned apps + (divider + unpinned running apps) + quit key
+    readonly property var dockItems: {
+        const pinned = AppLauncher.pinnedApps || []
+        const running = WindowTracker.runningApps || []
+        const items = []
+        const seenExe = {}
 
-        Row {
-            anchors.centerIn: parent
-            spacing: 24
+        function normKey(p) {
+            return String(p || "").trim().replace(/\//g, "\\").toLowerCase()
+        }
 
-            Column {
-                spacing: 2
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: "SEKAIDESK · PHASE 0"
-                    color: "#EDEFF7"
-                    font.pixelSize: 15
-                    font.bold: true
+        for (let i = 0; i < pinned.length; ++i) {
+            const p = pinned[i]
+            if (p.kind === "separator")
+                continue
+            const k = normKey(p.target)
+            if (k !== "")
+                seenExe[k] = true
+            const st = WindowTracker.stateForTarget(p.target || "")
+            items.push({
+                kind: "app",
+                name: p.name || "",
+                target: p.target || "",
+                args: p.args || "",
+                pinned: true,
+                pinnedIndex: i,
+                running: !!st.running,
+                active: !!st.active,
+                minimized: !!st.minimized,
+                count: st.count || 0
+            })
+        }
+
+        const extra = []
+        for (let j = 0; j < running.length; ++j) {
+            const r = running[j]
+            const rk = normKey(r.target)
+            if (!seenExe[rk]) {
+                extra.push({
+                    kind: "app",
+                    name: r.name || "",
+                    target: r.target || "",
+                    args: "",
+                    pinned: false,
+                    running: true,
+                    active: !!r.active,
+                    minimized: !!r.minimized,
+                    count: r.count || 1
+                })
+            }
+        }
+
+        for (let k = 0; k < extra.length; ++k)
+            items.push(extra[k])
+
+        items.push({ kind: "divider" })
+        if (MediaService.hasSession)
+            items.push({ kind: "media" })
+        items.push({ kind: "quit" })
+        return items
+    }
+
+    readonly property real idleTotalWidth: {
+        const list = dockItems
+        const n = list.length
+        let bx = 0
+        for (let i = 0; i < n; ++i) {
+            const it = list[i]
+            const bw = (it.kind === "app" || it.kind === "trash")
+                ? baseTileSize
+                : (it.kind === "media" ? 124 : (it.kind === "quit" ? 34 : 8))
+            bx += bw + (i < n - 1 ? tileGap : 0)
+        }
+        return Math.max(1, bx)
+    }
+
+    // One-pass Cosine Magnification layout solver
+    readonly property var layoutData: {
+        const list = dockItems
+        const n = list.length
+        const baseCenters = []
+        let bx = 0
+        for (let i = 0; i < n; ++i) {
+            const it = list[i]
+            const bw = (it.kind === "app" || it.kind === "trash")
+                ? baseTileSize
+                : (it.kind === "media" ? 124 : (it.kind === "quit" ? 34 : 8))
+            baseCenters.push(bx + bw * 0.5)
+            bx += bw + (i < n - 1 ? tileGap : 0)
+        }
+
+        const widths = []
+        const xs = []
+        const weights = []
+        let cx = 0
+        for (let i = 0; i < n; ++i) {
+            const it = list[i]
+            let w = 0.0
+            if ((it.kind === "app" || it.kind === "trash") && waveStrength > 0.001) {
+                const dist = Math.abs(pointerX - baseCenters[i])
+                if (dist < waveRadius) {
+                    w = 0.5 * (1.0 + Math.cos(Math.PI * dist / waveRadius)) * waveStrength
                 }
-                Text {
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    text: Qt.formatDate(SystemClock.date, "ddd dd MMM yyyy")
-                    color: "#9FB2D8"
-                    font.pixelSize: 12
+            }
+            weights.push(w)
+            const curW = (it.kind === "app" || it.kind === "trash")
+                ? (baseTileSize + (maxTileSize - baseTileSize) * w)
+                : (it.kind === "media" ? 124 : (it.kind === "quit" ? 34 : 8))
+            widths.push(curW)
+            xs.push(cx)
+            cx += curW + (i < n - 1 ? tileGap : 0)
+        }
+
+        return {
+            totalWidth: Math.max(1, cx),
+            xs: xs,
+            widths: widths,
+            weights: weights
+        }
+    }
+
+    // Fixed window width so mouse sweep NEVER calls SetWindowPos or SetWindowRgn.
+    width: idleTotalWidth + pillPadX * 2 + hoverPadX + shadowOffset
+    height: headroom + baseTileSize + pillPadY * 2 + shadowOffset
+
+    anchors.bottom: true
+    anchors.margins.bottom: 10
+    clickThrough: false
+
+    // When hidden, mask is empty (100% click-through). When idle, mask strictly to the static idle pill rect;
+    // when hovered, use a static full-window mask so SetWindowRgn is NOT called per mouse pixel.
+    mask: dockWindow.hideProgress > 0.95
+        ? []
+        : (dockWindow.dockHovered || dockWindow.waveStrength > 0.02
+            ? [{ x: 0, y: 0, width: dockWindow.width, height: dockWindow.height }]
+            : [{
+                x: (dockWindow.width - dockWindow.shadowOffset - (dockWindow.idleTotalWidth + dockWindow.pillPadX * 2)) * 0.5,
+                y: dockWindow.headroom,
+                width: dockWindow.idleTotalWidth + dockWindow.pillPadX * 2 + dockWindow.shadowOffset,
+                height: dockWindow.baseTileSize + dockWindow.pillPadY * 2 + dockWindow.shadowOffset
+            }])
+
+    Timer {
+        id: previewShowTimer
+        interval: 140
+        repeat: false
+        onTriggered: {
+            if (dockWindow.hoveredAppTarget !== "") {
+                const wins = WindowTracker.windowsForTarget(dockWindow.hoveredAppTarget)
+                if (wins && wins.length > 0) {
+                    dockWindow.activePreviewTarget = dockWindow.hoveredAppTarget
+                    dockWindow.activePreviewName = dockWindow.hoveredAppName
+                    dockWindow.activePreviewWindows = wins
+                }
+            }
+        }
+    }
+
+    Timer {
+        id: previewHideTimer
+        interval: 200
+        repeat: false
+        onTriggered: {
+            if (dockWindow.hoveredAppTarget === "" && !dockWindow.previewCardHovered) {
+                dockWindow.activePreviewTarget = ""
+                dockWindow.activePreviewWindows = []
+            }
+        }
+    }
+
+    function refreshPreviewIfOpen() {
+        if (dockWindow.activePreviewTarget !== "") {
+            const wins = WindowTracker.windowsForTarget(dockWindow.activePreviewTarget)
+            if (!wins || wins.length === 0) {
+                dockWindow.activePreviewTarget = ""
+                dockWindow.activePreviewWindows = []
+            } else {
+                dockWindow.activePreviewWindows = wins
+            }
+        }
+    }
+
+    Connections {
+        target: WindowTracker
+        function onRunningAppsChanged() {
+            dockWindow.refreshPreviewIfOpen()
+        }
+    }
+
+    // Hard flat offset shadow
+    Rectangle {
+        x: dockPill.x + dockWindow.shadowOffset
+        y: dockWindow.headroom + dockWindow.shadowOffset + dockWindow.hideOffsetY
+        width: dockPill.width
+        height: dockPill.height
+        radius: dockPill.radius
+        color: "#1A1B2E"
+    }
+
+    // Main Dock Pill (centered in fixed dockWindow)
+    Rectangle {
+        id: dockPill
+        x: (dockWindow.width - dockWindow.shadowOffset - width) * 0.5
+        y: dockWindow.headroom + dockWindow.hideOffsetY
+        width: dockWindow.layoutData.totalWidth + dockWindow.pillPadX * 2
+        height: dockWindow.baseTileSize + dockWindow.pillPadY * 2
+        radius: 20
+        color: "#1A1B2E"
+
+        // White inner ring
+        Rectangle {
+            anchors.fill: parent
+            anchors.margins: 2.5
+            radius: parent.radius - 2.5
+            color: "#FFFFFF"
+
+            // Pastel body fill
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 3
+                radius: parent.radius - 3
+                color: "#F1F5FF"
+            }
+        }
+
+        HoverHandler {
+            id: pillHover
+            onPointChanged: {
+                // Map pointer relative to idle row center so wave centers stay stable
+                const idleLeft = (dockPill.width - dockWindow.idleTotalWidth) * 0.5
+                dockWindow.pointerX = point.position.x - idleLeft
+            }
+        }
+
+        Item {
+            id: dockRow
+            x: dockWindow.pillPadX
+            y: dockWindow.pillPadY
+            width: dockWindow.layoutData.totalWidth
+            height: dockWindow.baseTileSize
+
+            Repeater {
+                model: (dockWindow.dragFromSlot >= 0 && dockWindow.frozenDockItems)
+                    ? dockWindow.frozenDockItems
+                    : dockWindow.dockItems
+
+                delegate: Item {
+                    id: slot
+                    required property var modelData
+                    required property int index
+
+                    Component.onDestruction: {
+                        if (isDraggingThis) {
+                            dockWindow.frozenDockItems = null
+                            dockWindow.dragFromSlot = -1
+                            dockWindow.dragHoverSlot = -1
+                            dockWindow.dragLiveX = 0
+                        }
+                    }
+
+                    readonly property real wFactor: dockWindow.layoutData.weights[index] || 0
+                    readonly property real slotW: dockWindow.layoutData.widths[index] || dockWindow.baseTileSize
+                    readonly property real slotX: dockWindow.layoutData.xs[index] || 0
+                    readonly property bool isAppItem: modelData.kind === "app"
+                    readonly property int pIdx: (modelData.pinned && modelData.pinnedIndex !== undefined)
+                        ? modelData.pinnedIndex : -1
+                    readonly property bool isDraggingThis: isAppItem && dockWindow.dragFromSlot >= 0 && index === dockWindow.dragFromSlot
+                    property real dragShiftX: {
+                        const from = dockWindow.dragFromSlot
+                        const to = dockWindow.dragHoverSlot
+                        if (from < 0 || !isAppItem || isDraggingThis)
+                            return 0
+                        const step = dockWindow.baseTileSize + dockWindow.tileGap
+                        if (from < to && index > from && index <= to)
+                            return -step
+                        if (from > to && index < from && index >= to)
+                            return step
+                        return 0
+                    }
+
+                    Behavior on dragShiftX {
+                        NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                    }
+                    Behavior on scale {
+                        NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
+                    }
+                    Behavior on y {
+                        NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
+                    }
+
+                    z: isDraggingThis ? 100 : 1
+                    scale: isDraggingThis ? 1.12 : 1.0
+                    y: isDraggingThis ? -6 : 0
+                    x: isDraggingThis ? dockWindow.dragLiveX : (slotX + dragShiftX)
+                    width: slotW
+                    height: dockWindow.baseTileSize
+
+                    Behavior on dragShiftX {
+                        NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
+                    }
+
+                    // --- App Keycap ---
+                    Item {
+                        id: appBox
+                        visible: slot.modelData.kind === "app"
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        width: slot.slotW
+                        height: slot.slotW
+
+                        readonly property bool hovered: appArea.containsMouse
+                        readonly property bool pressed: appArea.pressed
+                        readonly property real curIconSize: dockWindow.baseIconSize
+                            + (dockWindow.maxIconSize - dockWindow.baseIconSize) * slot.wFactor
+
+                        onHoveredChanged: {
+                            if (hovered && slot.modelData.running) {
+                                dockWindow.hoveredAppTarget = slot.modelData.target || ""
+                                dockWindow.hoveredAppName = slot.modelData.name || ""
+                                dockWindow.hoveredIconCenterX = dockWindow.x + dockPill.x
+                                    + dockRow.x + slot.slotX + slot.slotW * 0.5
+                                previewHideTimer.stop()
+                                previewShowTimer.restart()
+                            } else if (!hovered && dockWindow.hoveredAppTarget === (slot.modelData.target || "")) {
+                                dockWindow.hoveredAppTarget = ""
+                                previewShowTimer.stop()
+                                previewHideTimer.restart()
+                            }
+                        }
+
+                        // Keycap bottom lip
+                        Rectangle {
+                            anchors.fill: keyCap
+                            anchors.topMargin: 2.5
+                            anchors.bottomMargin: -2.5
+                            radius: keyCap.radius
+                            color: "#1A1B2E"
+                            opacity: appBox.pressed ? 0.0 : 0.9
+                        }
+
+                        Rectangle {
+                            id: keyCap
+                            width: parent.width
+                            height: parent.height
+                            y: appBox.pressed ? 2.5 : (appBox.hovered ? -2 : 0)
+                            radius: 13 + 5 * slot.wFactor
+                            color: appBox.hovered ? "#E0F2FE" : "#FFFFFF"
+                            border.width: 2
+                            border.color: appBox.hovered ? "#0284C7" : "#1A1B2E"
+
+                            Image {
+                                anchors.centerIn: parent
+                                width: appBox.curIconSize
+                                height: appBox.curIconSize
+                                source: "image://winicon/" + encodeURIComponent(slot.modelData.target || "")
+                                sourceSize: Qt.size(dockWindow.maxIconSize, dockWindow.maxIconSize)
+                                smooth: true
+                                mipmap: true
+                            }
+                        }
+
+                        // Running Diamond Dot
+                        Rectangle {
+                            visible: !!slot.modelData.running
+                            anchors.horizontalCenter: keyCap.horizontalCenter
+                            anchors.bottom: keyCap.bottom
+                            anchors.bottomMargin: -5
+                            width: 6
+                            height: 6
+                            rotation: 45
+                            radius: 1
+                            color: slot.modelData.active
+                                ? "#06B6D4"
+                                : (slot.modelData.minimized ? "#FFFFFF" : "#10B981")
+                            border.width: 1.5
+                            border.color: "#1A1B2E"
+                        }
+
+                        MouseArea {
+                            id: appArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            preventStealing: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            cursorShape: slot.isDraggingThis ? Qt.ClosedHandCursor : Qt.PointingHandCursor
+                            property real pressGlobalX: 0
+                            property real grabRatio: 0.5
+                            property bool didDrag: false
+
+                            onPressed: (mouse) => {
+                                didDrag = false
+                                if (mouse.button === Qt.LeftButton) {
+                                    pressGlobalX = mapToGlobal(mouse.x, mouse.y).x
+                                    grabRatio = Math.max(0.15, Math.min(0.85, mouse.x / Math.max(1, slot.slotW)))
+                                }
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!(mouse.buttons & Qt.LeftButton)) {
+                                    if (didDrag || dockWindow.dragFromSlot >= 0) {
+                                        didDrag = false
+                                        dockWindow.finishDrag()
+                                    }
+                                    return
+                                }
+                                const globalX = mapToGlobal(mouse.x, mouse.y).x
+                                const dx = globalX - pressGlobalX
+                                const rowMouseX = dockRow.mapFromGlobal(globalX, 0).x
+                                if (!didDrag && Math.abs(dx) > 6) {
+                                    didDrag = true
+                                    previewShowTimer.stop()
+                                    dockWindow.activePreviewTarget = ""
+                                    dockWindow.activePreviewWindows = []
+                                    dockWindow.ctxOpen = false
+                                    dockWindow.dragItemWidth = dockWindow.baseTileSize
+                                    dockWindow.dragGrabOffsetX = grabRatio * dockWindow.baseTileSize
+                                    dockWindow.frozenDockItems = dockWindow.dockItems
+                                    dockWindow.dragFromSlot = slot.index
+                                    dockWindow.dragHoverSlot = slot.index
+                                }
+                                if (didDrag) {
+                                    const maxApps = dockWindow.appSlotCount()
+                                    const maxX = Math.max(0, (maxApps - 1) * (dockWindow.baseTileSize + dockWindow.tileGap) + 8)
+                                    const rawX = rowMouseX - dockWindow.dragGrabOffsetX
+                                    dockWindow.dragLiveX = Math.max(-8, Math.min(maxX, rawX))
+                                    dockWindow.updateDragHover(dockWindow.dragLiveX + dockWindow.baseTileSize * 0.5)
+                                }
+                            }
+                            onReleased: {
+                                if (didDrag)
+                                    dockWindow.finishDrag()
+                            }
+                            onCanceled: {
+                                if (didDrag) {
+                                    didDrag = false
+                                    dockWindow.finishDrag()
+                                }
+                            }
+                            onClicked: (mouse) => {
+                                if (didDrag) {
+                                    didDrag = false
+                                    return
+                                }
+                                if (mouse.button === Qt.RightButton) {
+                                    previewShowTimer.stop()
+                                    dockWindow.activePreviewTarget = ""
+                                    dockWindow.activePreviewWindows = []
+                                    dockWindow.ctxIsSeparator = false
+                                    dockWindow.ctxPinnedIndex = slot.pIdx
+                                    dockWindow.ctxTarget = slot.modelData.target || ""
+                                    dockWindow.ctxName = slot.modelData.name || "App"
+                                    dockWindow.ctxArgs = slot.modelData.args || ""
+                                    dockWindow.ctxPinned = !!slot.modelData.pinned
+                                    dockWindow.ctxRunning = !!slot.modelData.running
+                                    dockWindow.ctxCenterX = dockWindow.x + dockPill.x
+                                        + dockRow.x + slot.slotX + slot.slotW * 0.5
+                                    dockWindow.ctxOpen = true
+                                    ctxAutoHideTimer.restart()
+                                    return
+                                }
+                                dockWindow.ctxOpen = false
+                                if (slot.modelData.running) {
+                                    WindowTracker.activateOrToggle(slot.modelData.target || "")
+                                } else {
+                                    AppLauncher.launch(
+                                        slot.modelData.target || "",
+                                        slot.modelData.args || ""
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Custom Draggable / Removable Separator (Phase 2b) ---
+                    Item {
+                        id: customSepBox
+                        visible: slot.modelData.kind === "custom_sep"
+                        anchors.fill: parent
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: (customSepArea.containsMouse || slot.isDraggingThis) ? 3 : 2
+                            height: dockWindow.baseTileSize - 12
+                            radius: 1.5
+                            color: (customSepArea.containsMouse || slot.isDraggingThis)
+                                ? "#0284C7" : "#94A3B8"
+                        }
+
+                        MouseArea {
+                            id: customSepArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            preventStealing: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            cursorShape: slot.isDraggingThis ? Qt.ClosedHandCursor : Qt.SizeHorCursor
+                            property real pressGlobalX: 0
+                            property real startSlotCenterX: 0
+                            property bool didDrag: false
+
+                            onPressed: (mouse) => {
+                                didDrag = false
+                                if (mouse.button === Qt.LeftButton && slot.pIdx >= 0) {
+                                    pressGlobalX = mapToGlobal(mouse.x, mouse.y).x
+                                    startSlotCenterX = slot.slotX + slot.slotW * 0.5
+                                }
+                            }
+                            onPositionChanged: (mouse) => {
+                                if (!(mouse.buttons & Qt.LeftButton) || slot.pIdx < 0)
+                                    return
+                                const dx = mapToGlobal(mouse.x, mouse.y).x - pressGlobalX
+                                if (!didDrag && Math.abs(dx) > 5) {
+                                    didDrag = true
+                                    dockWindow.ctxOpen = false
+                                    dockWindow.dragItemWidth = slot.slotW
+                                    dockWindow.dragFromIdx = slot.pIdx
+                                    dockWindow.dragUnpinnedSlotIdx = -1
+                                    dockWindow.dragHoverIdx = slot.pIdx
+                                }
+                                if (didDrag) {
+                                    dockWindow.dragDeltaX = dx
+                                    dockWindow.updateDragHover(startSlotCenterX + dx)
+                                }
+                            }
+                            onReleased: {
+                                if (didDrag)
+                                    dockWindow.finishDrag()
+                            }
+                            onCanceled: {
+                                if (didDrag) {
+                                    didDrag = false
+                                    dockWindow.finishDrag()
+                                }
+                            }
+                            onClicked: (mouse) => {
+                                if (didDrag) {
+                                    didDrag = false
+                                    return
+                                }
+                                if (mouse.button === Qt.RightButton) {
+                                    previewShowTimer.stop()
+                                    dockWindow.activePreviewTarget = ""
+                                    dockWindow.activePreviewWindows = []
+                                    dockWindow.ctxIsSeparator = true
+                                    dockWindow.ctxPinnedIndex = slot.pIdx
+                                    dockWindow.ctxName = "Separator"
+                                    dockWindow.ctxTarget = ""
+                                    dockWindow.ctxArgs = ""
+                                    dockWindow.ctxPinned = true
+                                    dockWindow.ctxRunning = false
+                                    dockWindow.ctxCenterX = dockWindow.x + dockPill.x
+                                        + dockRow.x + slot.slotX + slot.slotW * 0.5
+                                    dockWindow.ctxOpen = true
+                                    ctxAutoHideTimer.restart()
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Divider ---
+                    Rectangle {
+                        visible: slot.modelData.kind === "divider"
+                        anchors.centerIn: parent
+                        width: 2
+                        height: dockWindow.baseTileSize - 14
+                        radius: 1
+                        color: "#CBD5E1"
+                    }
+
+                    // --- Native Trash Bin Keycap (Phase 1d) ---
+                    Item {
+                        id: trashBox
+                        visible: slot.modelData.kind === "trash"
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.bottom: parent.bottom
+                        width: slot.slotW
+                        height: slot.slotW
+
+                        readonly property bool hovered: trashArea.containsMouse
+                        readonly property bool pressed: trashArea.pressed
+
+                        Rectangle {
+                            anchors.fill: trashCap
+                            anchors.topMargin: 2.5
+                            anchors.bottomMargin: -2.5
+                            radius: trashCap.radius
+                            color: "#1A1B2E"
+                            opacity: trashBox.pressed ? 0.0 : 0.9
+                        }
+
+                        Rectangle {
+                            id: trashCap
+                            width: parent.width
+                            height: parent.height
+                            y: trashBox.pressed ? 2.5 : (trashBox.hovered ? -2 : 0)
+                            radius: 13 + 5 * slot.wFactor
+                            color: trashBox.hovered ? "#FEF3C7" : "#FFFFFF"
+                            border.width: 2
+                            border.color: trashBox.hovered ? "#D97706" : "#1A1B2E"
+
+                            // Sticker Trash Can Graphic
+                            Item {
+                                anchors.centerIn: parent
+                                width: parent.width * 0.62
+                                height: parent.height * 0.62
+
+                                // Paper peeking out when non-empty
+                                Rectangle {
+                                    visible: !TrashService.isEmpty
+                                    x: parent.width * 0.22
+                                    y: parent.height * 0.06
+                                    width: parent.width * 0.36
+                                    height: parent.height * 0.34
+                                    radius: 3
+                                    rotation: -10
+                                    color: "#BAE6FD"
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+                                }
+                                Rectangle {
+                                    visible: !TrashService.isEmpty
+                                    x: parent.width * 0.44
+                                    y: parent.height * 0.08
+                                    width: parent.width * 0.34
+                                    height: parent.height * 0.32
+                                    radius: 3
+                                    rotation: 12
+                                    color: "#FDE68A"
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+                                }
+
+                                // Bin lid
+                                Rectangle {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    y: parent.height * 0.22
+                                    width: parent.width * 0.84
+                                    height: Math.max(4, parent.height * 0.14)
+                                    radius: 3
+                                    color: TrashService.isEmpty ? "#94A3B8" : "#F59E0B"
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+                                }
+
+                                // Bin body
+                                Rectangle {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    y: parent.height * 0.34
+                                    width: parent.width * 0.72
+                                    height: parent.height * 0.56
+                                    radius: 5
+                                    color: TrashService.isEmpty ? "#E2E8F0" : "#FDE68A"
+                                    border.width: 1.8
+                                    border.color: "#1A1B2E"
+
+                                    Row {
+                                        anchors.centerIn: parent
+                                        spacing: Math.max(2, parent.width * 0.14)
+                                        Repeater {
+                                            model: 3
+                                            Rectangle {
+                                                width: 2
+                                                height: parent.parent.height * 0.52
+                                                radius: 1
+                                                color: "#64748B"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Item count badge
+                            Rectangle {
+                                visible: !TrashService.isEmpty
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                anchors.margins: -4
+                                width: Math.max(18, trashBadgeTxt.implicitWidth + 8)
+                                height: 18
+                                radius: 9
+                                color: "#EF4444"
+                                border.width: 1.5
+                                border.color: "#1A1B2E"
+
+                                Text {
+                                    id: trashBadgeTxt
+                                    anchors.centerIn: parent
+                                    text: TrashService.itemCount > 99 ? "99+" : String(TrashService.itemCount)
+                                    color: "#FFFFFF"
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                    font.bold: true
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            id: trashArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: (mouse) => {
+                                if (mouse.button === Qt.RightButton) {
+                                    TrashService.emptyBin()
+                                } else {
+                                    TrashService.openBin()
+                                }
+                            }
+                        }
+                    }
+
+                    // --- GSMTC Media Controls Pill (Phase 1d) ---
+                    Rectangle {
+                        visible: slot.modelData.kind === "media"
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 124
+                        height: dockWindow.baseTileSize - 2
+                        radius: 13
+                        color: "#FFFFFF"
+                        border.width: 2
+                        border.color: "#1A1B2E"
+
+                        Column {
+                            anchors.fill: parent
+                            anchors.margins: 4
+                            spacing: 2
+
+                            Text {
+                                width: parent.width
+                                text: MediaService.title !== "" ? MediaService.title : "Media"
+                                color: "#1A1B2E"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.bold: true
+                                elide: Text.ElideRight
+                                horizontalAlignment: Text.AlignHCenter
+                            }
+
+                            Row {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                spacing: 6
+
+                                Rectangle {
+                                    width: 26
+                                    height: 20
+                                    radius: 7
+                                    color: prevArea.containsMouse ? "#E0F2FE" : "#F1F5F9"
+                                    border.width: 1.2
+                                    border.color: "#1A1B2E"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "⏮"
+                                        font.pixelSize: 10
+                                        color: "#1A1B2E"
+                                    }
+                                    MouseArea {
+                                        id: prevArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: MediaService.previous()
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 30
+                                    height: 20
+                                    radius: 7
+                                    color: playArea.containsMouse ? "#BAE6FD" : "#38BDF8"
+                                    border.width: 1.2
+                                    border.color: "#1A1B2E"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: MediaService.isPlaying ? "⏸" : "▶"
+                                        font.pixelSize: 10
+                                        color: "#1A1B2E"
+                                    }
+                                    MouseArea {
+                                        id: playArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: MediaService.playPause()
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 26
+                                    height: 20
+                                    radius: 7
+                                    color: nextArea.containsMouse ? "#E0F2FE" : "#F1F5F9"
+                                    border.width: 1.2
+                                    border.color: "#1A1B2E"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "⏭"
+                                        font.pixelSize: 10
+                                        color: "#1A1B2E"
+                                    }
+                                    MouseArea {
+                                        id: nextArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: MediaService.next()
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- Compact Quit Button ---
+                    Rectangle {
+                        visible: slot.modelData.kind === "quit"
+                        anchors.centerIn: parent
+                        width: 30
+                        height: 30
+                        radius: 15
+                        color: quitArea.containsMouse ? "#FEE2E2" : "#E2E8F0"
+                        border.width: 1.5
+                        border.color: quitArea.containsMouse ? "#EF4444" : "#1A1B2E"
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: "×"
+                            color: quitArea.containsMouse ? "#B91C1C" : "#1A1B2E"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 15
+                            font.bold: true
+                        }
+
+                        MouseArea {
+                            id: quitArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Qt.quit()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =======================================================================
+    // PHASE 1c — Live DWM Window Preview Popup
+    // =======================================================================
+    PanelWindow {
+        id: previewWindow
+        visible: dockWindow.activePreviewWindows.length > 0
+        clickThrough: false
+
+        readonly property int tileW: 216
+        readonly property int tileH: 152
+        readonly property int cardPad: 12
+        readonly property int cardShadow: 4
+        readonly property int maxTiles: Math.min(4, dockWindow.activePreviewWindows.length)
+
+        width: previewCard.width + cardShadow
+        height: previewCard.height + cardShadow
+
+        x: {
+            const scrW = dockWindow.screen ? dockWindow.screen.width : 1920
+            const rawX = Math.round(dockWindow.hoveredIconCenterX - width * 0.5)
+            return Math.max(12, Math.min(scrW - width - 12, rawX))
+        }
+        y: Math.max(12, dockWindow.y + 4 - height)
+
+        mask: [{ x: 0, y: 0, width: previewCard.width + cardShadow, height: previewCard.height + cardShadow }]
+
+        HoverHandler {
+            id: previewHover
+            onHoveredChanged: {
+                dockWindow.previewCardHovered = hovered
+                if (hovered) {
+                    previewHideTimer.stop()
+                } else {
+                    previewHideTimer.restart()
+                }
+            }
+        }
+
+        // Hard offset shadow
+        Rectangle {
+            x: previewWindow.cardShadow
+            y: previewWindow.cardShadow
+            width: previewCard.width
+            height: previewCard.height
+            radius: previewCard.radius
+            color: "#1A1B2E"
+        }
+
+        Rectangle {
+            id: previewCard
+            x: 0
+            y: 0
+            width: previewRow.implicitWidth + previewWindow.cardPad * 2
+            height: previewWindow.tileH + previewWindow.cardPad * 2 + 24
+            radius: 18
+            color: "#1A1B2E"
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 2.5
+                radius: parent.radius - 2.5
+                color: "#FFFFFF"
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 3
+                    radius: parent.radius - 3
+                    color: "#F1F5FF"
                 }
             }
 
+            // App header label
             Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: SystemClock.hours + ":"
-                      + String(SystemClock.minutes).padStart(2, "0") + ":"
-                      + String(SystemClock.seconds).padStart(2, "0")
-                color: "#FFD1DC"
-                font.pixelSize: 26
+                x: previewWindow.cardPad
+                y: 8
+                text: dockWindow.activePreviewName
+                color: "#1A1B2E"
+                font.family: "Segoe UI"
+                font.pixelSize: 12
                 font.bold: true
             }
 
+            Row {
+                id: previewRow
+                x: previewWindow.cardPad
+                y: 28
+                spacing: 10
+
+                Repeater {
+                    model: dockWindow.activePreviewWindows.slice(0, 4)
+
+                    delegate: Rectangle {
+                        id: winTile
+                        required property var modelData
+                        width: previewWindow.tileW
+                        height: previewWindow.tileH
+                        radius: 12
+                        color: tileHoverArea.containsMouse ? "#E0F2FE" : "#FFFFFF"
+                        border.width: modelData.active ? 2 : 1.5
+                        border.color: modelData.active ? "#0284C7" : "#1A1B2E"
+
+                        // Title + window action buttons
+                        Item {
+                            id: titleBar
+                            anchors.top: parent.top
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.margins: 6
+                            height: 22
+
+                            Text {
+                                anchors.left: parent.left
+                                anchors.right: actionBtns.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: winTile.modelData.title || dockWindow.activePreviewName
+                                color: "#1E293B"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 11
+                                font.bold: true
+                                elide: Text.ElideRight
+                            }
+
+                            Row {
+                                id: actionBtns
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 4
+
+                                Rectangle {
+                                    width: 18
+                                    height: 18
+                                    radius: 9
+                                    color: minArea.containsMouse ? "#FEF3C7" : "#E2E8F0"
+                                    border.width: 1
+                                    border.color: "#1A1B2E"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "–"
+                                        font.pixelSize: 11
+                                        font.bold: true
+                                        color: "#1A1B2E"
+                                    }
+                                    MouseArea {
+                                        id: minArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: WindowTracker.minimizeHwnd(winTile.modelData.hwnd)
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 18
+                                    height: 18
+                                    radius: 9
+                                    color: closeArea.containsMouse ? "#FEE2E2" : "#E2E8F0"
+                                    border.width: 1
+                                    border.color: closeArea.containsMouse ? "#EF4444" : "#1A1B2E"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "×"
+                                        font.pixelSize: 12
+                                        font.bold: true
+                                        color: closeArea.containsMouse ? "#B91C1C" : "#1A1B2E"
+                                    }
+                                    MouseArea {
+                                        id: closeArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: WindowTracker.closeHwnd(winTile.modelData.hwnd)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Live DWM 60fps window stream
+                        DwmThumbnail {
+                            anchors.top: titleBar.bottom
+                            anchors.topMargin: 4
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            anchors.margins: 6
+                            sourceHwnd: winTile.modelData.hwnd || 0
+                            active: previewWindow.visible
+                        }
+
+                        MouseArea {
+                            id: tileHoverArea
+                            anchors.top: titleBar.bottom
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.MiddleButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: (mouse) => {
+                                if (mouse.button === Qt.MiddleButton) {
+                                    WindowTracker.closeHwnd(winTile.modelData.hwnd)
+                                } else {
+                                    WindowTracker.activateHwnd(winTile.modelData.hwnd)
+                                    dockWindow.activePreviewTarget = ""
+                                    dockWindow.activePreviewWindows = []
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Phase 2: Right-Click Dock Context Menu ---
+    Timer {
+        id: ctxAutoHideTimer
+        interval: 1600
+        onTriggered: {
+            if (!ctxHoverHandler.hovered)
+                dockWindow.ctxOpen = false
+        }
+    }
+
+    PanelWindow {
+        id: contextWindow
+        visible: dockWindow.ctxOpen
+        clickThrough: false
+        color: "transparent"
+
+        readonly property int cardShadow: 4
+        readonly property int menuW: 196
+        readonly property var menuActions: {
+            const list = []
+            list.push({
+                id: "launch",
+                label: dockWindow.ctxRunning ? "New Window / Open" : "Open App",
+                danger: false
+            })
+            list.push({
+                id: "pin",
+                label: dockWindow.ctxPinned ? "Unpin from Dock" : "Pin to Dock",
+                danger: false
+            })
+            if (dockWindow.ctxRunning) {
+                list.push({ id: "close", label: "Close Window", danger: true })
+            }
+            return list
+        }
+
+        width: menuW + cardShadow
+        height: ctxCard.height + cardShadow
+
+        x: {
+            const scrW = dockWindow.screen ? dockWindow.screen.width : 1920
+            const rawX = Math.round(dockWindow.ctxCenterX - width * 0.5)
+            return Math.max(12, Math.min(scrW - width - 12, rawX))
+        }
+        y: Math.max(12, dockWindow.y + 4 - height)
+
+        mask: [{ x: 0, y: 0, width: menuW + cardShadow, height: ctxCard.height + cardShadow }]
+
+        // Hard sticker drop shadow
+        Rectangle {
+            x: contextWindow.cardShadow
+            y: contextWindow.cardShadow
+            width: contextWindow.menuW
+            height: ctxCard.height
+            radius: 14
+            color: "#1A1B2E"
+        }
+
+        Rectangle {
+            id: ctxCard
+            x: 0
+            y: 0
+            width: contextWindow.menuW
+            height: ctxCol.implicitHeight + 14
+            radius: 14
+            color: "#FFFFFF"
+            border.width: 2
+            border.color: "#1A1B2E"
+
+            HoverHandler {
+                id: ctxHoverHandler
+                onHoveredChanged: {
+                    if (hovered)
+                        ctxAutoHideTimer.stop()
+                    else
+                        ctxAutoHideTimer.restart()
+                }
+            }
+
             Column {
+                id: ctxCol
+                x: 8
+                y: 7
+                width: parent.width - 16
                 spacing: 4
-                Text {
-                    text: "process: " + (bootTest.textOk ? "PASS" : "…")
-                    color: bootTest.textOk ? "#8CE99A" : "#9FB2D8"
-                    font.pixelSize: 12
+
+                // Header with app name + dismiss x
+                Item {
+                    width: parent.width
+                    height: 24
+
+                    Text {
+                        anchors.left: parent.left
+                        anchors.leftMargin: 6
+                        anchors.right: ctxDismissBtn.left
+                        anchors.rightMargin: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: dockWindow.ctxName
+                        font.family: "Segoe UI"
+                        font.pixelSize: 12
+                        font.bold: true
+                        color: "#1E293B"
+                        elide: Text.ElideRight
+                    }
+
+                    Rectangle {
+                        id: ctxDismissBtn
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 20
+                        height: 20
+                        radius: 6
+                        color: ctxDismissArea.containsMouse ? "#F1F5F9" : "transparent"
+                        Text {
+                            anchors.centerIn: parent
+                            text: "×"
+                            font.pixelSize: 13
+                            font.bold: true
+                            color: "#64748B"
+                        }
+                        MouseArea {
+                            id: ctxDismissArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: dockWindow.ctxOpen = false
+                        }
+                    }
                 }
-                Text {
-                    text: "fileview: " + (bootTest.fileOk ? "PASS" : "…")
-                    color: bootTest.fileOk ? "#8CE99A" : "#9FB2D8"
-                    font.pixelSize: 12
+
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: "#E2E8F0"
                 }
-                Text {
-                    text: "mask: pill corners are click-through — right-click them"
-                    color: "#9FB2D8"
-                    font.pixelSize: 12
+
+                Repeater {
+                    model: contextWindow.menuActions
+                    delegate: Rectangle {
+                        id: menuBtn
+                        required property var modelData
+                        width: parent.width
+                        height: 30
+                        radius: 8
+                        color: menuBtnArea.containsMouse
+                            ? (modelData.danger ? "#FEE2E2" : "#E0F2FE")
+                            : "transparent"
+
+                        Text {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: menuBtn.modelData.label
+                            font.family: "Segoe UI"
+                            font.pixelSize: 12
+                            font.weight: Font.Medium
+                            color: menuBtn.modelData.danger
+                                ? (menuBtnArea.containsMouse ? "#B91C1C" : "#DC2626")
+                                : (menuBtnArea.containsMouse ? "#0369A1" : "#1E293B")
+                        }
+
+                        MouseArea {
+                            id: menuBtnArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const act = menuBtn.modelData.id
+                                const tgt = dockWindow.ctxTarget
+                                const nm = dockWindow.ctxName
+                                const ar = dockWindow.ctxArgs
+                                dockWindow.ctxOpen = false
+                                if (act === "launch") {
+                                    AppLauncher.launch(tgt, ar)
+                                } else if (act === "pin") {
+                                    if (dockWindow.ctxPinned) {
+                                        AppLauncher.removePinnedByTarget(tgt)
+                                    } else {
+                                        AppLauncher.addPinnedApp(nm, tgt, ar)
+                                    }
+                                } else if (act === "add_sep") {
+                                    AppLauncher.insertSeparatorAt(dockWindow.ctxPinnedIndex + 1)
+                                } else if (act === "remove_sep") {
+                                    AppLauncher.removePinnedApp(dockWindow.ctxPinnedIndex)
+                                } else if (act === "close") {
+                                    const wins = WindowTracker.windowsForTarget(tgt) || []
+                                    for (let i = 0; i < wins.length; ++i) {
+                                        WindowTracker.closeHwnd(wins[i].hwnd)
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
-
-            Rectangle {
-                anchors.verticalCenter: parent.verticalCenter
-                width: 120
-                height: 34
-                radius: 17
-                color: clickThroughToggle.containsMouse
-                       ? "#2B3A67" : "#1B2440"
-                border.color: "#3E5A96"
-                border.width: 1
-
-                Text {
-                    anchors.centerIn: parent
-                    text: win.clickThrough ? "click-through: ON"
-                                           : "click-through: OFF"
-                    color: "#EDEFF7"
-                    font.pixelSize: 11
-                }
-
-                MouseArea {
-                    id: clickThroughToggle
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    onClicked: win.clickThrough = !win.clickThrough
-                }
-            }
         }
-    }
-
-    // --- Quickshell.Io compat verification ---------------------------------
-    QtObject {
-        id: bootTest
-        property bool textOk: false
-        property bool fileOk: false
-    }
-
-    Process {
-        id: echoProc
-        command: ["cmd", "/c", "echo", "SekaiDesk-boot-ok"]
-        stdout: StdioCollector {
-            onStreamFinished: {
-                bootTest.textOk = text.indexOf("SekaiDesk-boot-ok") >= 0
-                console.log("[smoke] process output:", text.trim())
-            }
-        }
-    }
-
-    FileView {
-        id: smokeFile
-        path: StandardPaths.writableLocation(StandardPaths.TempLocation)
-              + "/sekaidesk-smoke.txt"
-        Component.onCompleted: {
-            text = "sekaidesk smoke " + Date.now()
-            save()
-        }
-        onSaved: {
-            reload()
-        }
-        onLoaded: {
-            bootTest.fileOk = text.indexOf("sekaidesk smoke") === 0
-            console.log("[smoke] fileview roundtrip:", text)
-        }
-    }
-
-    Component.onCompleted: {
-        console.log("[smoke] shellDir =", shellDir || "(not found)")
-        console.log("[smoke] screens =", Quickshell.screens.length)
-        echoProc.start()
     }
 }

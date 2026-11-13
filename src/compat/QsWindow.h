@@ -8,11 +8,10 @@
 //  - Click-through empty zones use WS_EX_TRANSPARENT via `clickThrough`.
 
 #include <QObject>
+#include <QQuickItem>
 #include <QQuickWindow>
 #include <QRegion>
 #include <QVariant>
-
-class QQuickItem;
 
 // ---------------------------------------------------------------------------
 // MarginGroup: anchors.margins { left / top / right / bottom }
@@ -169,5 +168,7 @@ private:
     bool m_clickThrough = false;
     bool m_geometryOwned = false;
     QVariant m_mask;
+    QRegion m_lastMask;
+    bool m_hasAppliedMask = false;
     QMetaObject::Connection m_screenGeoConn;
 };

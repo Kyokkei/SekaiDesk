@@ -16,11 +16,19 @@ qt_add_executable(SekaiDesk WIN32
     src/compat/QsWindow.h      src/compat/QsWindow.cpp
     src/compat/QsIo.h          src/compat/QsIo.cpp
     src/core/SettingsStore.h   src/core/SettingsStore.cpp
+    src/services/WinIconProvider.h src/services/WinIconProvider.cpp
+    src/services/AppLauncher.h     src/services/AppLauncher.cpp
+    src/services/WindowTracker.h   src/services/WindowTracker.cpp
+    src/services/DwmThumbnailItem.h src/services/DwmThumbnailItem.cpp
+    src/services/TrashService.h    src/services/TrashService.cpp
+    src/services/MediaService.h    src/services/MediaService.cpp
 )
+
+target_include_directories(SekaiDesk PRIVATE src)
 
 # Smoke-test shell (Phase 0). Later phases swap this for the full SekaiPop shell.
 qt_add_resources(SekaiDesk "qml"
-    PREFIX "/qml"
+    PREFIX "/"
     FILES qml/Shell.qml
 )
 
@@ -46,6 +54,7 @@ file(CREATE_LINK "${SEKAIDESK_SHELL_DIR}" "${CMAKE_BINARY_DIR}/qml/qs"
      SYMBOLIC RESULT _qs_link_result)
 if(NOT _qs_link_result EQUAL 0)
     message(STATUS "SekaiDesk: junction failed (${_qs_link_result}), copying shell tree")
+    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/qml/qs" "${CMAKE_BINARY_DIR}/qml/qs_tmp")
     file(COPY "${SEKAIDESK_SHELL_DIR}" DESTINATION "${CMAKE_BINARY_DIR}/qml/qs_tmp")
     file(RENAME "${CMAKE_BINARY_DIR}/qml/qs_tmp/sekaipop" "${CMAKE_BINARY_DIR}/qml/qs")
     file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/qml/qs_tmp")

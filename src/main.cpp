@@ -10,6 +10,7 @@
 
 #include <QGuiApplication>
 #include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QQmlEngine>
 #include <QUrl>
 
@@ -17,6 +18,12 @@
 #include "compat/QsIo.h"
 #include "compat/QsWindow.h"
 #include "core/SettingsStore.h"
+#include "services/AppLauncher.h"
+#include "services/DwmThumbnailItem.h"
+#include "services/MediaService.h"
+#include "services/TrashService.h"
+#include "services/WinIconProvider.h"
+#include "services/WindowTracker.h"
 
 int main(int argc, char* argv[])
 {
@@ -30,32 +37,48 @@ int main(int argc, char* argv[])
     static SettingsStore settings;
     settings.ensureLoaded();
 
+    static AppLauncher appLauncher(&settings);
+    static WindowTracker windowTracker;
+    static TrashService trashService;
+    static MediaService mediaService;
+
     // --- Quickshell compat registrations -----------------------------------
     // Unversioned imports (`import Quickshell`) resolve to the highest
     // registered version; everything is registered as 1.0.
-    qmlRegisterSingletonInstance(QStringLiteral("Quickshell"), 1, 0,
-                                 QStringLiteral("Quickshell"), QsGlobal::instance());
-    qmlRegisterSingletonInstance(QStringLiteral("Quickshell"), 1, 0,
-                                 QStringLiteral("SystemClock"), SystemClock::instance());
-    qmlRegisterType<Variants>(QStringLiteral("Quickshell"), 1, 0,
-                              QStringLiteral("Variants"));
-    qmlRegisterType<PanelWindow>(QStringLiteral("Quickshell"), 1, 0,
-                                 QStringLiteral("PanelWindow"));
-    qmlRegisterType<QsRegion>(QStringLiteral("Quickshell"), 1, 0,
-                              QStringLiteral("Region"));
+    qmlRegisterSingletonInstance("Quickshell", 1, 0,
+                                 "Quickshell", QsGlobal::instance());
+    qmlRegisterSingletonInstance("Quickshell", 1, 0,
+                                 "SystemClock", SystemClock::instance());
+    qmlRegisterType<Variants>("Quickshell", 1, 0,
+                              "Variants");
+    qmlRegisterType<PanelWindow>("Quickshell", 1, 0,
+                                 "PanelWindow");
+    qmlRegisterType<QsRegion>("Quickshell", 1, 0,
+                              "Region");
 
-    qmlRegisterType<QsProcess>(QStringLiteral("Quickshell.Io"), 1, 0,
-                               QStringLiteral("Process"));
-    qmlRegisterType<QsStdioCollector>(QStringLiteral("Quickshell.Io"), 1, 0,
-                                      QStringLiteral("StdioCollector"));
-    qmlRegisterType<QsFileView>(QStringLiteral("Quickshell.Io"), 1, 0,
-                                QStringLiteral("FileView"));
+    qmlRegisterType<QsProcess>("Quickshell.Io", 1, 0,
+                               "Process");
+    qmlRegisterType<QsStdioCollector>("Quickshell.Io", 1, 0,
+                                      "StdioCollector");
+    qmlRegisterType<QsFileView>("Quickshell.Io", 1, 0,
+                                "FileView");
 
-    qmlRegisterSingletonInstance(QStringLiteral("SekaiDesk"), 1, 0,
-                                 QStringLiteral("ConfigStore"), &settings);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "ConfigStore", &settings);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "AppLauncher", &appLauncher);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "WindowTracker", &windowTracker);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "TrashService", &trashService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "MediaService", &mediaService);
+    qmlRegisterType<DwmThumbnailItem>("SekaiDesk", 1, 0,
+                                      "DwmThumbnail");
 
     // --- Engine + import paths ----------------------------------------------
     QQmlApplicationEngine engine;
+    engine.addImageProvider(QStringLiteral("winicon"), new WinIconProvider());
 
     // <exe>/qml: qml module dirs deployed by windeployqt + the `qs` junction
     // created by CMake (build/qml/qs -> SekaiPop/sekaipop).

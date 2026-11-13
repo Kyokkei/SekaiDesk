@@ -112,8 +112,8 @@ PanelWindow::PanelWindow(QWindow* parent)
     connect(m_anchors, &WindowAnchors::changed, this, &PanelWindow::recomputeGeometry);
     // Content-driven sizing (QML sets height after anchors): keep the edge
     // placement honest whenever the window size changes.
-    connect(this, &QWindow::widthChanged, this, &PanelWindow::recomputeGeometry);
-    connect(this, &QWindow::heightChanged, this, &PanelWindow::recomputeGeometry);
+    connect(this, &QWindow::widthChanged, this, &PanelWindow::recompute);
+    connect(this, &QWindow::heightChanged, this, &PanelWindow::recompute);
     connect(this, &QWindow::visibleChanged, this, [this](bool vis) {
         if (vis) {
             recomputeGeometry();
@@ -214,10 +214,10 @@ void PanelWindow::setMaskProperty(const QVariant& mask)
 
     // Track dynamic region sources (item-anchored masks move on layout).
     if (QObject* obj = m_mask.value<QObject*>()) {
-        connect(obj, &QObject::destroyed, this, [this]() { updateMask(); },
+        connect(obj, &QObject::destroyed, this, &PanelWindow::updateMask,
                 Qt::UniqueConnection);
-        if (qobject_cast<QsRegion*>(obj))
-            connect(obj, &QsRegion::regionsChanged, this, &PanelWindow::updateMask,
+        if (auto* reg = qobject_cast<QsRegion*>(obj))
+            connect(reg, &QsRegion::regionsChanged, this, &PanelWindow::updateMask,
                     Qt::UniqueConnection);
     }
 
@@ -230,27 +230,25 @@ void PanelWindow::updateMask()
     if (!isVisible())
         return;
 
+    QRegion next;
     if (QObject* obj = m_mask.value<QObject*>()) {
         if (auto* region = qobject_cast<QsRegion*>(obj)) {
-            setMask(region->regionRelativeTo(this));
-            return;
+            next = region->regionRelativeTo(this);
         }
-    }
-
-    if (m_mask.canConvert<QVariantList>()) {
-        QRegion reg;
+    } else if (m_mask.canConvert<QVariantList>()) {
         const QVariantList rects = m_mask.toList();
         for (const QVariant& v : rects) {
             const QVariantMap r = v.toMap();
-            reg += QRect(r.value(QStringLiteral("x")).toInt(),
-                         r.value(QStringLiteral("y")).toInt(),
-                         r.value(QStringLiteral("width")).toInt(),
-                         r.value(QStringLiteral("height")).toInt());
+            next += QRect(r.value(QStringLiteral("x")).toInt(),
+                          r.value(QStringLiteral("y")).toInt(),
+                          r.value(QStringLiteral("width")).toInt(),
+                          r.value(QStringLiteral("height")).toInt());
         }
-        setMask(reg);
-        return;
     }
 
-    // No mask set -> full window receives input.
-    setMask(QRegion());
+    if (m_hasAppliedMask && m_lastMask == next)
+        return;
+    m_lastMask = next;
+    m_hasAppliedMask = true;
+    setMask(next);
 }
