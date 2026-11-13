@@ -22,6 +22,10 @@ qt_add_executable(SekaiDesk WIN32
     src/services/DwmThumbnailItem.h src/services/DwmThumbnailItem.cpp
     src/services/TrashService.h    src/services/TrashService.cpp
     src/services/MediaService.h    src/services/MediaService.cpp
+    src/services/AudioService.h    src/services/AudioService.cpp
+    src/services/SystemControlService.h src/services/SystemControlService.cpp
+    src/services/TrayService.h     src/services/TrayService.cpp
+    src/SekaiDesk.rc
 )
 
 target_include_directories(SekaiDesk PRIVATE src)
@@ -29,7 +33,31 @@ target_include_directories(SekaiDesk PRIVATE src)
 # Smoke-test shell (Phase 0). Later phases swap this for the full SekaiPop shell.
 qt_add_resources(SekaiDesk "qml"
     PREFIX "/"
-    FILES qml/Shell.qml
+    FILES
+        qml/Shell.qml
+        qml/icons/alt-arrow-down-dark.svg
+        qml/icons/alt-arrow-down-light.svg
+        qml/icons/alt-arrow-up-dark.svg
+        qml/icons/alt-arrow-up-light.svg
+        qml/icons/bt-dark.svg
+        qml/icons/bt-light.svg
+        qml/icons/headphones-round-dark.svg
+        qml/icons/moon-dark.svg
+        qml/icons/music-note-dark.svg
+        qml/icons/music-note-teal.svg
+        qml/icons/network-dark.svg
+        qml/icons/network-light.svg
+        qml/icons/pause-dark.svg
+        qml/icons/play-dark.svg
+        qml/icons/skip-next-dark.svg
+        qml/icons/skip-previous-dark.svg
+        qml/icons/sun-dark.svg
+        qml/icons/volume-cross-dark.svg
+        qml/icons/volume-cross-light.svg
+        qml/icons/volume-loud-dark.svg
+        qml/icons/volume-loud-light.svg
+        qml/icons/wifi-dark.svg
+        qml/icons/wifi-light.svg
 )
 
 target_link_libraries(SekaiDesk PRIVATE

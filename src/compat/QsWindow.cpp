@@ -127,6 +127,7 @@ PanelWindow::PanelWindow(QWindow* parent)
             recomputeGeometry();
             applyClickThrough();
             updateMask();
+            applyBlurBehind();
             if (m_reserveTopBar)
                 registerOrUpdateAppBar();
         } else {
@@ -153,6 +154,8 @@ void PanelWindow::recompute()
 {
     recomputeGeometry();
     updateMask();
+    if (m_blurBehind && isVisible())
+        applyBlurBehind();
 }
 
 void PanelWindow::recomputeGeometry()
@@ -268,11 +271,136 @@ void PanelWindow::updateMask()
         }
     }
 
+    if (m_blurBehind && next.isEmpty()) {
+        applyBlurBehind();
+        return;
+    }
+
     if (m_hasAppliedMask && m_lastMask == next)
         return;
     m_lastMask = next;
     m_hasAppliedMask = true;
     setMask(next);
+}
+
+void PanelWindow::setBlurBehind(bool on)
+{
+    if (m_blurBehind == on)
+        return;
+    m_blurBehind = on;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::setBlurRadius(int r)
+{
+    if (m_blurRadius == r)
+        return;
+    m_blurRadius = r;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::setBlurInsetX(int v)
+{
+    if (m_blurInsetX == v)
+        return;
+    m_blurInsetX = v;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::setBlurInsetY(int v)
+{
+    if (m_blurInsetY == v)
+        return;
+    m_blurInsetY = v;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::setBlurInsetRight(int v)
+{
+    if (m_blurInsetRight == v)
+        return;
+    m_blurInsetRight = v;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::setBlurInsetBottom(int v)
+{
+    if (m_blurInsetBottom == v)
+        return;
+    m_blurInsetBottom = v;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::setBlurTint(const QColor& c)
+{
+    if (m_blurTint == c)
+        return;
+    m_blurTint = c;
+    emit blurChanged();
+    applyBlurBehind();
+}
+
+void PanelWindow::applyBlurBehind()
+{
+#ifdef Q_OS_WIN
+    if (!isVisible())
+        return;
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+
+    struct AccentPolicy {
+        int AccentState;
+        int AccentFlags;
+        DWORD GradientColor;
+        int AnimationId;
+    };
+    struct WindowCompositionAttribData {
+        int Attrib;
+        PVOID pvData;
+        SIZE_T cbData;
+    };
+    using FnSetWindowCompositionAttribute = BOOL(WINAPI*)(HWND, WindowCompositionAttribData*);
+    static auto fnSetWCA = reinterpret_cast<FnSetWindowCompositionAttribute>(
+        GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowCompositionAttribute"));
+
+    if (m_blurBehind) {
+        if (fnSetWCA) {
+            const DWORD a = static_cast<DWORD>(qBound(0, m_blurTint.alpha(), 255));
+            const DWORD r = static_cast<DWORD>(m_blurTint.red());
+            const DWORD g = static_cast<DWORD>(m_blurTint.green());
+            const DWORD b = static_cast<DWORD>(m_blurTint.blue());
+            AccentPolicy policy{};
+            policy.AccentState = 4; // ACCENT_ENABLE_ACRYLICBLURBEHIND
+            policy.AccentFlags = 2;
+            policy.GradientColor = (a << 24) | (b << 16) | (g << 8) | r;
+            WindowCompositionAttribData data{ 19 /*WCA_ACCENT_POLICY*/, &policy, sizeof(policy) };
+            fnSetWCA(hwnd, &data);
+        }
+
+        const qreal dpr = devicePixelRatio();
+        const int x1 = qRound(m_blurInsetX * dpr);
+        const int y1 = qRound(m_blurInsetY * dpr);
+        const int x2 = qMax(x1 + 2, qRound((width() - m_blurInsetRight) * dpr));
+        const int y2 = qMax(y1 + 2, qRound((height() - m_blurInsetBottom) * dpr));
+        const int rad = qMax(0, qRound(m_blurRadius * 2 * dpr));
+        HRGN rgn = (rad > 0) ? CreateRoundRectRgn(x1, y1, x2 + 1, y2 + 1, rad, rad)
+                             : CreateRectRgn(x1, y1, x2, y2);
+        if (rgn)
+            SetWindowRgn(hwnd, rgn, TRUE);
+    } else if (fnSetWCA) {
+        AccentPolicy policy{};
+        policy.AccentState = 0; // ACCENT_DISABLED
+        WindowCompositionAttribData data{ 19, &policy, sizeof(policy) };
+        fnSetWCA(hwnd, &data);
+    }
+#endif
 }
 
 void PanelWindow::setReserveTopBar(bool on)
@@ -359,14 +487,39 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
                 bool fs = (msg->lParam != 0);
                 if (fs) {
                     HWND fg = GetForegroundWindow();
-                    if (fg) {
+                    if (!fg) {
+                        fs = false;
+                    } else {
                         wchar_t cls[64]{};
                         GetClassNameW(fg, cls, 64);
                         if (wcscmp(cls, L"Progman") == 0
                             || wcscmp(cls, L"WorkerW") == 0
                             || wcscmp(cls, L"Shell_TrayWnd") == 0
-                            || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0) {
+                            || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0
+                            || wcscmp(cls, L"NotifyIconOverflowWindow") == 0) {
                             fs = false;
+                        } else {
+                            DWORD fgPid = 0;
+                            GetWindowThreadProcessId(fg, &fgPid);
+                            if (fgPid == GetCurrentProcessId()) {
+                                fs = false;
+                            } else if (fgPid != 0) {
+                                HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, fgPid);
+                                if (hProc) {
+                                    wchar_t exePath[MAX_PATH]{};
+                                    DWORD sz = MAX_PATH;
+                                    if (QueryFullProcessImageNameW(hProc, 0, exePath, &sz)) {
+                                        const wchar_t* base = wcsrchr(exePath, L'\\');
+                                        const wchar_t* name = base ? base + 1 : exePath;
+                                        if (_wcsicmp(name, L"wallpaper64.exe") == 0
+                                            || _wcsicmp(name, L"wallpaper32.exe") == 0
+                                            || _wcsicmp(name, L"explorer.exe") == 0) {
+                                            fs = false;
+                                        }
+                                    }
+                                    CloseHandle(hProc);
+                                }
+                            }
                         }
                     }
                 }

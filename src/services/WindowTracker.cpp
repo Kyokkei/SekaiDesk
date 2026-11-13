@@ -5,6 +5,7 @@
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <dwmapi.h>
+#include <pdh.h>
 #include <psapi.h>
 #endif
 
@@ -265,9 +266,171 @@ void WindowTracker::updateSystemStats()
         nextRam = static_cast<int>(ms.dwMemoryLoad);
     }
 
-    if (nextCpu != m_cpuUsage || nextRam != m_ramUsage) {
+    static auto queryCpuTempC = []() -> int {
+        // Priority 1: WinRing0 / R0Temperature kernel driver (exact Intel CPU Package/Core DTS MSR)
+        static bool s_r0Tried = false;
+        static HANDLE s_r0Handle = INVALID_HANDLE_VALUE;
+        if (!s_r0Tried) {
+            s_r0Tried = true;
+            s_r0Handle = CreateFileW(L"\\\\.\\WinRing0_1_2_0",
+                                     GENERIC_READ | GENERIC_WRITE,
+                                     0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        }
+        if (s_r0Handle != INVALID_HANDLE_VALUE) {
+            constexpr DWORD IOCTL_OLS_READ_MSR = 0x9C402084;
+            DWORD msrAddr = 0x1A2; // MSR_TEMPERATURE_TARGET
+            quint64 val = 0;
+            DWORD bytesRet = 0;
+            int tjMax = 100;
+            if (DeviceIoControl(s_r0Handle, IOCTL_OLS_READ_MSR, &msrAddr, sizeof(msrAddr),
+                                &val, sizeof(val), &bytesRet, nullptr)) {
+                const int t = static_cast<int>((val >> 16) & 0xFF);
+                if (t > 50 && t < 130)
+                    tjMax = t;
+            }
+            msrAddr = 0x1B1; // IA32_PACKAGE_THERM_STATUS
+            if (DeviceIoControl(s_r0Handle, IOCTL_OLS_READ_MSR, &msrAddr, sizeof(msrAddr),
+                                &val, sizeof(val), &bytesRet, nullptr) && (val & 0x80000000ULL)) {
+                const int dts = static_cast<int>((val >> 16) & 0x7F);
+                const int temp = tjMax - dts;
+                if (temp >= 0 && temp <= 125)
+                    return temp;
+            }
+            msrAddr = 0x19C; // IA32_THERM_STATUS (Core 0)
+            if (DeviceIoControl(s_r0Handle, IOCTL_OLS_READ_MSR, &msrAddr, sizeof(msrAddr),
+                                &val, sizeof(val), &bytesRet, nullptr) && (val & 0x80000000ULL)) {
+                const int dts = static_cast<int>((val >> 16) & 0x7F);
+                const int temp = tjMax - dts;
+                if (temp >= 0 && temp <= 125)
+                    return temp;
+            }
+        }
+
+        // Priority 2: Windows PDH ACPI Thermal Zone (non-admin fallback)
+        using FnOpenQuery = PDH_STATUS(WINAPI*)(LPCWSTR, DWORD_PTR, PDH_HQUERY*);
+        using FnAddCounter = PDH_STATUS(WINAPI*)(PDH_HQUERY, LPCWSTR, DWORD_PTR, PDH_HCOUNTER*);
+        using FnCollect = PDH_STATUS(WINAPI*)(PDH_HQUERY);
+        using FnGetArray = PDH_STATUS(WINAPI*)(PDH_HCOUNTER, DWORD, LPDWORD, LPDWORD, PPDH_FMT_COUNTERVALUE_ITEM_W);
+
+        static bool s_inited = false;
+        static PDH_HQUERY s_query = nullptr;
+        static PDH_HCOUNTER s_counter = nullptr;
+        static FnCollect s_collect = nullptr;
+        static FnGetArray s_getArray = nullptr;
+
+        if (!s_inited) {
+            s_inited = true;
+            HMODULE mod = LoadLibraryW(L"pdh.dll");
+            if (mod) {
+                auto pOpen = reinterpret_cast<FnOpenQuery>(GetProcAddress(mod, "PdhOpenQueryW"));
+                auto pAdd = reinterpret_cast<FnAddCounter>(GetProcAddress(mod, "PdhAddEnglishCounterW"));
+                s_collect = reinterpret_cast<FnCollect>(GetProcAddress(mod, "PdhCollectQueryData"));
+                s_getArray = reinterpret_cast<FnGetArray>(GetProcAddress(mod, "PdhGetFormattedCounterArrayW"));
+                if (pOpen && pAdd && s_collect && s_getArray) {
+                    if (pOpen(nullptr, 0, &s_query) == ERROR_SUCCESS) {
+                        if (pAdd(s_query, L"\\Thermal Zone Information(*)\\High Precision Temperature", 0, &s_counter) == ERROR_SUCCESS) {
+                            s_collect(s_query);
+                        } else {
+                            s_counter = nullptr;
+                        }
+                    }
+                }
+            }
+        }
+        if (!s_query || !s_counter || !s_collect || !s_getArray)
+            return -1;
+        if (s_collect(s_query) != ERROR_SUCCESS)
+            return -1;
+
+        DWORD bufSize = 0, itemCount = 0;
+        s_getArray(s_counter, PDH_FMT_DOUBLE, &bufSize, &itemCount, nullptr);
+        if (bufSize == 0)
+            return -1;
+        QByteArray buf(static_cast<int>(bufSize), '\0');
+        auto* items = reinterpret_cast<PPDH_FMT_COUNTERVALUE_ITEM_W>(buf.data());
+        if (s_getArray(s_counter, PDH_FMT_DOUBLE, &bufSize, &itemCount, items) != ERROR_SUCCESS)
+            return -1;
+
+        int maxC = -1;
+        for (DWORD i = 0; i < itemCount; ++i) {
+            if (items[i].FmtValue.CStatus != ERROR_SUCCESS)
+                continue;
+            const double raw = items[i].FmtValue.doubleValue;
+            double celsius = -1.0;
+            if (raw > 2000.0 && raw < 4500.0)
+                celsius = (raw / 10.0) - 273.15;
+            else if (raw > 200.0 && raw < 450.0)
+                celsius = raw - 273.15;
+            if (celsius >= 0.0 && celsius <= 125.0) {
+                const int c = qRound(celsius);
+                if (c > maxC)
+                    maxC = c;
+            }
+        }
+        return maxC;
+    };
+
+    static auto queryGpuTempC = []() -> int {
+        using FnNvmlInit = int(*)();
+        using FnNvmlHandle = int(*)(unsigned int, void**);
+        using FnNvmlTemp = int(*)(void*, unsigned int, unsigned int*);
+        static bool s_inited = false;
+        static void* s_dev = nullptr;
+        static FnNvmlTemp s_getTemp = nullptr;
+
+        if (!s_inited) {
+            s_inited = true;
+            HMODULE mod = LoadLibraryW(L"nvml.dll");
+            if (!mod)
+                mod = LoadLibraryW(L"C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvml.dll");
+            if (mod) {
+                auto pInit = reinterpret_cast<FnNvmlInit>(GetProcAddress(mod, "nvmlInit_v2"));
+                if (!pInit)
+                    pInit = reinterpret_cast<FnNvmlInit>(GetProcAddress(mod, "nvmlInit"));
+                auto pHandle = reinterpret_cast<FnNvmlHandle>(GetProcAddress(mod, "nvmlDeviceGetHandleByIndex_v2"));
+                if (!pHandle)
+                    pHandle = reinterpret_cast<FnNvmlHandle>(GetProcAddress(mod, "nvmlDeviceGetHandleByIndex"));
+                s_getTemp = reinterpret_cast<FnNvmlTemp>(GetProcAddress(mod, "nvmlDeviceGetTemperature"));
+                if (pInit && pHandle && s_getTemp && pInit() == 0) {
+                    if (pHandle(0, &s_dev) != 0)
+                        s_dev = nullptr;
+                }
+            }
+        }
+        if (!s_dev || !s_getTemp)
+            return -1;
+        unsigned int temp = 0;
+        if (s_getTemp(s_dev, 0, &temp) == 0)
+            return static_cast<int>(temp);
+        return -1;
+    };
+
+    static int s_tempTick = 0;
+    static double s_cpuEma = -1.0;
+    static double s_gpuEma = -1.0;
+    int nextCpuTemp = m_cpuTemp;
+    int nextGpuTemp = m_gpuTemp;
+
+    if (s_tempTick == 0 || (s_tempTick % 3) == 0) {
+        const int rawCpu = queryCpuTempC();
+        if (rawCpu >= 0) {
+            s_cpuEma = (s_cpuEma < 0.0) ? static_cast<double>(rawCpu) : (0.35 * rawCpu + 0.65 * s_cpuEma);
+            nextCpuTemp = qRound(s_cpuEma);
+        }
+        const int rawGpu = queryGpuTempC();
+        if (rawGpu >= 0) {
+            s_gpuEma = (s_gpuEma < 0.0) ? static_cast<double>(rawGpu) : (0.40 * rawGpu + 0.60 * s_gpuEma);
+            nextGpuTemp = qRound(s_gpuEma);
+        }
+    }
+    ++s_tempTick;
+
+    if (nextCpu != m_cpuUsage || nextRam != m_ramUsage
+        || nextCpuTemp != m_cpuTemp || nextGpuTemp != m_gpuTemp) {
         m_cpuUsage = nextCpu;
         m_ramUsage = nextRam;
+        m_cpuTemp = nextCpuTemp;
+        m_gpuTemp = nextGpuTemp;
         emit statsChanged();
     }
 #endif

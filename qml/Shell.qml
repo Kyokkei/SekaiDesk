@@ -882,11 +882,14 @@ PanelWindow {
                                     color: prevArea.containsMouse ? "#E0F2FE" : "#F1F5F9"
                                     border.width: 1.2
                                     border.color: "#1A1B2E"
-                                    Text {
+                                    Image {
                                         anchors.centerIn: parent
-                                        text: "⏮"
-                                        font.pixelSize: 10
-                                        color: "#1A1B2E"
+                                        width: 11
+                                        height: 11
+                                        sourceSize.width: 22
+                                        sourceSize.height: 22
+                                        smooth: true
+                                        source: "qrc:/qml/icons/skip-previous-dark.svg"
                                     }
                                     MouseArea {
                                         id: prevArea
@@ -904,11 +907,14 @@ PanelWindow {
                                     color: playArea.containsMouse ? "#BAE6FD" : "#38BDF8"
                                     border.width: 1.2
                                     border.color: "#1A1B2E"
-                                    Text {
+                                    Image {
                                         anchors.centerIn: parent
-                                        text: MediaService.isPlaying ? "⏸" : "▶"
-                                        font.pixelSize: 10
-                                        color: "#1A1B2E"
+                                        width: 11
+                                        height: 11
+                                        sourceSize.width: 22
+                                        sourceSize.height: 22
+                                        smooth: true
+                                        source: MediaService.isPlaying ? "qrc:/qml/icons/pause-dark.svg" : "qrc:/qml/icons/play-dark.svg"
                                     }
                                     MouseArea {
                                         id: playArea
@@ -926,11 +932,14 @@ PanelWindow {
                                     color: nextArea.containsMouse ? "#E0F2FE" : "#F1F5F9"
                                     border.width: 1.2
                                     border.color: "#1A1B2E"
-                                    Text {
+                                    Image {
                                         anchors.centerIn: parent
-                                        text: "⏭"
-                                        font.pixelSize: 10
-                                        color: "#1A1B2E"
+                                        width: 11
+                                        height: 11
+                                        sourceSize.width: 22
+                                        sourceSize.height: 22
+                                        smooth: true
+                                        source: "qrc:/qml/icons/skip-next-dark.svg"
                                     }
                                     MouseArea {
                                         id: nextArea
@@ -1398,27 +1407,56 @@ PanelWindow {
         anchors.top: true
         anchors.left: true
         anchors.right: true
-        anchors.margins.top: 2
-        anchors.margins.left: 6
-        anchors.margins.right: 6
-        height: 30
+        anchors.margins.top: 0
+        anchors.margins.left: 0
+        anchors.margins.right: 0
+        height: 28
         reserveTopBar: true
-        reserveHeight: 32
+        reserveHeight: 28
         clickThrough: topBarWindow.fullscreenActive
 
         property string timeText: ""
         property string dateText: ""
         property bool mediaPopupOpen: false
         property double mediaPopupClosedAt: 0
+        property bool trayPopupOpen: false
+        property double trayPopupClosedAt: 0
+        property bool quickPanelOpen: false
+        property double quickPanelClosedAt: 0
+        property bool calendarOpen: false
+        property double calendarClosedAt: 0
+        property bool wifiPopupOpen: false
+        property double wifiPopupClosedAt: 0
+        property bool btPopupOpen: false
+        property double btPopupClosedAt: 0
+        property bool phoneMode: false
         property real topHideProgress: topBarWindow.fullscreenActive ? 1.0 : 0.0
+
+        Connections {
+            target: SystemControl
+            function onQuickPanelToggleRequested() {
+                if (!topBarWindow.quickPanelOpen) {
+                    AudioService.refreshSessions()
+                    AudioService.refreshOutputDevices()
+                    SystemControl.refresh()
+                }
+                topBarWindow.quickPanelOpen = !topBarWindow.quickPanelOpen
+            }
+        }
         Behavior on topHideProgress {
             NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
         }
         readonly property real topHideOffsetY: -topHideProgress * 38
 
-        mask: topBarWindow.topHideProgress > 0.95
-            ? []
-            : [{ x: 0, y: 0, width: topBarWindow.width, height: topBarWindow.height }]
+        blurBehind: !topBarWindow.fullscreenActive && topBarWindow.topHideProgress < 0.95
+        blurRadius: 0
+        blurInsetX: 0
+        blurInsetY: 0
+        blurInsetRight: 0
+        blurInsetBottom: 0
+        blurTint: Qt.rgba(14/255, 18/255, 30/255, 0.35)
+
+        mask: topBarWindow.topHideProgress > 0.95 ? [] : null
 
         Timer {
             interval: 1000
@@ -1441,39 +1479,16 @@ PanelWindow {
             id: topBarRoot
             anchors.fill: parent
 
-            // Hard flat offset shadow (slim 2px)
-            Rectangle {
-                x: barFrame.x + 2
-                y: barFrame.y + 2
-                width: barFrame.width
-                height: barFrame.height
-                radius: barFrame.radius
-                color: "#1A1B2E"
-            }
-
-            // Single slim SekaiPop Neo-Brutalist bar (28px)
+            // Full-width flush transparent blurred bar (28px)
             Rectangle {
                 id: barFrame
                 x: 0
                 y: topBarWindow.topHideOffsetY
-                width: Math.max(100, topBarRoot.width - 2)
+                width: topBarRoot.width
                 height: 28
-                radius: 12
-                color: "#1A1B2E"
-
-                Rectangle {
-                    anchors.fill: parent
-                    anchors.margins: 1.5
-                    radius: parent.radius - 1.5
-                    color: "#FFFFFF"
-
-                    Rectangle {
-                        anchors.fill: parent
-                        anchors.margins: 2
-                        radius: parent.radius - 2
-                        color: "#334155"
-                    }
-                }
+                radius: 0
+                color: "transparent"
+                border.width: 0
 
                 // --- Left Zone: Active App Badge + SekaiPop MediaPill + Window Title ---
                 Row {
@@ -1509,7 +1524,7 @@ PanelWindow {
                         id: mediaPill
                         anchors.verticalCenter: parent.verticalCenter
                         visible: true
-                        width: Math.max(148, Math.min(280, mediaArtBox.width + mediaDivider.width + 18 + Math.max(mediaTitleTxt.implicitWidth, mediaArtistTxt.visible ? mediaArtistTxt.implicitWidth : 0)))
+                        width: Math.max(148, Math.min(280, mediaArtBox.width + mediaDivider.width + 18 + mediaSingleLineTxt.implicitWidth))
                         height: 22
                         radius: 10
                         color: "#1A1B2E"
@@ -1543,14 +1558,15 @@ PanelWindow {
                                 opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
                                 Behavior on opacity { NumberAnimation { duration: 150 } }
 
-                                Text {
+                                Image {
                                     anchors.centerIn: parent
                                     visible: mediaPillCover.status !== Image.Ready
-                                    text: MediaService.hasSession ? "♪" : "♫"
-                                    font.family: "Segoe UI Symbol"
-                                    font.pixelSize: 12
-                                    font.weight: Font.Bold
-                                    color: "#1A1B2E"
+                                    width: 13
+                                    height: 13
+                                    sourceSize.width: 26
+                                    sourceSize.height: 26
+                                    smooth: true
+                                    source: "qrc:/qml/icons/music-note-dark.svg"
                                 }
 
                                 Image {
@@ -1584,38 +1600,26 @@ PanelWindow {
                                 anchors.bottom: parent.bottom
                                 clip: true
 
-                                Column {
-                                    anchors.centerIn: parent
+                                Text {
+                                    id: mediaSingleLineTxt
+                                    anchors.verticalCenter: parent.verticalCenter
                                     width: parent.width
-                                    spacing: -1
+                                    horizontalAlignment: Text.AlignHCenter
+                                    elide: Text.ElideRight
+                                    textFormat: Text.PlainText
                                     opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
                                     Behavior on opacity { NumberAnimation { duration: 150 } }
-
-                                    Text {
-                                        id: mediaTitleTxt
-                                        width: parent.width
-                                        horizontalAlignment: Text.AlignHCenter
-                                        elide: Text.ElideRight
-                                        text: MediaService.hasSession ? (MediaService.title || "Playing") : "Nothing Playing"
-                                        font.family: "Segoe UI"
-                                        font.pixelSize: MediaService.hasSession ? 10 : 11
-                                        font.weight: Font.ExtraBold
-                                        color: "#1A1B2E"
+                                    text: {
+                                        if (!MediaService.hasSession)
+                                            return "Nothing Playing"
+                                        const t = MediaService.title || "Playing"
+                                        const a = (MediaService.artist || "").trim()
+                                        return a !== "" ? (t + "  ·  " + a) : t
                                     }
-
-                                    Text {
-                                        id: mediaArtistTxt
-                                        width: parent.width
-                                        horizontalAlignment: Text.AlignHCenter
-                                        elide: Text.ElideRight
-                                        visible: MediaService.hasSession && (MediaService.artist || "") !== ""
-                                        text: MediaService.artist || ""
-                                        font.family: "Segoe UI"
-                                        font.pixelSize: 9
-                                        font.weight: Font.DemiBold
-                                        color: "#0F172A"
-                                        opacity: 0.85
-                                    }
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                    font.weight: Font.Bold
+                                    color: "#1A1B2E"
                                 }
                             }
                         }
@@ -1670,11 +1674,31 @@ PanelWindow {
                         Text {
                             id: cpuTxt
                             anchors.centerIn: parent
-                            text: "CPU " + WindowTracker.cpuUsage + "%"
+                            text: "CPU " + (WindowTracker.cpuTemp >= 0 ? (WindowTracker.cpuTemp + "°C") : "--°C")
                             font.family: "Consolas"
                             font.pixelSize: 10
                             font.weight: Font.Bold
-                            color: "#7DD3FC"
+                            color: WindowTracker.cpuTemp >= 80 ? "#FCA5A5" : "#7DD3FC"
+                        }
+                    }
+
+                    Rectangle {
+                        visible: WindowTracker.gpuTemp >= 0
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: gpuTxt.implicitWidth + 10
+                        height: 20
+                        radius: 7
+                        color: "#1E293B"
+                        border.width: 1
+                        border.color: "#A78BFA"
+                        Text {
+                            id: gpuTxt
+                            anchors.centerIn: parent
+                            text: "GPU " + WindowTracker.gpuTemp + "°C"
+                            font.family: "Consolas"
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
+                            color: WindowTracker.gpuTemp >= 80 ? "#FCA5A5" : "#C4B5FD"
                         }
                     }
 
@@ -1697,12 +1721,184 @@ PanelWindow {
                         }
                     }
 
+                    // --- System Tray Pill (click to open Tray Popup) ---
                     Rectangle {
+                        id: trayPill
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: trayPillRow.implicitWidth + 10
+                        height: 20
+                        radius: 7
+                        color: topBarWindow.trayPopupOpen ? "#22D3EE" : (trayPillMouse.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: "#64748B"
+
+                        Row {
+                            id: trayPillRow
+                            anchors.centerIn: parent
+                            spacing: 4
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 10
+                                height: 10
+                                sourceSize.width: 20
+                                sourceSize.height: 20
+                                smooth: true
+                                source: topBarWindow.trayPopupOpen
+                                    ? "qrc:/qml/icons/alt-arrow-down-dark.svg"
+                                    : "qrc:/qml/icons/alt-arrow-up-light.svg"
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Tray" + (TrayService.items.length > 0 ? (" " + TrayService.items.length) : "")
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: topBarWindow.trayPopupOpen ? "#1A1B2E" : "#E2E8F0"
+                            }
+                        }
+
+                        MouseArea {
+                            id: trayPillMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!topBarWindow.trayPopupOpen && (Date.now() - topBarWindow.trayPopupClosedAt) < 220)
+                                    return
+                                if (!topBarWindow.trayPopupOpen)
+                                    TrayService.refresh()
+                                topBarWindow.trayPopupOpen = !topBarWindow.trayPopupOpen
+                            }
+                        }
+                    }
+
+                    // --- Network / Wi-Fi Pill ---
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 24
+                        height: 20
+                        radius: 7
+                        color: topBarWindow.wifiPopupOpen ? "#22D3EE" : (wifiPillMouse.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: "#38BDF8"
+                        Image {
+                            anchors.centerIn: parent
+                            width: 13
+                            height: 13
+                            sourceSize.width: 26
+                            sourceSize.height: 26
+                            smooth: true
+                            source: topBarWindow.wifiPopupOpen
+                                ? (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-dark.svg" : "qrc:/qml/icons/network-dark.svg")
+                                : (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-light.svg" : "qrc:/qml/icons/network-light.svg")
+                        }
+                        MouseArea {
+                            id: wifiPillMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!topBarWindow.wifiPopupOpen && (Date.now() - topBarWindow.wifiPopupClosedAt) < 220)
+                                    return
+                                if (!topBarWindow.wifiPopupOpen) {
+                                    SystemControl.refresh()
+                                    SystemControl.refreshWifi()
+                                }
+                                topBarWindow.wifiPopupOpen = !topBarWindow.wifiPopupOpen
+                            }
+                        }
+                    }
+
+                    // --- Bluetooth Pill ---
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 22
+                        height: 20
+                        radius: 7
+                        color: topBarWindow.btPopupOpen ? "#22D3EE" : (btPillMouse.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: "#818CF8"
+                        Image {
+                            anchors.centerIn: parent
+                            width: 13
+                            height: 13
+                            sourceSize.width: 26
+                            sourceSize.height: 26
+                            smooth: true
+                            opacity: SystemControl.bluetoothEnabled ? 1.0 : 0.6
+                            source: topBarWindow.btPopupOpen ? "qrc:/qml/icons/bt-dark.svg" : "qrc:/qml/icons/bt-light.svg"
+                        }
+                        MouseArea {
+                            id: btPillMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!topBarWindow.btPopupOpen && (Date.now() - topBarWindow.btPopupClosedAt) < 220)
+                                    return
+                                if (!topBarWindow.btPopupOpen)
+                                    SystemControl.refreshBluetooth()
+                                topBarWindow.btPopupOpen = !topBarWindow.btPopupOpen
+                            }
+                        }
+                    }
+
+                    // --- Volume Pill (wheel = master vol, right click = mute, left click = Quick Panel) ---
+                    Rectangle {
+                        id: volPill
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: volPillTxt.implicitWidth + 10
+                        height: 20
+                        radius: 7
+                        color: volPillMouse.containsMouse ? "#334155" : "#1E293B"
+                        border.width: 1
+                        border.color: AudioService.masterMuted ? "#F59E0B" : "#5EEAD4"
+
+                        Text {
+                            id: volPillTxt
+                            anchors.centerIn: parent
+                            text: AudioService.masterMuted ? "MUTE" : ("VOL " + AudioService.masterVolume + "%")
+                            font.family: "Consolas"
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
+                            color: AudioService.masterMuted ? "#FCD34D" : "#5EEAD4"
+                        }
+
+                        MouseArea {
+                            id: volPillMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                            onClicked: mouse => {
+                                if (mouse.button === Qt.RightButton) {
+                                    AudioService.toggleMasterMute()
+                                } else {
+                                    if (!topBarWindow.quickPanelOpen && (Date.now() - topBarWindow.quickPanelClosedAt) < 220)
+                                        return
+                                    if (!topBarWindow.quickPanelOpen) {
+                                        AudioService.refreshSessions()
+                                        AudioService.refreshOutputDevices()
+                                        SystemControl.refresh()
+                                    }
+                                    topBarWindow.quickPanelOpen = !topBarWindow.quickPanelOpen
+                                }
+                            }
+                            onWheel: wheel => {
+                                const step = wheel.angleDelta.y > 0 ? 4 : -4
+                                AudioService.setMasterVolume(AudioService.masterVolume + step)
+                                wheel.accepted = true
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: clockPill
                         anchors.verticalCenter: parent.verticalCenter
                         width: clockRow.implicitWidth + 12
                         height: 20
                         radius: 8
-                        color: "#22D3EE"
+                        color: topBarWindow.calendarOpen ? "#5EEAD4" : (clockPillMouse.containsMouse ? "#67E8F9" : "#22D3EE")
                         border.width: 1.5
                         border.color: "#1A1B2E"
 
@@ -1727,6 +1923,18 @@ PanelWindow {
                                 font.pixelSize: 11
                                 font.weight: Font.Bold
                                 color: "#1A1B2E"
+                            }
+                        }
+
+                        MouseArea {
+                            id: clockPillMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!topBarWindow.calendarOpen && (Date.now() - topBarWindow.calendarClosedAt) < 220)
+                                    return
+                                topBarWindow.calendarOpen = !topBarWindow.calendarOpen
                             }
                         }
                     }
@@ -2015,13 +2223,16 @@ PanelWindow {
                                         color: "#E2E8F0"
                                         clip: true
 
-                                        Text {
+                                        Image {
                                             anchors.centerIn: parent
                                             visible: popupCoverImg.status !== Image.Ready
-                                            text: MediaService.hasSession ? "♪" : "♫"
-                                            font.family: "Segoe UI Symbol"
-                                            font.pixelSize: 28
-                                            color: "#64748B"
+                                            width: 30
+                                            height: 30
+                                            sourceSize.width: 60
+                                            sourceSize.height: 60
+                                            smooth: true
+                                            opacity: 0.65
+                                            source: "qrc:/qml/icons/music-note-dark.svg"
                                         }
 
                                         Image {
@@ -2344,12 +2555,14 @@ PanelWindow {
                             color: prevKeyArea.containsMouse ? "#E0F2FE" : "#FFFFFF"
                             border.width: 2
                             border.color: "#1A1B2E"
-                            Text {
+                            Image {
                                 anchors.centerIn: parent
-                                text: "⏮"
-                                font.family: "Segoe UI Symbol"
-                                font.pixelSize: 15
-                                color: "#1A1B2E"
+                                width: 16
+                                height: 16
+                                sourceSize.width: 32
+                                sourceSize.height: 32
+                                smooth: true
+                                source: "qrc:/qml/icons/skip-previous-dark.svg"
                             }
                         }
                         MouseArea {
@@ -2385,12 +2598,14 @@ PanelWindow {
                             Row {
                                 anchors.centerIn: parent
                                 spacing: 6
-                                Text {
+                                Image {
                                     anchors.verticalCenter: parent.verticalCenter
-                                    text: MediaService.isPlaying ? "⏸" : "▶"
-                                    font.family: "Segoe UI Symbol"
-                                    font.pixelSize: 13
-                                    color: "#1A1B2E"
+                                    width: 14
+                                    height: 14
+                                    sourceSize.width: 28
+                                    sourceSize.height: 28
+                                    smooth: true
+                                    source: MediaService.isPlaying ? "qrc:/qml/icons/pause-dark.svg" : "qrc:/qml/icons/play-dark.svg"
                                 }
                                 Text {
                                     anchors.verticalCenter: parent.verticalCenter
@@ -2428,12 +2643,14 @@ PanelWindow {
                             color: nextKeyArea.containsMouse ? "#E0F2FE" : "#FFFFFF"
                             border.width: 2
                             border.color: "#1A1B2E"
-                            Text {
+                            Image {
                                 anchors.centerIn: parent
-                                text: "⏭"
-                                font.family: "Segoe UI Symbol"
-                                font.pixelSize: 15
-                                color: "#1A1B2E"
+                                width: 16
+                                height: 16
+                                sourceSize.width: 32
+                                sourceSize.height: 32
+                                smooth: true
+                                source: "qrc:/qml/icons/skip-next-dark.svg"
                             }
                         }
                         MouseArea {
@@ -2478,6 +2695,1890 @@ PanelWindow {
                             onClicked: topBarWindow.mediaPopupOpen = false
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // System Tray Popup (TopBar Tray ▲)
+    // =========================================================================
+    PanelWindow {
+        id: trayPopupWindow
+        visible: topBarWindow.trayPopupOpen && !topBarWindow.fullscreenActive
+        clickThrough: false
+        color: "transparent"
+
+        readonly property int cardShadow: 4
+        readonly property int cardW: 248
+        property double openedAt: 0
+
+        width: cardW + cardShadow
+        height: Math.max(92, trayCol.implicitHeight + 24) + cardShadow
+        x: {
+            const barRight = topBarWindow.anchors.margins.left + topBarWindow.width
+            const target = topBarWindow.anchors.margins.left + rightContentRow.x + trayPill.x + Math.round((trayPill.width - cardW) * 0.5)
+            return Math.max(8, Math.min(barRight - width, target))
+        }
+        y: 34
+
+        onVisibleChanged: {
+            if (visible) {
+                openedAt = Date.now()
+                TrayService.refresh()
+                requestActivate()
+            }
+        }
+        Timer {
+            interval: 60
+            repeat: true
+            running: trayPopupWindow.visible
+            onTriggered: {
+                if ((Date.now() - trayPopupWindow.openedAt) > 220 && trayPopupWindow.isPointerOutsideAndPressed()) {
+                    topBarWindow.trayPopupClosedAt = Date.now()
+                    topBarWindow.trayPopupOpen = false
+                }
+            }
+        }
+
+        Rectangle {
+            x: trayPopupFrame.x + trayPopupWindow.cardShadow
+            y: trayPopupFrame.y + trayPopupWindow.cardShadow
+            width: trayPopupFrame.width
+            height: trayPopupFrame.height
+            radius: trayPopupFrame.radius
+            color: "#1A1B2E"
+        }
+
+        Rectangle {
+            id: trayPopupFrame
+            x: 0
+            y: 0
+            width: trayPopupWindow.cardW
+            height: Math.max(92, trayCol.implicitHeight + 24)
+            radius: 16
+            color: "#1A1B2E"
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 2
+                radius: parent.radius - 2
+                color: "#FFFFFF"
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    radius: parent.radius - 2
+                    color: "#F1F5FF"
+                }
+            }
+
+            Column {
+                id: trayCol
+                x: 12
+                y: 12
+                width: trayPopupFrame.width - 24
+                spacing: 6
+
+                Text {
+                    text: "SYSTEM TRAY (" + TrayService.items.length + ")"
+                    font.family: "Segoe UI"
+                    font.pixelSize: 10
+                    font.weight: Font.ExtraBold
+                    font.letterSpacing: 1
+                    color: "#475569"
+                }
+
+                Text {
+                    visible: TrayService.items.length === 0
+                    width: parent.width
+                    text: "No Windows tray icons found.\n(Explorer taskbar tray inactive)"
+                    wrapMode: Text.Wrap
+                    font.family: "Segoe UI"
+                    font.pixelSize: 11
+                    color: "#64748B"
+                }
+
+                Flickable {
+                    width: parent.width
+                    height: Math.min(360, trayListCol.implicitHeight)
+                    contentWidth: width
+                    contentHeight: trayListCol.implicitHeight
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+
+                    Column {
+                        id: trayListCol
+                        width: parent.width
+                        spacing: 6
+
+                        Repeater {
+                            model: TrayService.items
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: trayListCol.width
+                                height: 30
+                                radius: 9
+                                color: trayRowArea.containsMouse ? "#E0F2FE" : "#FFFFFF"
+                                border.width: 1.5
+                                border.color: "#1A1B2E"
+
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    spacing: 8
+
+                                    Image {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 16
+                                        height: 16
+                                        source: modelData.iconUrl || ""
+                                        smooth: true
+                                        mipmap: true
+                                    }
+
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width - 28
+                                        maximumLineCount: 1
+                                        elide: Text.ElideRight
+                                        text: (modelData.tip || "Tray App").replace(/\r?\n+/g, " · ")
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 11
+                                        font.weight: Font.DemiBold
+                                        color: "#1A1B2E"
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: trayRowArea
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                    onClicked: mouse => {
+                                        TrayService.activateItem(modelData.index, mouse.button === Qt.RightButton)
+                                        topBarWindow.trayPopupOpen = false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Phase 4: Quick Panel & Sekai 2.5D Phone (Clock Pill or Ctrl+Alt+A)
+    // =========================================================================
+    PanelWindow {
+        id: quickPanelWindow
+        visible: topBarWindow.quickPanelOpen && !topBarWindow.fullscreenActive
+        clickThrough: false
+        color: "transparent"
+
+        readonly property int cardShadow: 5
+        readonly property int pad: 14
+        readonly property int innerW: 332
+        property double openedAt: 0
+
+        width: innerW + pad * 2 + (topBarWindow.phoneMode ? 16 : 0) + cardShadow
+        height: qpStack.implicitHeight + pad * 2 + (topBarWindow.phoneMode ? 36 : 0) + cardShadow
+
+        x: {
+            const barRight = topBarWindow.anchors.margins.left + topBarWindow.width
+            return Math.max(8, barRight - width)
+        }
+        y: 34
+
+        onVisibleChanged: {
+            if (visible) {
+                openedAt = Date.now()
+                AudioService.refreshSessions()
+                SystemControl.refresh()
+                requestActivate()
+            }
+        }
+
+        Timer {
+            interval: 600
+            repeat: true
+            running: quickPanelWindow.visible
+            onTriggered: AudioService.refreshSessions()
+        }
+
+        Timer {
+            interval: 60
+            repeat: true
+            running: quickPanelWindow.visible
+            onTriggered: {
+                if ((Date.now() - quickPanelWindow.openedAt) > 220 && quickPanelWindow.isPointerOutsideAndPressed()) {
+                    topBarWindow.quickPanelClosedAt = Date.now()
+                    topBarWindow.quickPanelOpen = false
+                }
+            }
+        }
+
+        // Hard offset shadow
+        Rectangle {
+            x: qpFrame.x + quickPanelWindow.cardShadow
+            y: qpFrame.y + quickPanelWindow.cardShadow
+            width: qpFrame.width
+            height: qpFrame.height
+            radius: qpFrame.radius
+            color: "#1A1B2E"
+        }
+
+        // Main Frame (Classic Flat Card OR Sekai 2.5D Phone Chassis)
+        Rectangle {
+            id: qpFrame
+            x: 0
+            y: 0
+            width: quickPanelWindow.width - quickPanelWindow.cardShadow
+            height: quickPanelWindow.height - quickPanelWindow.cardShadow
+            radius: topBarWindow.phoneMode ? 30 : 20
+            color: "#1A1B2E"
+
+            Behavior on radius { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: topBarWindow.phoneMode ? 5 : 2
+                radius: parent.radius - (topBarWindow.phoneMode ? 5 : 2)
+                color: topBarWindow.phoneMode ? "#334155" : "#FFFFFF"
+
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 3
+                    radius: parent.radius - 3
+                    color: "#F1F5FF"
+                }
+            }
+
+            // Phone Notch when Sekai 2.5D Phone mode is active
+            Rectangle {
+                visible: topBarWindow.phoneMode
+                anchors.top: parent.top
+                anchors.topMargin: 8
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: 96
+                height: 16
+                radius: 8
+                color: "#1A1B2E"
+                z: 5
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 28
+                    height: 4
+                    radius: 2
+                    color: "#475569"
+                }
+            }
+
+            Column {
+                id: qpStack
+                x: quickPanelWindow.pad + (topBarWindow.phoneMode ? 8 : 0)
+                y: quickPanelWindow.pad + (topBarWindow.phoneMode ? 24 : 0)
+                width: quickPanelWindow.innerW
+                spacing: 10
+
+                // Header: Control Center + Phone Chassis Switch + Close
+                Item {
+                    width: parent.width
+                    height: 28
+
+                    Row {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
+
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 8
+                            height: 8
+                            rotation: 45
+                            color: "#22D3EE"
+                            border.width: 1.5
+                            border.color: "#1A1B2E"
+                        }
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: topBarWindow.phoneMode ? "SEKAI PHONE" : "QUICK PANEL"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 12
+                            font.weight: Font.ExtraBold
+                            font.letterSpacing: 1
+                            color: "#1A1B2E"
+                        }
+                    }
+
+                    Row {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
+
+                        Rectangle {
+                            width: phoneModeLbl.implicitWidth + 14
+                            height: 24
+                            radius: 9
+                            color: topBarWindow.phoneMode ? "#5EEAD4" : "#FFFFFF"
+                            border.width: 1.5
+                            border.color: "#1A1B2E"
+                            Text {
+                                id: phoneModeLbl
+                                anchors.centerIn: parent
+                                text: topBarWindow.phoneMode ? "2.5D Phone" : "Flat Card"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: "#1A1B2E"
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: topBarWindow.phoneMode = !topBarWindow.phoneMode
+                            }
+                        }
+
+                        Rectangle {
+                            width: 24
+                            height: 24
+                            radius: 9
+                            color: qpCloseMouse.containsMouse ? "#FEE2E2" : "#FFFFFF"
+                            border.width: 1.5
+                            border.color: "#1A1B2E"
+                            Text {
+                                anchors.centerIn: parent
+                                text: "✕"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                                color: "#1A1B2E"
+                            }
+                            MouseArea {
+                                id: qpCloseMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: topBarWindow.quickPanelOpen = false
+                            }
+                        }
+                    }
+                }
+
+                // ===== Master Volume Slider + Output Switcher =====
+                Rectangle {
+                    width: parent.width
+                    height: masterVolCol.implicitHeight + 16
+                    radius: 14
+                    color: "#FFFFFF"
+                    border.width: 2
+                    border.color: "#1A1B2E"
+
+                    Column {
+                        id: masterVolCol
+                        x: 8
+                        y: 8
+                        width: parent.width - 16
+                        spacing: 6
+
+                        Item {
+                            width: parent.width
+                            height: 16
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: AudioService.masterMuted ? "MASTER VOLUME (MUTED)" : "MASTER VOLUME"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.ExtraBold
+                                color: "#1A1B2E"
+                            }
+                            Text {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: AudioService.masterVolume + "%"
+                                font.family: "Consolas"
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                                color: "#0891B2"
+                            }
+                        }
+
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            Rectangle {
+                                width: 24
+                                height: 18
+                                radius: 6
+                                color: AudioService.masterMuted ? "#FDE68A" : "#E0F2FE"
+                                border.width: 1.5
+                                border.color: "#1A1B2E"
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 12
+                                    height: 12
+                                    sourceSize.width: 24
+                                    sourceSize.height: 24
+                                    smooth: true
+                                    source: AudioService.masterMuted ? "qrc:/qml/icons/volume-cross-dark.svg" : "qrc:/qml/icons/volume-loud-dark.svg"
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: AudioService.toggleMasterMute()
+                                }
+                            }
+                            Item {
+                                width: parent.width - 32
+                                height: 18
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width
+                                    height: 10
+                                    radius: 5
+                                    color: "#E2E8F0"
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+                                    Rectangle {
+                                        x: 1
+                                        y: 1
+                                        height: 8
+                                        radius: 4
+                                        width: Math.max(0, (parent.width - 2) * (AudioService.masterVolume / 100.0))
+                                        gradient: Gradient {
+                                            orientation: Gradient.Horizontal
+                                            GradientStop { position: 0.0; color: "#5EEAD4" }
+                                            GradientStop { position: 1.0; color: "#22D3EE" }
+                                        }
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    function setFromX(mx) {
+                                        const pct = Math.round(Math.max(0, Math.min(1, mx / Math.max(1, width))) * 100)
+                                        AudioService.setMasterVolume(pct)
+                                    }
+                                    onPressed: mouse => setFromX(mouse.x)
+                                    onPositionChanged: mouse => { if (pressed) setFromX(mouse.x) }
+                                }
+                            }
+                        }
+
+                        Flow {
+                            visible: AudioService.outputDevices.length > 0
+                            width: parent.width
+                            spacing: 5
+                            Repeater {
+                                model: AudioService.outputDevices
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: Math.min(masterVolCol.width, devRow.implicitWidth + 14)
+                                    height: 22
+                                    radius: 8
+                                    color: modelData.isDefault ? "#5EEAD4" : (devMouse.containsMouse ? "#E2E8F0" : "#F8FAFC")
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+
+                                    Row {
+                                        id: devRow
+                                        anchors.centerIn: parent
+                                        spacing: 4
+                                        Image {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 11
+                                            height: 11
+                                            sourceSize.width: 22
+                                            sourceSize.height: 22
+                                            smooth: true
+                                            source: "qrc:/qml/icons/headphones-round-dark.svg"
+                                        }
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: Math.min(implicitWidth, masterVolCol.width - 30)
+                                            elide: Text.ElideRight
+                                            text: (modelData.isDefault ? "✓ " : "") + (modelData.name || "Output")
+                                            font.family: "Segoe UI"
+                                            font.pixelSize: 10
+                                            font.weight: modelData.isDefault ? Font.Bold : Font.Medium
+                                            color: "#1A1B2E"
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: devMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: Qt.callLater(function() { AudioService.setDefaultOutputDevice(modelData.id) })
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===== Multi-Monitor DDC/CI Brightness + Screen Mirroring + Network IP =====
+                Repeater {
+                    model: SystemControl.monitors
+                    delegate: Rectangle {
+                        required property var modelData
+                        width: qpStack.width
+                        height: 50
+                        radius: 14
+                        color: "#FFFFFF"
+                        border.width: 2
+                        border.color: "#1A1B2E"
+
+                        Column {
+                            anchors.fill: parent
+                            anchors.margins: 8
+                            spacing: 6
+
+                            Item {
+                                width: parent.width
+                                height: 16
+                                Text {
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "DISPLAY · " + (modelData.name || "Monitor")
+                                    width: parent.width - 42
+                                    elide: Text.ElideRight
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                    font.weight: Font.ExtraBold
+                                    color: "#1A1B2E"
+                                }
+                                Text {
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.brightness + "%"
+                                    font.family: "Consolas"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                    color: "#D97706"
+                                }
+                            }
+
+                            Item {
+                                width: parent.width
+                                height: 16
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width
+                                    height: 10
+                                    radius: 5
+                                    color: "#E2E8F0"
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+                                    Rectangle {
+                                        x: 1
+                                        y: 1
+                                        height: 8
+                                        radius: 4
+                                        width: Math.max(0, (parent.width - 2) * (modelData.brightness / 100.0))
+                                        color: "#FBBF24"
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    function setBr(mx) {
+                                        const pct = Math.round(Math.max(0, Math.min(1, mx / Math.max(1, width))) * 100)
+                                        SystemControl.setMonitorBrightness(modelData.index, pct)
+                                    }
+                                    onPressed: mouse => setBr(mouse.x)
+                                    onPositionChanged: mouse => { if (pressed) setBr(mouse.x) }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===== Screen Mirroring + Dark Mode =====
+                Rectangle {
+                    width: parent.width
+                    height: netMirCol.implicitHeight + 14
+                    radius: 14
+                    color: "#FFFFFF"
+                    border.width: 2
+                    border.color: "#1A1B2E"
+
+                    Column {
+                        id: netMirCol
+                        x: 8
+                        y: 7
+                        width: parent.width - 16
+                        spacing: 6
+
+                        Item {
+                            width: parent.width
+                            height: 20
+                            Text {
+                                anchors.left: parent.left
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "SCREEN MIRROR"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.ExtraBold
+                                color: "#1A1B2E"
+                            }
+                            Rectangle {
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: dmTxt.implicitWidth + 14
+                                height: 20
+                                radius: 8
+                                color: SystemControl.darkMode ? "#5EEAD4" : "#F1F5F9"
+                                border.width: 1.5
+                                border.color: "#1A1B2E"
+                                Row {
+                                    anchors.centerIn: parent
+                                    spacing: 5
+                                    Image {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 12
+                                        height: 12
+                                        sourceSize.width: 24
+                                        sourceSize.height: 24
+                                        smooth: true
+                                        source: SystemControl.darkMode ? "qrc:/qml/icons/moon-dark.svg" : "qrc:/qml/icons/sun-dark.svg"
+                                    }
+                                    Text {
+                                        id: dmTxt
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: SystemControl.darkMode ? "Dark Mode" : "Light Mode"
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 10
+                                        font.weight: Font.Bold
+                                        color: "#1A1B2E"
+                                    }
+                                }
+                                MouseArea {
+                                    anchors.fill: parent
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: SystemControl.toggleDarkMode()
+                                }
+                            }
+                        }
+
+                        Row {
+                            width: parent.width
+                            spacing: 5
+                            Repeater {
+                                model: [
+                                    { label: "Main", mode: "internal" },
+                                    { label: "Dup", mode: "clone" },
+                                    { label: "Extend", mode: "extend" },
+                                    { label: "2nd Only", mode: "external" }
+                                ]
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    width: Math.floor((parent.width - 15) / 4)
+                                    height: 22
+                                    radius: 8
+                                    color: mirMouse.containsMouse ? "#5EEAD4" : "#F1F5F9"
+                                    border.width: 1.5
+                                    border.color: "#1A1B2E"
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: modelData.label
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 10
+                                        font.weight: Font.Bold
+                                        color: "#1A1B2E"
+                                    }
+                                    MouseArea {
+                                        id: mirMouse
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: SystemControl.setDisplayMode(modelData.mode)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===== Per-App Volume Mixer (IAudioSessionManager2) =====
+                Rectangle {
+                    width: parent.width
+                    height: Math.max(54, mixerCol.implicitHeight + 16)
+                    radius: 14
+                    color: "#FFFFFF"
+                    border.width: 2
+                    border.color: "#1A1B2E"
+
+                    Column {
+                        id: mixerCol
+                        x: 8
+                        y: 8
+                        width: parent.width - 16
+                        spacing: 6
+
+                        Text {
+                            text: "APP VOLUME MIXER (" + AudioService.sessions.length + ")"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
+                            font.weight: Font.ExtraBold
+                            color: "#475569"
+                        }
+
+                        Text {
+                            visible: AudioService.sessions.length === 0
+                            text: "No active audio apps"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            color: "#94A3B8"
+                        }
+
+                        Repeater {
+                            model: AudioService.sessions
+                            delegate: Row {
+                                required property var modelData
+                                width: mixerCol.width
+                                height: 24
+                                spacing: 6
+
+                                Image {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 16
+                                    height: 16
+                                    source: modelData.iconUrl || ""
+                                    smooth: true
+                                    mipmap: true
+                                }
+
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 82
+                                    elide: Text.ElideRight
+                                    text: modelData.name || "App"
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 11
+                                    font.weight: Font.DemiBold
+                                    color: "#1A1B2E"
+                                }
+
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20
+                                    height: 18
+                                    radius: 5
+                                    color: modelData.muted ? "#FDE68A" : "#F1F5F9"
+                                    border.width: 1
+                                    border.color: "#1A1B2E"
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 11
+                                        height: 11
+                                        sourceSize.width: 22
+                                        sourceSize.height: 22
+                                        smooth: true
+                                        source: modelData.muted ? "qrc:/qml/icons/volume-cross-dark.svg" : "qrc:/qml/icons/volume-loud-dark.svg"
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: AudioService.toggleAppMute(modelData.id)
+                                    }
+                                }
+
+                                Item {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: Math.max(40, parent.width - 174)
+                                    height: 18
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width
+                                        height: 8
+                                        radius: 4
+                                        color: "#E2E8F0"
+                                        border.width: 1.5
+                                        border.color: "#1A1B2E"
+                                        Rectangle {
+                                            x: 1
+                                            y: 1
+                                            height: 6
+                                            radius: 3
+                                            width: Math.max(0, (parent.width - 2) * (modelData.volume / 100.0))
+                                            color: modelData.muted ? "#94A3B8" : "#22D3EE"
+                                        }
+                                    }
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        function setAppV(mx) {
+                                            const pct = Math.round(Math.max(0, Math.min(1, mx / Math.max(1, width))) * 100)
+                                            AudioService.setAppVolume(modelData.id, pct)
+                                        }
+                                        onPressed: mouse => setAppV(mouse.x)
+                                        onPositionChanged: mouse => { if (pressed) setAppV(mouse.x) }
+                                    }
+                                }
+
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 32
+                                    horizontalAlignment: Text.AlignRight
+                                    text: modelData.volume + "%"
+                                    font.family: "Consolas"
+                                    font.pixelSize: 10
+                                    font.weight: Font.Bold
+                                    color: "#334155"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // SekaiPop Calendar Popup (click Date/Clock pill on TopBar)
+    // =========================================================================
+    PanelWindow {
+        id: calendarPopupWindow
+        visible: topBarWindow.calendarOpen && !topBarWindow.fullscreenActive
+        clickThrough: false
+        color: "transparent"
+
+        readonly property int cardShadow: 4
+        property double openedAt: 0
+        property int viewYear: (new Date()).getFullYear()
+        property int viewMonth: (new Date()).getMonth() // 0..11
+
+        readonly property var monthNames: [
+            "January", "February", "March", "April", "May", "June",
+            "July", "August", "September", "October", "November", "December"
+        ]
+        readonly property var dayShortNames: ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"]
+        readonly property var dayFullNames: ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+        function isoWeekNumber(d) {
+            const tmp = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()))
+            const dayNum = tmp.getUTCDay() || 7
+            tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum)
+            const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1))
+            return Math.ceil((((tmp - yearStart) / 86400000) + 1) / 7)
+        }
+
+        function currentWeekRow(year, month) {
+            const now = new Date()
+            if (now.getFullYear() !== year || now.getMonth() !== month)
+                return -1
+            const firstDow = (new Date(year, month, 1).getDay() + 6) % 7
+            return Math.floor((firstDow + now.getDate() - 1) / 7)
+        }
+
+        function buildCells(year, month) {
+            const first = new Date(year, month, 1)
+            const dow = (first.getDay() + 6) % 7
+            const daysInMonth = new Date(year, month + 1, 0).getDate()
+            const prevDays = new Date(year, month, 0).getDate()
+            const now = new Date()
+            const todayY = now.getFullYear(), todayM = now.getMonth(), todayD = now.getDate()
+            const out = []
+            for (let i = 0; i < 42; ++i) {
+                let d, m = month, y = year, inMonth = true
+                if (i < dow) {
+                    d = prevDays - dow + i + 1
+                    m = month - 1
+                    if (m < 0) { m = 11; y -= 1 }
+                    inMonth = false
+                } else if (i >= dow + daysInMonth) {
+                    d = i - dow - daysInMonth + 1
+                    m = month + 1
+                    if (m > 11) { m = 0; y += 1 }
+                    inMonth = false
+                } else {
+                    d = i - dow + 1
+                }
+                const isToday = (y === todayY && m === todayM && d === todayD)
+                const isWeekend = (i % 7 >= 5)
+                out.push({ day: d, inMonth: inMonth, isToday: isToday, isWeekend: isWeekend })
+            }
+            return out
+        }
+
+        width: 288 + cardShadow
+        height: calCol.implicitHeight + 24 + cardShadow
+        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
+        y: 34
+
+        onVisibleChanged: {
+            if (visible) {
+                openedAt = Date.now()
+                const now = new Date()
+                viewYear = now.getFullYear()
+                viewMonth = now.getMonth()
+                requestActivate()
+            }
+        }
+
+        Timer {
+            interval: 60
+            repeat: true
+            running: calendarPopupWindow.visible
+            onTriggered: {
+                if ((Date.now() - calendarPopupWindow.openedAt) > 220 && calendarPopupWindow.isPointerOutsideAndPressed()) {
+                    topBarWindow.calendarClosedAt = Date.now()
+                    topBarWindow.calendarOpen = false
+                }
+            }
+        }
+
+        // Hard offset shadow
+        Rectangle {
+            x: calendarPopupWindow.cardShadow
+            y: calendarPopupWindow.cardShadow
+            width: calendarPopupWindow.width - calendarPopupWindow.cardShadow
+            height: calendarPopupWindow.height - calendarPopupWindow.cardShadow
+            radius: 18
+            color: "#0B0F19"
+        }
+
+        // Dark Navy SekaiPop Calendar Card
+        Rectangle {
+            x: 0
+            y: 0
+            width: calendarPopupWindow.width - calendarPopupWindow.cardShadow
+            height: calendarPopupWindow.height - calendarPopupWindow.cardShadow
+            radius: 18
+            color: "#1B1E2E"
+            border.width: 2.5
+            border.color: "#E2E8F0"
+
+            Column {
+                id: calCol
+                x: 12
+                y: 12
+                width: parent.width - 24
+                spacing: 10
+
+                // ===== Top Cyan Gradient Banner =====
+                Rectangle {
+                    width: parent.width
+                    height: 76
+                    radius: 14
+                    border.width: 2
+                    border.color: "#0F172A"
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.0; color: "#22D3EE" }
+                        GradientStop { position: 1.0; color: "#5EEAD4" }
+                    }
+
+                    // Tilted Day Badge (Click to return to Today)
+                    Rectangle {
+                        id: calDayBadge
+                        x: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 52
+                        height: 54
+                        radius: 12
+                        rotation: -4
+                        color: "#333951"
+                        border.width: 2
+                        border.color: "#0F172A"
+
+                        Column {
+                            anchors.centerIn: parent
+                            spacing: -2
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: calendarPopupWindow.dayShortNames[(new Date()).getDay()]
+                                font.family: "Segoe UI"
+                                font.pixelSize: 9
+                                font.weight: Font.ExtraBold
+                                color: "#CBD5E1"
+                            }
+                            Text {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: String((new Date()).getDate())
+                                font.family: "Segoe UI"
+                                font.pixelSize: 22
+                                font.weight: Font.Black
+                                color: "#5EEAD4"
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                const now = new Date()
+                                calendarPopupWindow.viewYear = now.getFullYear()
+                                calendarPopupWindow.viewMonth = now.getMonth()
+                            }
+                        }
+                    }
+
+                    Column {
+                        anchors.left: calDayBadge.right
+                        anchors.leftMargin: 12
+                        anchors.right: parent.right
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 3
+
+                        Row {
+                            width: parent.width
+                            spacing: 6
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: calendarPopupWindow.monthNames[calendarPopupWindow.viewMonth]
+                                font.family: "Segoe UI"
+                                font.pixelSize: 16
+                                font.weight: Font.Black
+                                color: "#0F172A"
+                            }
+                            Rectangle {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: calYearTxt.implicitWidth + 12
+                                height: 18
+                                radius: 9
+                                color: "#272B40"
+                                border.width: 1.5
+                                border.color: "#0F172A"
+                                Text {
+                                    id: calYearTxt
+                                    anchors.centerIn: parent
+                                    text: String(calendarPopupWindow.viewYear)
+                                    font.family: "Consolas"
+                                    font.pixelSize: 10
+                                    font.weight: Font.Bold
+                                    color: "#E2E8F0"
+                                }
+                            }
+                        }
+
+                        Text {
+                            readonly property var nowDate: new Date()
+                            text: calendarPopupWindow.dayFullNames[nowDate.getDay()] + " · Week " + calendarPopupWindow.isoWeekNumber(nowDate)
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
+                            color: "#0F172A"
+                        }
+
+                        Text {
+                            readonly property var nowDate: new Date()
+                            readonly property int daysLeft: new Date(nowDate.getFullYear(), nowDate.getMonth() + 1, 0).getDate() - nowDate.getDate()
+                            text: daysLeft + " days left in " + calendarPopupWindow.monthNames[nowDate.getMonth()]
+                            font.family: "Segoe UI"
+                            font.pixelSize: 9
+                            font.weight: Font.DemiBold
+                            color: "#1E293B"
+                            opacity: 0.85
+                        }
+                    }
+                }
+
+                // ===== Weekday Header Pill =====
+                Rectangle {
+                    width: parent.width
+                    height: 24
+                    radius: 8
+                    color: "#25293E"
+
+                    Row {
+                        anchors.fill: parent
+                        anchors.leftMargin: 6
+                        anchors.rightMargin: 6
+                        spacing: 2
+                        Repeater {
+                            model: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"]
+                            delegate: Item {
+                                required property string modelData
+                                required property int index
+                                readonly property bool isTodayDow: {
+                                    const now = new Date()
+                                    const dow = (now.getDay() + 6) % 7
+                                    return calendarPopupWindow.viewYear === now.getFullYear()
+                                        && calendarPopupWindow.viewMonth === now.getMonth()
+                                        && dow === index
+                                }
+                                width: Math.floor((parent.width - 12) / 7)
+                                height: 24
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 28
+                                    height: 16
+                                    radius: 6
+                                    visible: isTodayDow
+                                    color: "#22D3EE"
+                                }
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                    font.weight: Font.ExtraBold
+                                    color: isTodayDow ? "#0F172A" : (index >= 5 ? "#FB7185" : "#94A3B8")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===== 6x7 Calendar Grid with Current-Week Row & Weekend Tint =====
+                Item {
+                    width: parent.width
+                    height: 178
+
+                    readonly property int cellW: Math.floor((width - 12 - 12) / 7)
+                    readonly property int weekRow: calendarPopupWindow.currentWeekRow(calendarPopupWindow.viewYear, calendarPopupWindow.viewMonth)
+
+                    // Weekend vertical column tint (Sa + Su)
+                    Rectangle {
+                        x: 6 + (parent.cellW + 2) * 5 - 2
+                        y: 0
+                        width: parent.cellW * 2 + 6
+                        height: parent.height
+                        radius: 10
+                        color: "#2A2238"
+                        opacity: 0.7
+                    }
+
+                    // Current week row highlight pill
+                    Rectangle {
+                        visible: parent.weekRow >= 0
+                        x: 2
+                        y: parent.weekRow * 29 + 1
+                        width: parent.width - 4
+                        height: 27
+                        radius: 10
+                        color: "#223A4A"
+                        opacity: 0.85
+                    }
+
+                    Grid {
+                        x: 6
+                        y: 2
+                        columns: 7
+                        columnSpacing: 2
+                        rowSpacing: 3
+                        width: parent.width - 12
+                        Repeater {
+                            model: calendarPopupWindow.buildCells(calendarPopupWindow.viewYear, calendarPopupWindow.viewMonth)
+                            delegate: Item {
+                                required property var modelData
+                                width: Math.floor((parent.width - 12) / 7)
+                                height: 26
+
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 24
+                                    height: 24
+                                    radius: 8
+                                    visible: modelData.isToday
+                                    color: "#22D3EE"
+                                }
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.day
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 11
+                                    font.weight: modelData.isToday ? Font.Black : Font.Bold
+                                    color: modelData.isToday
+                                        ? "#0F172A"
+                                        : (!modelData.inMonth ? "#475569" : (modelData.isWeekend ? "#FB7185" : "#E2E8F0"))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ===== Footer: <  [12 Month Diamonds]  > =====
+                Item {
+                    width: parent.width
+                    height: 26
+
+                    Rectangle {
+                        anchors.left: parent.left
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 24
+                        height: 24
+                        radius: 8
+                        color: calPrevMouse.containsMouse ? "#334155" : "#25293E"
+                        border.width: 1.5
+                        border.color: "#475569"
+                        Text {
+                            anchors.centerIn: parent
+                            text: "<"
+                            font.family: "Consolas"
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                            color: "#E2E8F0"
+                        }
+                        MouseArea {
+                            id: calPrevMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (calendarPopupWindow.viewMonth === 0) {
+                                    calendarPopupWindow.viewMonth = 11
+                                    calendarPopupWindow.viewYear -= 1
+                                } else {
+                                    calendarPopupWindow.viewMonth -= 1
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: monthDotsRow.implicitWidth + 16
+                        height: 22
+                        radius: 11
+                        color: "#25293E"
+                        border.width: 1
+                        border.color: "#334155"
+
+                        Row {
+                            id: monthDotsRow
+                            anchors.centerIn: parent
+                            spacing: 4
+                            Repeater {
+                                model: 12
+                                delegate: Text {
+                                    required property int index
+                                    text: "◆"
+                                    font.family: "Segoe UI Symbol"
+                                    font.pixelSize: index === calendarPopupWindow.viewMonth ? 11 : 8
+                                    color: index === calendarPopupWindow.viewMonth ? "#22D3EE" : "#475569"
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    MouseArea {
+                                        anchors.fill: parent
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: calendarPopupWindow.viewMonth = index
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 24
+                        height: 24
+                        radius: 8
+                        color: calNextMouse.containsMouse ? "#334155" : "#25293E"
+                        border.width: 1.5
+                        border.color: "#475569"
+                        Text {
+                            anchors.centerIn: parent
+                            text: ">"
+                            font.family: "Consolas"
+                            font.pixelSize: 12
+                            font.weight: Font.Bold
+                            color: "#E2E8F0"
+                        }
+                        MouseArea {
+                            id: calNextMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (calendarPopupWindow.viewMonth === 11) {
+                                    calendarPopupWindow.viewMonth = 0
+                                    calendarPopupWindow.viewYear += 1
+                                } else {
+                                    calendarPopupWindow.viewMonth += 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // SekaiPop Network / Wi-Fi Popup
+    // =========================================================================
+    PanelWindow {
+        id: wifiPopupWindow
+        visible: topBarWindow.wifiPopupOpen && !topBarWindow.fullscreenActive
+        clickThrough: false
+        color: "transparent"
+
+        readonly property int cardShadow: 4
+        property double openedAt: 0
+
+        width: 268 + cardShadow
+        height: wifiCol.implicitHeight + 24 + cardShadow
+        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
+        y: 34
+
+        onVisibleChanged: {
+            if (visible) {
+                openedAt = Date.now()
+                SystemControl.refresh()
+                SystemControl.refreshWifi()
+                requestActivate()
+            }
+        }
+
+        Timer {
+            interval: 60
+            repeat: true
+            running: wifiPopupWindow.visible
+            onTriggered: {
+                if ((Date.now() - wifiPopupWindow.openedAt) > 220 && wifiPopupWindow.isPointerOutsideAndPressed()) {
+                    topBarWindow.wifiPopupClosedAt = Date.now()
+                    topBarWindow.wifiPopupOpen = false
+                }
+            }
+        }
+
+        Rectangle {
+            x: wifiPopupWindow.cardShadow
+            y: wifiPopupWindow.cardShadow
+            width: wifiPopupWindow.width - wifiPopupWindow.cardShadow
+            height: wifiPopupWindow.height - wifiPopupWindow.cardShadow
+            radius: 16
+            color: "#1A1B2E"
+        }
+
+        Rectangle {
+            x: 0
+            y: 0
+            width: wifiPopupWindow.width - wifiPopupWindow.cardShadow
+            height: wifiPopupWindow.height - wifiPopupWindow.cardShadow
+            radius: 16
+            color: "#F8FAFC"
+            border.width: 2
+            border.color: "#1A1B2E"
+
+            Column {
+                id: wifiCol
+                x: 12
+                y: 12
+                width: parent.width - 24
+                spacing: 8
+
+                Rectangle {
+                    width: parent.width
+                    height: 44
+                    radius: 12
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#1A1B2E"
+                    Column {
+                        anchors.verticalCenter: parent.verticalCenter
+                        x: 10
+                        spacing: 2
+                        Row {
+                            spacing: 6
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 14
+                                height: 14
+                                sourceSize.width: 28
+                                sourceSize.height: 28
+                                smooth: true
+                                source: SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-dark.svg" : "qrc:/qml/icons/network-dark.svg"
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: SystemControl.networkType
+                                font.family: "Segoe UI"
+                                font.pixelSize: 12
+                                font.weight: Font.Bold
+                                color: "#1A1B2E"
+                            }
+                        }
+                        Text {
+                            text: SystemControl.localIp ? SystemControl.localIp : "No IPv4 address"
+                            font.family: "Consolas"
+                            font.pixelSize: 10
+                            color: "#64748B"
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 36
+                    radius: 12
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#1A1B2E"
+
+                    Text {
+                        x: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: SystemControl.wifiSupported ? "Wi-Fi" : "Wi-Fi (No adapter)"
+                        font.family: "Segoe UI"
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                        color: "#1A1B2E"
+                    }
+
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 40
+                        height: 22
+                        radius: 11
+                        color: SystemControl.wifiEnabled ? "#22D3EE" : "#CBD5E1"
+                        border.width: 1.5
+                        border.color: "#1A1B2E"
+                        Rectangle {
+                            x: SystemControl.wifiEnabled ? 20 : 2
+                            y: 2
+                            width: 16
+                            height: 16
+                            radius: 8
+                            color: "#FFFFFF"
+                            border.width: 1
+                            border.color: "#1A1B2E"
+                            Behavior on x { NumberAnimation { duration: 120 } }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            enabled: SystemControl.wifiSupported
+                            onClicked: SystemControl.toggleWifi()
+                        }
+                    }
+                }
+
+                Flickable {
+                    visible: SystemControl.wifiSupported && SystemControl.wifiEnabled
+                    width: parent.width
+                    height: Math.min(200, Math.max(28, wifiNetCol.implicitHeight))
+                    contentWidth: width
+                    contentHeight: wifiNetCol.implicitHeight
+                    clip: true
+
+                    Column {
+                        id: wifiNetCol
+                        width: parent.width
+                        spacing: 4
+                        Text {
+                            visible: SystemControl.wifiNetworks.length === 0
+                            text: "Scanning networks..."
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            color: "#64748B"
+                        }
+                        Repeater {
+                            model: SystemControl.wifiNetworks
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: wifiNetCol.width
+                                height: 28
+                                radius: 9
+                                color: modelData.connected ? "#5EEAD4" : (wnMouse.containsMouse ? "#E0F2FE" : "#FFFFFF")
+                                border.width: 1.5
+                                border.color: "#1A1B2E"
+
+                                Row {
+                                    x: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width - 54
+                                    spacing: 6
+                                    Image {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 12
+                                        height: 12
+                                        sourceSize.width: 24
+                                        sourceSize.height: 24
+                                        smooth: true
+                                        source: "qrc:/qml/icons/wifi-dark.svg"
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width - 18
+                                        elide: Text.ElideRight
+                                        text: (modelData.connected ? "✓ " : "") + modelData.ssid
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 11
+                                        font.weight: modelData.connected ? Font.Bold : Font.Medium
+                                        color: "#1A1B2E"
+                                    }
+                                }
+                                Text {
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.signal + "%"
+                                    font.family: "Consolas"
+                                    font.pixelSize: 10
+                                    color: "#475569"
+                                }
+                                MouseArea {
+                                    id: wnMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: SystemControl.connectWifi(modelData.profile || modelData.ssid)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 28
+                    radius: 10
+                    color: netSetMouse.containsMouse ? "#E0F2FE" : "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#1A1B2E"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Network Settings"
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        color: "#1A1B2E"
+                    }
+                    MouseArea {
+                        id: netSetMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            topBarWindow.wifiPopupOpen = false
+                            SystemControl.openSettings("ms-settings:network")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // SekaiPop Bluetooth Popup
+    // =========================================================================
+    PanelWindow {
+        id: btPopupWindow
+        visible: topBarWindow.btPopupOpen && !topBarWindow.fullscreenActive
+        clickThrough: false
+        color: "transparent"
+
+        readonly property int cardShadow: 4
+        property double openedAt: 0
+
+        width: 256 + cardShadow
+        height: btCol.implicitHeight + 24 + cardShadow
+        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
+        y: 34
+
+        onVisibleChanged: {
+            if (visible) {
+                openedAt = Date.now()
+                SystemControl.refreshBluetooth()
+                requestActivate()
+            }
+        }
+
+        Timer {
+            interval: 60
+            repeat: true
+            running: btPopupWindow.visible
+            onTriggered: {
+                if ((Date.now() - btPopupWindow.openedAt) > 220 && btPopupWindow.isPointerOutsideAndPressed()) {
+                    topBarWindow.btPopupClosedAt = Date.now()
+                    topBarWindow.btPopupOpen = false
+                }
+            }
+        }
+
+        Rectangle {
+            x: btPopupWindow.cardShadow
+            y: btPopupWindow.cardShadow
+            width: btPopupWindow.width - btPopupWindow.cardShadow
+            height: btPopupWindow.height - btPopupWindow.cardShadow
+            radius: 16
+            color: "#1A1B2E"
+        }
+
+        Rectangle {
+            x: 0
+            y: 0
+            width: btPopupWindow.width - btPopupWindow.cardShadow
+            height: btPopupWindow.height - btPopupWindow.cardShadow
+            radius: 16
+            color: "#F8FAFC"
+            border.width: 2
+            border.color: "#1A1B2E"
+
+            Column {
+                id: btCol
+                x: 12
+                y: 12
+                width: parent.width - 24
+                spacing: 8
+
+                Rectangle {
+                    width: parent.width
+                    height: 36
+                    radius: 12
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#1A1B2E"
+
+                    Text {
+                        x: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: SystemControl.bluetoothSupported ? "Bluetooth" : "Bluetooth (Unavailable)"
+                        font.family: "Segoe UI"
+                        font.pixelSize: 12
+                        font.weight: Font.Bold
+                        color: "#1A1B2E"
+                    }
+
+                    Rectangle {
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 40
+                        height: 22
+                        radius: 11
+                        color: SystemControl.bluetoothEnabled ? "#818CF8" : "#CBD5E1"
+                        border.width: 1.5
+                        border.color: "#1A1B2E"
+                        Rectangle {
+                            x: SystemControl.bluetoothEnabled ? 20 : 2
+                            y: 2
+                            width: 16
+                            height: 16
+                            radius: 8
+                            color: "#FFFFFF"
+                            border.width: 1
+                            border.color: "#1A1B2E"
+                            Behavior on x { NumberAnimation { duration: 120 } }
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            enabled: SystemControl.bluetoothSupported
+                            onClicked: SystemControl.toggleBluetooth()
+                        }
+                    }
+                }
+
+                Flickable {
+                    visible: SystemControl.bluetoothSupported && SystemControl.bluetoothEnabled
+                    width: parent.width
+                    height: Math.min(180, Math.max(26, btDevCol.implicitHeight))
+                    contentWidth: width
+                    contentHeight: btDevCol.implicitHeight
+                    clip: true
+
+                    Column {
+                        id: btDevCol
+                        width: parent.width
+                        spacing: 4
+                        Text {
+                            visible: SystemControl.bluetoothDevices.length === 0
+                            text: "No paired devices"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            color: "#64748B"
+                        }
+                        Repeater {
+                            model: SystemControl.bluetoothDevices
+                            delegate: Rectangle {
+                                required property var modelData
+                                width: btDevCol.width
+                                height: 28
+                                radius: 9
+                                color: modelData.connected ? "#C7D2FE" : "#FFFFFF"
+                                border.width: 1.5
+                                border.color: "#1A1B2E"
+
+                                Row {
+                                    x: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: parent.width - 74
+                                    spacing: 6
+                                    Image {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 12
+                                        height: 12
+                                        sourceSize.width: 24
+                                        sourceSize.height: 24
+                                        smooth: true
+                                        source: "qrc:/qml/icons/bt-dark.svg"
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width - 18
+                                        elide: Text.ElideRight
+                                        text: modelData.name
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 11
+                                        font.weight: modelData.connected ? Font.Bold : Font.Medium
+                                        color: "#1A1B2E"
+                                    }
+                                }
+                                Text {
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.connected ? "Connected" : "Paired"
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                    color: modelData.connected ? "#3730A3" : "#64748B"
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 28
+                    radius: 10
+                    color: btSetMouse.containsMouse ? "#E0E7FF" : "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#1A1B2E"
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Bluetooth Settings"
+                        font.family: "Segoe UI"
+                        font.pixelSize: 11
+                        font.weight: Font.Bold
+                        color: "#1A1B2E"
+                    }
+                    MouseArea {
+                        id: btSetMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            topBarWindow.btPopupOpen = false
+                            SystemControl.openSettings("ms-settings:bluetooth")
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // =========================================================================
+    // Phase 4/5 Bonus: SekaiPop OSD Volume Sticker
+    // =========================================================================
+    PanelWindow {
+        id: osdVolumeWindow
+        visible: false
+        clickThrough: true
+        color: "transparent"
+
+        width: 224
+        height: 52
+        x: Math.round((topBarWindow.anchors.margins.left + topBarWindow.width - width) * 0.5)
+        y: dockWindow.y > 100 ? (dockWindow.y - 68) : 720
+
+        property int shownVol: AudioService.masterVolume
+        property bool shownMuted: AudioService.masterMuted
+
+        Connections {
+            target: AudioService
+            function onVolumeOsdRequested(volume, muted) {
+                osdVolumeWindow.shownVol = volume
+                osdVolumeWindow.shownMuted = muted
+                osdVolumeWindow.visible = true
+                osdHideTimer.restart()
+            }
+        }
+
+        Timer {
+            id: osdHideTimer
+            interval: 1600
+            onTriggered: osdVolumeWindow.visible = false
+        }
+
+        Rectangle {
+            x: 3
+            y: 3
+            width: 220
+            height: 48
+            radius: 14
+            color: "#1A1B2E"
+        }
+
+        Rectangle {
+            width: 220
+            height: 48
+            radius: 14
+            color: "#1A1B2E"
+
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 2
+                radius: 12
+                color: "#FFFFFF"
+                Rectangle {
+                    anchors.fill: parent
+                    anchors.margins: 2
+                    radius: 10
+                    color: "#F1F5FF"
+                }
+            }
+
+            Row {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 10
+
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 18
+                    height: 18
+                    sourceSize.width: 36
+                    sourceSize.height: 36
+                    smooth: true
+                    source: osdVolumeWindow.shownMuted ? "qrc:/qml/icons/volume-cross-dark.svg" : "qrc:/qml/icons/volume-loud-dark.svg"
+                }
+
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: parent.width - 70
+                    height: 12
+                    radius: 6
+                    color: "#E2E8F0"
+                    border.width: 2
+                    border.color: "#1A1B2E"
+                    Rectangle {
+                        x: 2
+                        y: 2
+                        height: 8
+                        radius: 4
+                        width: Math.max(0, (parent.width - 4) * (osdVolumeWindow.shownVol / 100.0))
+                        gradient: Gradient {
+                            orientation: Gradient.Horizontal
+                            GradientStop { position: 0.0; color: "#5EEAD4" }
+                            GradientStop { position: 1.0; color: "#22D3EE" }
+                        }
+                    }
+                }
+
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 32
+                    horizontalAlignment: Text.AlignRight
+                    text: osdVolumeWindow.shownMuted ? "MUTE" : (osdVolumeWindow.shownVol + "%")
+                    font.family: "Consolas"
+                    font.pixelSize: 11
+                    font.weight: Font.Bold
+                    color: "#1A1B2E"
                 }
             }
         }

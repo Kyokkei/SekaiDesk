@@ -19,6 +19,8 @@ class WindowTracker : public QObject {
     Q_PROPERTY(QString activeWindowTitle READ activeWindowTitle NOTIFY activeWindowChanged)
     Q_PROPERTY(int cpuUsage READ cpuUsage NOTIFY statsChanged)
     Q_PROPERTY(int ramUsage READ ramUsage NOTIFY statsChanged)
+    Q_PROPERTY(int cpuTemp READ cpuTemp NOTIFY statsChanged)
+    Q_PROPERTY(int gpuTemp READ gpuTemp NOTIFY statsChanged)
 
 public:
     explicit WindowTracker(QObject* parent = nullptr);
@@ -32,6 +34,8 @@ public:
     QString activeWindowTitle() const { return m_activeWindowTitle; }
     int cpuUsage() const { return m_cpuUsage; }
     int ramUsage() const { return m_ramUsage; }
+    int cpuTemp() const { return m_cpuTemp; }
+    int gpuTemp() const { return m_gpuTemp; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE QVariantMap stateForTarget(const QString& target) const;
@@ -73,6 +77,8 @@ private:
     QString m_activeWindowTitle;
     int m_cpuUsage = 0;
     int m_ramUsage = 0;
+    int m_cpuTemp = -1;
+    int m_gpuTemp = -1;
     quint64 m_prevIdleTime = 0;
     quint64 m_prevKernelTime = 0;
     quint64 m_prevUserTime = 0;

@@ -7,6 +7,7 @@
 //    (SetWindowRgn) so clicks pass through — alpha == 0 does NOT pass clicks.
 //  - Click-through empty zones use WS_EX_TRANSPARENT via `clickThrough`.
 
+#include <QColor>
 #include <QObject>
 #include <QQuickItem>
 #include <QQuickWindow>
@@ -134,6 +135,13 @@ class PanelWindow : public QQuickWindow {
     Q_PROPERTY(bool reserveTopBar READ reserveTopBar WRITE setReserveTopBar NOTIFY reserveTopBarChanged)
     Q_PROPERTY(int reserveHeight READ reserveHeight WRITE setReserveHeight NOTIFY reserveHeightChanged)
     Q_PROPERTY(bool fullscreenActive READ fullscreenActive NOTIFY fullscreenActiveChanged)
+    Q_PROPERTY(bool blurBehind READ blurBehind WRITE setBlurBehind NOTIFY blurChanged)
+    Q_PROPERTY(int blurRadius READ blurRadius WRITE setBlurRadius NOTIFY blurChanged)
+    Q_PROPERTY(int blurInsetX READ blurInsetX WRITE setBlurInsetX NOTIFY blurChanged)
+    Q_PROPERTY(int blurInsetY READ blurInsetY WRITE setBlurInsetY NOTIFY blurChanged)
+    Q_PROPERTY(int blurInsetRight READ blurInsetRight WRITE setBlurInsetRight NOTIFY blurChanged)
+    Q_PROPERTY(int blurInsetBottom READ blurInsetBottom WRITE setBlurInsetBottom NOTIFY blurChanged)
+    Q_PROPERTY(QColor blurTint READ blurTint WRITE setBlurTint NOTIFY blurChanged)
 
 public:
     explicit PanelWindow(QWindow* parent = nullptr);
@@ -163,6 +171,21 @@ public:
 
     bool fullscreenActive() const { return m_fullscreenActive; }
 
+    bool blurBehind() const { return m_blurBehind; }
+    void setBlurBehind(bool on);
+    int blurRadius() const { return m_blurRadius; }
+    void setBlurRadius(int r);
+    int blurInsetX() const { return m_blurInsetX; }
+    void setBlurInsetX(int v);
+    int blurInsetY() const { return m_blurInsetY; }
+    void setBlurInsetY(int v);
+    int blurInsetRight() const { return m_blurInsetRight; }
+    void setBlurInsetRight(int v);
+    int blurInsetBottom() const { return m_blurInsetBottom; }
+    void setBlurInsetBottom(int v);
+    QColor blurTint() const { return m_blurTint; }
+    void setBlurTint(const QColor& c);
+
     Q_INVOKABLE void recompute();
     Q_INVOKABLE bool isPointerOutsideAndPressed() const;
 
@@ -174,6 +197,7 @@ signals:
     void reserveHeightChanged();
     void fullscreenActiveChanged();
     void windowDeactivated();
+    void blurChanged();
 
 protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
@@ -181,6 +205,7 @@ protected:
 private:
     void recomputeGeometry();
     void applyClickThrough();
+    void applyBlurBehind();
     void updateMask();
     void registerOrUpdateAppBar();
     void unregisterAppBar();
@@ -196,5 +221,12 @@ private:
     int m_reserveHeight = 48;
     bool m_appBarRegistered = false;
     bool m_fullscreenActive = false;
+    bool m_blurBehind = false;
+    int m_blurRadius = 14;
+    int m_blurInsetX = 0;
+    int m_blurInsetY = 0;
+    int m_blurInsetRight = 0;
+    int m_blurInsetBottom = 0;
+    QColor m_blurTint = QColor(20, 26, 42, 165);
     QMetaObject::Connection m_screenGeoConn;
 };
