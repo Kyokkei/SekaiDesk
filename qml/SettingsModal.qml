@@ -11,15 +11,17 @@ PanelWindow {
     clickThrough: false
     color: "transparent"
 
-    readonly property int cardW: 480
+    readonly property int cardW: 500
     readonly property int shadow: 5
     width: cardW + shadow
     height: cardRect.height + shadow
 
     x: Math.max(12, Math.round((themeHub.screenW - width) * 0.5))
-    y: Math.max(40, Math.round((themeHub.screenH - height) * 0.36))
+    y: Math.max(40, Math.round((themeHub.screenH - height) * 0.28))
 
     property double openedAt: 0
+    property bool pickingFile: false
+
     onVisibleChanged: {
         if (visible) {
             openedAt = Date.now()
@@ -29,7 +31,7 @@ PanelWindow {
     }
 
     onWindowDeactivated: {
-        if (themeHub.settingsOpen && !cityInput.activeFocus) {
+        if (themeHub.settingsOpen && !cityInput.activeFocus && !pickingFile) {
             themeHub.settingsClosedAt = Date.now()
             themeHub.settingsOpen = false
         }
@@ -38,7 +40,7 @@ PanelWindow {
     Timer {
         interval: 70
         repeat: true
-        running: settingsWin.visible
+        running: settingsWin.visible && !settingsWin.pickingFile
         onTriggered: {
             if ((Date.now() - settingsWin.openedAt) > 250 && settingsWin.isPointerOutsideAndPressed()) {
                 themeHub.settingsClosedAt = Date.now()
@@ -73,7 +75,7 @@ PanelWindow {
             x: 14
             y: 14
             width: settingsWin.cardW - 28
-            spacing: 12
+            spacing: 11
 
             // Header
             Row {
@@ -144,7 +146,7 @@ PanelWindow {
                 }
             }
 
-            Rectangle { width: parent.width; height: 1.5; color: "#E2E8F0" }
+            Rectangle { width: parent.width; height: 2; color: "#E2E8F0" }
 
             // Unit Theme Picker
             Text {
@@ -204,7 +206,7 @@ PanelWindow {
                 }
             }
 
-            Rectangle { width: parent.width; height: 1.5; color: "#E2E8F0" }
+            Rectangle { width: parent.width; height: 2; color: "#E2E8F0" }
 
             // Shell Behavior Toggles
             Text {
@@ -312,7 +314,7 @@ PanelWindow {
                 }
             }
 
-            Rectangle { width: parent.width; height: 1.5; color: "#E2E8F0" }
+            Rectangle { width: parent.width; height: 2; color: "#E2E8F0" }
 
             // Desktop Widgets Toggles
             Row {
@@ -320,7 +322,7 @@ PanelWindow {
                 Text {
                     width: parent.width - 105
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "DESKTOP WIDGETS (ABOVE WALLPAPER)"
+                    text: "DESKTOP WIDGETS (DESKTOP LAYER)"
                     font.family: "Segoe UI"
                     font.pixelSize: 10
                     font.weight: Font.Bold
@@ -351,24 +353,23 @@ PanelWindow {
                 }
             }
 
-            Grid {
+            Flow {
                 width: parent.width
-                columns: 3
-                columnSpacing: 6
-                rowSpacing: 6
+                spacing: 6
 
                 Repeater {
                     model: [
                         { key: "clock", label: "Clock", active: themeHub.wClockVisible },
                         { key: "weather", label: "Weather", active: themeHub.wWeatherVisible },
+                        { key: "profile", label: "Profile Card", active: themeHub.wProfileVisible },
+                        { key: "calendar", label: "Calendar", active: themeHub.wCalendarVisible },
                         { key: "todo", label: "Todo List", active: themeHub.wTodoVisible },
                         { key: "notes", label: "Sticky Note", active: themeHub.wNotesVisible },
-                        { key: "lyrics", label: "Live Lyrics", active: themeHub.wLyricsVisible },
-                        { key: "profile", label: "Profile Card", active: themeHub.wProfileVisible }
+                        { key: "lyrics", label: "Live Lyrics", active: themeHub.wLyricsVisible }
                     ]
                     delegate: Rectangle {
                         required property var modelData
-                        width: (mainCol.width - 12) / 3
+                        width: Math.floor((mainCol.width - 18) / 4)
                         height: 30
                         radius: 8
                         color: modelData.active ? themeHub.accentA : (wMa.containsMouse ? themeHub.hoverTint : "#FFFFFF")
@@ -393,6 +394,280 @@ PanelWindow {
                 }
             }
 
+            // Clock & Weather Styles Row
+            Row {
+                width: parent.width
+                spacing: 6
+
+                // Clock style cycle + 12h/24h
+                Rectangle {
+                    width: (parent.width - 6) * 0.5
+                    height: 30
+                    radius: 8
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: themeHub.darkInk
+                    Row {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        spacing: 4
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Clock:"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
+                            color: "#64748B"
+                        }
+                        Rectangle {
+                            width: 82
+                            height: 22
+                            radius: 6
+                            color: themeHub.accentB
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: themeHub.clockDesignNames[themeHub.clockStyle] + " ↻"
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: themeHub.cycleClockStyle()
+                            }
+                        }
+                        Rectangle {
+                            width: 44
+                            height: 22
+                            radius: 6
+                            color: themeHub.clockUse24h ? themeHub.accentA : "#F1F5F9"
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: themeHub.clockUse24h ? "24H" : "12H"
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: themeHub.setClockUse24h(!themeHub.clockUse24h)
+                            }
+                        }
+                    }
+                }
+
+                // Weather style + forecast view
+                Rectangle {
+                    width: (parent.width - 6) * 0.5
+                    height: 30
+                    radius: 8
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: themeHub.darkInk
+                    Row {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        spacing: 4
+                        Text {
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: "Weather:"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 10
+                            font.weight: Font.Bold
+                            color: "#64748B"
+                        }
+                        Rectangle {
+                            width: 74
+                            height: 22
+                            radius: 6
+                            color: themeHub.weatherMinimal ? themeHub.accentA : themeHub.accentB
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: themeHub.weatherMinimal ? "MINIMAL" : "CLASSIC"
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: themeHub.setWeatherMinimal(!themeHub.weatherMinimal)
+                            }
+                        }
+                        Rectangle {
+                            width: 64
+                            height: 22
+                            radius: 6
+                            color: "#F1F5F9"
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: themeHub.weatherView === "days" ? "3-DAY" : "HOURLY"
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: themeHub.setWeatherView(themeHub.weatherView === "days" ? "hourly" : "days")
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Profile Card Avatar & Banner Pickers
+            Row {
+                width: parent.width
+                spacing: 6
+
+                Rectangle {
+                    width: (parent.width - 6) * 0.5
+                    height: 30
+                    radius: 8
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: themeHub.darkInk
+                    Row {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        spacing: 4
+                        Rectangle {
+                            width: parent.width - (themeHub.profileAvatarUrl !== "" ? 50 : 0)
+                            height: 22
+                            radius: 6
+                            color: pickAvMa.containsMouse ? themeHub.accentA : themeHub.hoverTint
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: themeHub.profileAvatarUrl !== "" ? "Avatar Set ✓" : "Pick Avatar Image"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                            MouseArea {
+                                id: pickAvMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    settingsWin.pickingFile = true
+                                    const url = SystemControl.pickImageFile("Select Profile Avatar")
+                                    settingsWin.pickingFile = false
+                                    if (url !== "")
+                                        themeHub.setProfileAvatar(url)
+                                    settingsWin.focusActivate()
+                                }
+                            }
+                        }
+                        Rectangle {
+                            visible: themeHub.profileAvatarUrl !== ""
+                            width: 46
+                            height: 22
+                            radius: 6
+                            color: "#FEE2E2"
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Reset"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: "#DC2626"
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: themeHub.setProfileAvatar("")
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: (parent.width - 6) * 0.5
+                    height: 30
+                    radius: 8
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: themeHub.darkInk
+                    Row {
+                        anchors.fill: parent
+                        anchors.margins: 4
+                        spacing: 4
+                        Rectangle {
+                            width: parent.width - (themeHub.profileBannerUrl !== "" ? 50 : 0)
+                            height: 22
+                            radius: 6
+                            color: pickBnMa.containsMouse ? themeHub.accentA : themeHub.hoverTint
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: themeHub.profileBannerUrl !== "" ? "Banner Set ✓" : "Pick Banner Image"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                            MouseArea {
+                                id: pickBnMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    settingsWin.pickingFile = true
+                                    const url = SystemControl.pickImageFile("Select Profile Banner")
+                                    settingsWin.pickingFile = false
+                                    if (url !== "")
+                                        themeHub.setProfileBanner(url)
+                                    settingsWin.focusActivate()
+                                }
+                            }
+                        }
+                        Rectangle {
+                            visible: themeHub.profileBannerUrl !== ""
+                            width: 46
+                            height: 22
+                            radius: 6
+                            color: "#FEE2E2"
+                            border.width: 1
+                            border.color: themeHub.darkInk
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Reset"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: "#DC2626"
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: themeHub.setProfileBanner("")
+                            }
+                        }
+                    }
+                }
+            }
+
             // Quick hotkeys + Quit/Reset footer
             Row {
                 width: parent.width
@@ -407,7 +682,7 @@ PanelWindow {
                     border.color: themeHub.darkInk
                     Text {
                         anchors.centerIn: parent
-                        text: "Alt+Space: Spotlight  •  Ctrl+Alt+V: Clipboard  •  Alt+Q: QuickPanel"
+                        text: "Alt+Space: Spotlight  •  Ctrl+Alt+V: Clipboard  •  Ctrl+Alt+A: QuickPanel"
                         font.family: "Consolas"
                         font.pixelSize: 10
                         font.weight: Font.Bold

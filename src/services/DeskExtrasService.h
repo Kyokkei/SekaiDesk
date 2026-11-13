@@ -73,6 +73,12 @@ class WeatherService : public QObject {
     Q_PROPERTY(int feelsLike READ feelsLike NOTIFY weatherChanged)
     Q_PROPERTY(int humidity READ humidity NOTIFY weatherChanged)
     Q_PROPERTY(int windSpeed READ windSpeed NOTIFY weatherChanged)
+    Q_PROPERTY(int windDeg READ windDeg NOTIFY weatherChanged)
+    Q_PROPERTY(QString windDirection READ windDirection NOTIFY weatherChanged)
+    Q_PROPERTY(int precipProb READ precipProb NOTIFY weatherChanged)
+    Q_PROPERTY(int pressure READ pressure NOTIFY weatherChanged)
+    Q_PROPERTY(QString sunrise READ sunrise NOTIFY weatherChanged)
+    Q_PROPERTY(QString sunset READ sunset NOTIFY weatherChanged)
     Q_PROPERTY(int uvIndex READ uvIndex NOTIFY weatherChanged)
     Q_PROPERTY(int tempMin READ tempMin NOTIFY weatherChanged)
     Q_PROPERTY(int tempMax READ tempMax NOTIFY weatherChanged)
@@ -80,6 +86,7 @@ class WeatherService : public QObject {
     Q_PROPERTY(QString conditionText READ conditionText NOTIFY weatherChanged)
     Q_PROPERTY(bool isDay READ isDay NOTIFY weatherChanged)
     Q_PROPERTY(QVariantList hourlyForecast READ hourlyForecast NOTIFY weatherChanged)
+    Q_PROPERTY(QVariantList dailyForecast READ dailyForecast NOTIFY weatherChanged)
 
 public:
     explicit WeatherService(SettingsStore* settings, QObject* parent = nullptr);
@@ -91,6 +98,12 @@ public:
     int feelsLike() const { return m_feelsLike; }
     int humidity() const { return m_humidity; }
     int windSpeed() const { return m_windSpeed; }
+    int windDeg() const { return m_windDeg; }
+    QString windDirection() const { return m_windDirection; }
+    int precipProb() const { return m_precipProb; }
+    int pressure() const { return m_pressure; }
+    QString sunrise() const { return m_sunrise; }
+    QString sunset() const { return m_sunset; }
     int uvIndex() const { return m_uvIndex; }
     int tempMin() const { return m_tempMin; }
     int tempMax() const { return m_tempMax; }
@@ -98,6 +111,7 @@ public:
     QString conditionText() const { return m_conditionText; }
     bool isDay() const { return m_isDay; }
     QVariantList hourlyForecast() const { return m_hourlyForecast; }
+    QVariantList dailyForecast() const { return m_dailyForecast; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void setCity(const QString& cityName);
@@ -121,6 +135,12 @@ private:
     int m_feelsLike = 30;
     int m_humidity = 75;
     int m_windSpeed = 8;
+    int m_windDeg = 0;
+    QString m_windDirection = QStringLiteral("N");
+    int m_precipProb = 0;
+    int m_pressure = 1013;
+    QString m_sunrise = QStringLiteral("05:45");
+    QString m_sunset = QStringLiteral("17:45");
     int m_uvIndex = 4;
     int m_tempMin = 24;
     int m_tempMax = 33;
@@ -128,6 +148,7 @@ private:
     QString m_conditionText = QStringLiteral("Partly Cloudy");
     bool m_isDay = true;
     QVariantList m_hourlyForecast;
+    QVariantList m_dailyForecast;
     uint64_t m_requestGen = 0;
 };
 
@@ -144,6 +165,8 @@ public:
 
     Q_INVOKABLE void addUrls(const QVariantList& urls);
     Q_INVOKABLE void addPaths(const QStringList& paths);
+    Q_INVOKABLE void pickFiles();
+    Q_INVOKABLE int pasteFromClipboard();
     Q_INVOKABLE void openItem(int index);
     Q_INVOKABLE void revealItem(int index);
     Q_INVOKABLE void copyAllPaths();

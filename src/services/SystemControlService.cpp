@@ -7,6 +7,7 @@
 #include <QProcess>
 #include <QSettings>
 #include <QTimer>
+#include <QUrl>
 #include <QVariantMap>
 
 #ifdef Q_OS_WIN
@@ -14,6 +15,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <thread>
 
@@ -21,6 +23,64 @@ namespace {
 constexpr int kQuickPanelHotkeyId = 0x534B;
 constexpr int kSpotlightHotkeyId = 0x534C;
 constexpr int kClipboardHotkeyId = 0x5343;
+constexpr UINT kLlAltSpaceMsg = WM_APP + 0x51;
+
+HWND s_hotkeyMsgHwnd = nullptr;
+bool s_altSpaceDown = false;
+
+LRESULT CALLBACK lowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
+{
+    if (nCode == HC_ACTION && lParam) {
+        const auto* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+        if ((kb->flags & LLKHF_INJECTED) == 0 && kb->vkCode == VK_SPACE) {
+            const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
+            const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
+            if (isUp && s_altSpaceDown) {
+                s_altSpaceDown = false;
+                return 1;
+            }
+            const bool altDown = (kb->flags & LLKHF_ALTDOWN) != 0;
+            const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+            const bool winDown = ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0)
+                                || ((GetAsyncKeyState(VK_RWIN) & 0x8000) != 0);
+            if (isDown && altDown && !ctrlDown && !shiftDown && !winDown) {
+                if (!s_altSpaceDown) {
+                    s_altSpaceDown = true;
+                    // Cancel pending Alt menu activation (SC_KEYMENU) on Alt release.
+                    INPUT in{};
+                    in.type = INPUT_KEYBOARD;
+                    in.ki.wVk = 0xFF;
+                    in.ki.dwFlags = KEYEVENTF_KEYUP;
+                    SendInput(1, &in, sizeof(INPUT));
+                    if (s_hotkeyMsgHwnd)
+                        PostMessageW(s_hotkeyMsgHwnd, kLlAltSpaceMsg, 0, 0);
+                }
+                return 1;
+            }
+        }
+    }
+    return CallNextHookEx(nullptr, nCode, wParam, lParam);
+}
+
+bool enableShutdownPrivilege()
+{
+    HANDLE hToken = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &hToken))
+        return false;
+    LUID luid{};
+    bool ok = false;
+    if (LookupPrivilegeValueW(nullptr, SE_SHUTDOWN_NAME, &luid)) {
+        TOKEN_PRIVILEGES tp{};
+        tp.PrivilegeCount = 1;
+        tp.Privileges[0].Luid = luid;
+        tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        ok = (AdjustTokenPrivileges(hToken, FALSE, &tp, sizeof(tp), nullptr, nullptr) != FALSE)
+             && (GetLastError() == ERROR_SUCCESS);
+    }
+    CloseHandle(hToken);
+    return ok;
+}
 
 struct PhysicalMonitor {
     HANDLE hPhysicalMonitor;
@@ -77,9 +137,22 @@ SystemControlService::SystemControlService(QObject* parent)
 #ifdef Q_OS_WIN
     if (QCoreApplication::instance())
         QCoreApplication::instance()->installNativeEventFilter(this);
-    m_hotkeyRegistered = (RegisterHotKey(nullptr, kQuickPanelHotkeyId, MOD_CONTROL | MOD_ALT, 'A') != FALSE);
-    m_spotlightHotkeyRegistered = (RegisterHotKey(nullptr, kSpotlightHotkeyId, MOD_ALT, VK_SPACE) != FALSE);
-    m_clipboardHotkeyRegistered = (RegisterHotKey(nullptr, kClipboardHotkeyId, MOD_CONTROL | MOD_ALT, 'V') != FALSE);
+
+    HWND msgHwnd = CreateWindowExW(0, L"STATIC", L"SekaiDeskHotkeyMsg", 0,
+                                   0, 0, 0, 0, HWND_MESSAGE, nullptr,
+                                   GetModuleHandleW(nullptr), nullptr);
+    m_hotkeyMsgHwnd = msgHwnd;
+    s_hotkeyMsgHwnd = msgHwnd;
+
+    HHOOK kbdHook = SetWindowsHookExW(WH_KEYBOARD_LL, lowLevelKeyboardProc,
+                                      GetModuleHandleW(nullptr), 0);
+    m_kbdHook = kbdHook;
+    qInfo("SystemControlService: WH_KEYBOARD_LL Alt+Space hook %s",
+          kbdHook ? "installed" : "failed");
+
+    m_hotkeyRetryTimer.setInterval(5000);
+    connect(&m_hotkeyRetryTimer, &QTimer::timeout, this, &SystemControlService::registerHotkeys);
+    registerHotkeys();
     refresh();
 #endif
 }
@@ -87,6 +160,17 @@ SystemControlService::SystemControlService(QObject* parent)
 SystemControlService::~SystemControlService()
 {
 #ifdef Q_OS_WIN
+    m_hotkeyRetryTimer.stop();
+    if (m_kbdHook) {
+        UnhookWindowsHookEx(static_cast<HHOOK>(m_kbdHook));
+        m_kbdHook = nullptr;
+    }
+    s_hotkeyMsgHwnd = nullptr;
+    s_altSpaceDown = false;
+    if (m_hotkeyMsgHwnd) {
+        DestroyWindow(static_cast<HWND>(m_hotkeyMsgHwnd));
+        m_hotkeyMsgHwnd = nullptr;
+    }
     if (m_hotkeyRegistered)
         UnregisterHotKey(nullptr, kQuickPanelHotkeyId);
     if (m_spotlightHotkeyRegistered)
@@ -98,12 +182,42 @@ SystemControlService::~SystemControlService()
 #endif
 }
 
+void SystemControlService::registerHotkeys()
+{
+#ifdef Q_OS_WIN
+    if (!m_hotkeyRegistered) {
+        m_hotkeyRegistered = (RegisterHotKey(nullptr, kQuickPanelHotkeyId, MOD_CONTROL | MOD_ALT, 'A') != FALSE);
+        qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+A %s",
+              m_hotkeyRegistered ? "ok" : "pending");
+    }
+    if (!m_clipboardHotkeyRegistered) {
+        m_clipboardHotkeyRegistered = (RegisterHotKey(nullptr, kClipboardHotkeyId, MOD_CONTROL | MOD_ALT, 'V') != FALSE);
+        qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+V %s",
+              m_clipboardHotkeyRegistered ? "ok" : "pending");
+    }
+    if (!m_kbdHook && !m_spotlightHotkeyRegistered) {
+        m_spotlightHotkeyRegistered = (RegisterHotKey(nullptr, kSpotlightHotkeyId, MOD_ALT, VK_SPACE) != FALSE);
+    }
+
+    const bool needRetry = !m_hotkeyRegistered || !m_clipboardHotkeyRegistered
+                           || (!m_kbdHook && !m_spotlightHotkeyRegistered);
+    if (needRetry && !m_hotkeyRetryTimer.isActive())
+        m_hotkeyRetryTimer.start();
+    else if (!needRetry && m_hotkeyRetryTimer.isActive())
+        m_hotkeyRetryTimer.stop();
+#endif
+}
+
 bool SystemControlService::nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result)
 {
     Q_UNUSED(result);
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
         const MSG* msg = static_cast<const MSG*>(message);
+        if (msg && msg->message == kLlAltSpaceMsg && msg->hwnd == static_cast<HWND>(m_hotkeyMsgHwnd)) {
+            emit spotlightToggleRequested();
+            return true;
+        }
         if (msg && msg->message == WM_HOTKEY) {
             const int id = static_cast<int>(msg->wParam);
             if (id == kQuickPanelHotkeyId) {
@@ -402,9 +516,88 @@ void SystemControlService::lockScreen()
 void SystemControlService::sleepPc()
 {
 #ifdef Q_OS_WIN
-    QProcess::startDetached(QStringLiteral("rundll32.exe"),
-                            { QStringLiteral("powrprof.dll,SetSuspendState"), QStringLiteral("0,1,0") });
+    using FnSetSuspendState = BOOLEAN(WINAPI*)(BOOLEAN, BOOLEAN, BOOLEAN);
+    HMODULE powr = LoadLibraryW(L"powrprof.dll");
+    auto pSuspend = powr ? reinterpret_cast<FnSetSuspendState>(GetProcAddress(powr, "SetSuspendState")) : nullptr;
+    if (!pSuspend || !pSuspend(FALSE, FALSE, FALSE)) {
+        QProcess::startDetached(QStringLiteral("rundll32.exe"),
+                                { QStringLiteral("powrprof.dll,SetSuspendState"), QStringLiteral("0,1,0") });
+    }
 #endif
+}
+
+void SystemControlService::shutdownPc()
+{
+#ifdef Q_OS_WIN
+    enableShutdownPrivilege();
+    if (!ExitWindowsEx(EWX_POWEROFF | EWX_FORCEIFHUNG,
+                       SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED)) {
+        QProcess::startDetached(QStringLiteral("shutdown.exe"),
+                                { QStringLiteral("/s"), QStringLiteral("/t"), QStringLiteral("0") });
+    }
+#endif
+}
+
+void SystemControlService::restartPc()
+{
+#ifdef Q_OS_WIN
+    enableShutdownPrivilege();
+    if (!ExitWindowsEx(EWX_REBOOT | EWX_FORCEIFHUNG,
+                       SHTDN_REASON_MAJOR_OTHER | SHTDN_REASON_MINOR_OTHER | SHTDN_REASON_FLAG_PLANNED)) {
+        QProcess::startDetached(QStringLiteral("shutdown.exe"),
+                                { QStringLiteral("/r"), QStringLiteral("/t"), QStringLiteral("0") });
+    }
+#endif
+}
+
+void SystemControlService::hibernatePc()
+{
+#ifdef Q_OS_WIN
+    enableShutdownPrivilege();
+    using FnSetSuspendState = BOOLEAN(WINAPI*)(BOOLEAN, BOOLEAN, BOOLEAN);
+    HMODULE powr = LoadLibraryW(L"powrprof.dll");
+    auto pSuspend = powr ? reinterpret_cast<FnSetSuspendState>(GetProcAddress(powr, "SetSuspendState")) : nullptr;
+    if (!pSuspend || !pSuspend(TRUE, FALSE, FALSE)) {
+        QProcess::startDetached(QStringLiteral("shutdown.exe"), { QStringLiteral("/h") });
+    }
+#endif
+}
+
+void SystemControlService::signOut()
+{
+#ifdef Q_OS_WIN
+    if (!ExitWindowsEx(EWX_LOGOFF | EWX_FORCEIFHUNG, 0)) {
+        QProcess::startDetached(QStringLiteral("shutdown.exe"), { QStringLiteral("/l") });
+    }
+#endif
+}
+
+QString SystemControlService::pickImageFile(const QString& title)
+{
+#ifdef Q_OS_WIN
+    using FnGetOpenFileNameW = BOOL(WINAPI*)(LPOPENFILENAMEW);
+    HMODULE comdlg = LoadLibraryW(L"comdlg32.dll");
+    auto pGetOpen = comdlg ? reinterpret_cast<FnGetOpenFileNameW>(GetProcAddress(comdlg, "GetOpenFileNameW")) : nullptr;
+    if (!pGetOpen)
+        return {};
+
+    wchar_t fileBuf[MAX_PATH * 4]{};
+    const std::wstring wTitle = title.isEmpty() ? std::wstring(L"Select Image") : title.toStdWString();
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = nullptr;
+    ofn.lpstrFilter = L"Image Files (*.png;*.jpg;*.jpeg;*.webp)\0*.png;*.jpg;*.jpeg;*.webp\0All Files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = fileBuf;
+    ofn.nMaxFile = static_cast<DWORD>(sizeof(fileBuf) / sizeof(wchar_t));
+    ofn.lpstrTitle = wTitle.c_str();
+    ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    if (pGetOpen(&ofn)) {
+        return QUrl::fromLocalFile(QString::fromWCharArray(fileBuf)).toString();
+    }
+#else
+    Q_UNUSED(title);
+#endif
+    return {};
 }
 
 #ifdef Q_OS_WIN

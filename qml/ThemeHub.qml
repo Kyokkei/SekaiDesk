@@ -143,14 +143,40 @@ Item {
     property bool wNotesVisible: ConfigStore.boolValue("widgets.notes.visible", false)
     property bool wLyricsVisible: ConfigStore.boolValue("widgets.lyrics.visible", false)
     property bool wProfileVisible: ConfigStore.boolValue("widgets.profile.visible", false)
+    property bool wCalendarVisible: ConfigStore.boolValue("widgets.calendar.visible", false)
 
-    // Clock widget style ("stack" | "keys") and format
-    property string clockStyle: ConfigStore.stringValue("widgets.clock.style", "stack")
+    // Clock widget style (0=KEYS, 1=TOWER, 2=STICKER, 3=STACK) and format
+    readonly property var clockDesignNames: ["KEYS", "TOWER", "STICKER", "STACK"]
+    property int clockStyle: {
+        const raw = ConfigStore.get("widgets.clock.style", 3)
+        if (typeof raw === "number")
+            return Math.max(0, Math.min(3, Math.round(raw)))
+        const s = String(raw || "").toLowerCase()
+        if (s === "keys" || s === "0") return 0
+        if (s === "tower" || s === "1") return 1
+        if (s === "sticker" || s === "2") return 2
+        return 3
+    }
     property bool clockUse24h: ConfigStore.boolValue("widgets.clock.use24h", false)
+    readonly property bool clock24h: clockUse24h
 
     function setClockStyle(st) {
-        clockStyle = (st === "keys") ? "keys" : "stack"
-        ConfigStore.set("widgets.clock.style", clockStyle)
+        let idx = 3
+        if (typeof st === "number") {
+            idx = Math.max(0, Math.min(3, Math.round(st)))
+        } else {
+            const s = String(st || "").toLowerCase()
+            if (s === "keys" || s === "0") idx = 0
+            else if (s === "tower" || s === "1") idx = 1
+            else if (s === "sticker" || s === "2") idx = 2
+            else idx = 3
+        }
+        clockStyle = idx
+        ConfigStore.set("widgets.clock.style", idx)
+    }
+
+    function cycleClockStyle() {
+        setClockStyle((clockStyle + 1) % 4)
     }
 
     function setClockUse24h(v) {
@@ -158,19 +184,45 @@ Item {
         ConfigStore.set("widgets.clock.use24h", clockUse24h)
     }
 
+    // Weather widget preferences
+    property bool weatherMinimal: ConfigStore.boolValue("widgets.weather.minimal", false)
+    property string weatherView: {
+        const v = ConfigStore.stringValue("widgets.weather.view", "hourly")
+        return v === "days" ? "days" : "hourly"
+    }
+
+    function setWeatherMinimal(v) {
+        weatherMinimal = !!v
+        ConfigStore.set("widgets.weather.minimal", weatherMinimal)
+    }
+
+    function setWeatherView(v) {
+        weatherView = (v === "days") ? "days" : "hourly"
+        ConfigStore.set("widgets.weather.view", weatherView)
+    }
+
+    // Todo widget compact toggle
+    property bool todoSmall: ConfigStore.boolValue("widgets.todo.small", false)
+    function setTodoSmall(v) {
+        todoSmall = !!v
+        ConfigStore.set("widgets.todo.small", todoSmall)
+    }
+
     // Desktop widgets coordinates (clamped so nothing spawns trapped under TopBar)
-    property int wClockX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.clock.x", Math.max(320, screenW - 210))))
-    property int wClockY: Math.max(54, ConfigStore.intValue("widgets.clock.y", 68))
+    property int wClockX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.clock.x", Math.max(320, screenW - 350))))
+    property int wClockY: Math.max(54, ConfigStore.intValue("widgets.clock.y", 64))
     property int wWeatherX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.weather.x", 28)))
     property int wWeatherY: Math.max(54, ConfigStore.intValue("widgets.weather.y", 346))
     property int wProfileX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.profile.x", 28)))
     property int wProfileY: Math.max(54, ConfigStore.intValue("widgets.profile.y", 56))
-    property int wTodoX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.todo.x", Math.max(320, screenW - 310))))
-    property int wTodoY: Math.max(54, ConfigStore.intValue("widgets.todo.y", 280))
-    property int wNotesX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.notes.x", Math.max(320, screenW - 310))))
-    property int wNotesY: Math.max(54, ConfigStore.intValue("widgets.notes.y", 568))
-    property int wLyricsX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.lyrics.x", Math.max(320, Math.round((screenW - 360) * 0.5)))))
-    property int wLyricsY: Math.max(54, ConfigStore.intValue("widgets.lyrics.y", Math.max(400, screenH - 280)))
+    property int wTodoX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.todo.x", Math.max(320, screenW - 350))))
+    property int wTodoY: Math.max(54, ConfigStore.intValue("widgets.todo.y", 356))
+    property int wNotesX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.notes.x", Math.max(320, screenW - 350))))
+    property int wNotesY: Math.max(54, ConfigStore.intValue("widgets.notes.y", 644))
+    property int wLyricsX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.lyrics.x", Math.max(240, Math.round((screenW - 600) * 0.5)))))
+    property int wLyricsY: Math.max(54, ConfigStore.intValue("widgets.lyrics.y", Math.max(400, screenH - 250)))
+    property int wCalendarX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.calendar.x", 364)))
+    property int wCalendarY: Math.max(54, ConfigStore.intValue("widgets.calendar.y", 56))
 
     function setWidgetVisible(key, vis) {
         const v = !!vis
@@ -181,6 +233,7 @@ Item {
         else if (key === "notes") wNotesVisible = v
         else if (key === "lyrics") wLyricsVisible = v
         else if (key === "profile") wProfileVisible = v
+        else if (key === "calendar") wCalendarVisible = v
     }
 
     function saveWidgetPos(key, nx, ny) {
@@ -194,15 +247,17 @@ Item {
         else if (key === "notes") { wNotesX = cx; wNotesY = cy }
         else if (key === "lyrics") { wLyricsX = cx; wLyricsY = cy }
         else if (key === "profile") { wProfileX = cx; wProfileY = cy }
+        else if (key === "calendar") { wCalendarX = cx; wCalendarY = cy }
     }
 
     function resetWidgetPositions() {
         saveWidgetPos("profile", 28, 56)
         saveWidgetPos("weather", 28, 346)
-        saveWidgetPos("clock", Math.max(320, screenW - 210), 68)
-        saveWidgetPos("todo", Math.max(320, screenW - 310), 280)
-        saveWidgetPos("notes", Math.max(320, screenW - 310), 568)
-        saveWidgetPos("lyrics", Math.max(320, Math.round((screenW - 360) * 0.5)), Math.max(400, screenH - 280))
+        saveWidgetPos("calendar", 364, 56)
+        saveWidgetPos("clock", Math.max(320, screenW - 350), 64)
+        saveWidgetPos("todo", Math.max(320, screenW - 350), 356)
+        saveWidgetPos("notes", Math.max(320, screenW - 350), 644)
+        saveWidgetPos("lyrics", Math.max(240, Math.round((screenW - 600) * 0.5)), Math.max(400, screenH - 250))
     }
 
     Component.onDestruction: ConfigStore.flush()
@@ -240,6 +295,15 @@ Item {
         saveTodoItems(next)
     }
 
+    function renameTodo(idx, newText) {
+        const clean = (newText || "").trim()
+        if (idx < 0 || idx >= todoItems.length || clean === "")
+            return
+        const next = todoItems.slice()
+        next[idx] = { text: clean, done: !!next[idx].done }
+        saveTodoItems(next)
+    }
+
     function removeTodo(idx) {
         if (idx < 0 || idx >= todoItems.length)
             return
@@ -248,19 +312,122 @@ Item {
         saveTodoItems(next)
     }
 
-    // Notes & Profile persisted text
+    function clearDoneTodos() {
+        const next = todoItems.filter(it => !it.done)
+        saveTodoItems(next)
+    }
+
+    // Notes persisted text & SekaiPop paper tint
     property string noteText: ConfigStore.stringValue("widgets.notes.text", "Quick note...\n• Alt+Space: Spotlight\n• Ctrl+Alt+V: Clipboard")
+    property string noteTint: ConfigStore.stringValue("widgets.notes.tint", "butter")
     function saveNoteText(t) {
         noteText = t
         ConfigStore.set("widgets.notes.text", t)
     }
+    function setNoteTint(t) {
+        noteTint = t || "butter"
+        ConfigStore.set("widgets.notes.tint", noteTint)
+    }
 
+    // Profile persisted text & customizable images
     property string profileName: ConfigStore.stringValue("widgets.profile.name", "Yozora")
     property string profileStatus: ConfigStore.stringValue("widgets.profile.status", "Wonderhoy Desktop Shell")
+    property string profileAvatarUrl: ConfigStore.stringValue("widgets.profile.avatar", "")
+    property string profileBannerUrl: ConfigStore.stringValue("widgets.profile.banner", "")
+
     function saveProfile(name, status) {
         profileName = name.trim() !== "" ? name.trim() : "Yozora"
         profileStatus = status.trim() !== "" ? status.trim() : "SekaiDesk"
         ConfigStore.set("widgets.profile.name", profileName)
         ConfigStore.set("widgets.profile.status", profileStatus)
+    }
+
+    function setProfileAvatar(url) {
+        profileAvatarUrl = String(url || "")
+        ConfigStore.set("widgets.profile.avatar", profileAvatarUrl)
+    }
+
+    function setProfileBanner(url) {
+        profileBannerUrl = String(url || "")
+        ConfigStore.set("widgets.profile.banner", profileBannerUrl)
+    }
+
+    // Calendar Events & Deadlines persisted in ConfigStore
+    property var calendarEvents: {
+        const raw = ConfigStore.get("widgets.calendar.events", null)
+        if (Array.isArray(raw))
+            return raw
+        const rawJson = ConfigStore.stringValue("widgets.calendar.eventsJson", "")
+        if (rawJson !== "") {
+            try {
+                const parsed = JSON.parse(rawJson)
+                if (Array.isArray(parsed))
+                    return parsed
+            } catch (e) {}
+        }
+        return []
+    }
+
+    function saveCalendarEvents(arr) {
+        const clean = Array.isArray(arr) ? arr : []
+        calendarEvents = clean
+        ConfigStore.set("widgets.calendar.events", clean)
+        ConfigStore.set("widgets.calendar.eventsJson", JSON.stringify(clean))
+    }
+
+    function nextCalendarEventId(list) {
+        const used = {}
+        for (let i = 0; i < list.length; ++i)
+            used[list[i].id] = true
+        let n = list.length + 1
+        while (used["e" + n])
+            n++
+        return "e" + n
+    }
+
+    function upsertCalendarEvent(ev) {
+        if (!ev || !ev.title || !ev.date)
+            return
+        const next = calendarEvents.slice()
+        const entry = {
+            id: ev.id && ev.id !== "" ? ev.id : nextCalendarEventId(next),
+            title: String(ev.title).trim().slice(0, 80),
+            date: String(ev.date),
+            time: String(ev.time || ""),
+            note: String(ev.note || "").trim().slice(0, 240),
+            color: Math.max(0, Math.min(4, parseInt(ev.color, 10) || 0)),
+            kind: ev.kind === "deadline" ? "deadline" : "event",
+            done: ev.kind === "deadline" && ev.done === true
+        }
+        let replaced = false
+        for (let i = 0; i < next.length; ++i) {
+            if (next[i].id === entry.id) {
+                next[i] = entry
+                replaced = true
+                break
+            }
+        }
+        if (!replaced)
+            next.push(entry)
+        saveCalendarEvents(next)
+    }
+
+    function toggleCalendarDone(id) {
+        const next = calendarEvents.slice()
+        for (let i = 0; i < next.length; ++i) {
+            if (next[i].id === id) {
+                const cur = next[i]
+                next[i] = {
+                    id: cur.id, title: cur.title, date: cur.date, time: cur.time,
+                    note: cur.note, color: cur.color, kind: cur.kind, done: !cur.done
+                }
+                saveCalendarEvents(next)
+                return
+            }
+        }
+    }
+
+    function deleteCalendarEvent(id) {
+        saveCalendarEvents(calendarEvents.filter(e => e.id !== id))
     }
 }

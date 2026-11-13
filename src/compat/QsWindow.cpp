@@ -1,12 +1,20 @@
 #include "QsWindow.h"
 
 #include <QCoreApplication>
+#include <QEvent>
 #include <QGuiApplication>
+#include <QList>
 #include <QQuickItem>
+#include <QSet>
+#include <QVector>
 
 #ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#include <dwmapi.h>
+#include <ole2.h>
 #include <shellapi.h>
 
 static constexpr UINT kAppBarCallbackMsg = WM_APP + 0x55;
@@ -97,6 +105,117 @@ QRegion QsRegion::regionRelativeTo(const QQuickWindow* win) const
     return out;
 }
 
+#ifdef Q_OS_WIN
+namespace {
+QSet<HWND> s_desktopHwnds;
+QList<PanelWindow*> s_desktopWindows;
+HWINEVENTHOOK s_fgHook = nullptr;
+HWINEVENTHOOK s_minHook = nullptr;
+QTimer* s_restackTimer = nullptr;
+
+HWND findDesktopHostHwnd()
+{
+    HWND progman = FindWindowW(L"Progman", nullptr);
+    if (progman && FindWindowExW(progman, nullptr, L"SHELLDLL_DefView", nullptr))
+        return progman;
+
+    struct FindHostCtx {
+        HWND host = nullptr;
+    } ctx;
+    EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+        if (FindWindowExW(hwnd, nullptr, L"SHELLDLL_DefView", nullptr)) {
+            reinterpret_cast<FindHostCtx*>(lParam)->host = hwnd;
+            return FALSE;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.host ? ctx.host : progman;
+}
+
+HWND nonWidgetPrevAboveDesktopHost(HWND host, HWND self)
+{
+    if (!host || !IsWindow(host))
+        return nullptr;
+    HWND cur = GetWindow(host, GW_HWNDPREV);
+    while (cur) {
+        if (cur != self && !s_desktopHwnds.contains(cur) && IsWindowVisible(cur)) {
+            if ((GetWindowLongPtrW(cur, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
+                return nullptr;
+            return cur;
+        }
+        cur = GetWindow(cur, GW_HWNDPREV);
+    }
+    return nullptr;
+}
+
+void CALLBACK desktopWinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject,
+                                  LONG, DWORD, DWORD)
+{
+    if (s_desktopWindows.isEmpty())
+        return;
+    if (event == EVENT_SYSTEM_FOREGROUND && idObject == OBJID_WINDOW && hwnd) {
+        wchar_t cls[64]{};
+        GetClassNameW(hwnd, cls, 64);
+        const bool isDesktop = (wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0);
+        if (!isDesktop && s_desktopHwnds.contains(hwnd))
+            return;
+        if (s_restackTimer)
+            s_restackTimer->start(30);
+    } else if (event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND) {
+        if (s_restackTimer)
+            s_restackTimer->start(30);
+    }
+}
+
+void ensureDesktopHooksInstalled()
+{
+    if (!s_restackTimer) {
+        s_restackTimer = new QTimer(QCoreApplication::instance());
+        s_restackTimer->setSingleShot(true);
+        QObject::connect(s_restackTimer, &QTimer::timeout, []() {
+            const QList<PanelWindow*> wins = s_desktopWindows;
+            for (PanelWindow* w : wins) {
+                if (!w || !w->isVisible() || !w->desktopLayer())
+                    continue;
+                HWND h = reinterpret_cast<HWND>(w->winId());
+                if (!h || !IsWindow(h))
+                    continue;
+                if (IsIconic(h))
+                    ShowWindow(h, SW_SHOWNOACTIVATE);
+                w->raiseOnDesktop();
+            }
+        });
+    }
+    if (!s_fgHook) {
+        s_fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
+                                   nullptr, desktopWinEventProc, 0, 0,
+                                   WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    }
+    if (!s_minHook) {
+        s_minHook = SetWinEventHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND,
+                                    nullptr, desktopWinEventProc, 0, 0,
+                                    WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    }
+}
+
+void cleanupDesktopHooksIfEmpty()
+{
+    if (!s_desktopWindows.isEmpty())
+        return;
+    if (s_restackTimer)
+        s_restackTimer->stop();
+    if (s_fgHook) {
+        UnhookWinEvent(s_fgHook);
+        s_fgHook = nullptr;
+    }
+    if (s_minHook) {
+        UnhookWinEvent(s_minHook);
+        s_minHook = nullptr;
+    }
+}
+} // namespace
+#endif
+
 // ---------------------------------------------------------------------------
 // PanelWindow
 // ---------------------------------------------------------------------------
@@ -128,6 +247,7 @@ PanelWindow::PanelWindow(QWindow* parent)
             applyClickThrough();
             updateMask();
             applyBlurBehind();
+            applyDesktopLayer();
             applyFileDrops();
             if (m_reserveTopBar)
                 registerOrUpdateAppBar();
@@ -150,6 +270,7 @@ PanelWindow::PanelWindow(QWindow* parent)
 
 PanelWindow::~PanelWindow()
 {
+    unregisterDesktopWindow();
     unregisterAppBar();
 }
 
@@ -558,11 +679,57 @@ void PanelWindow::verifyFullscreenState()
 #endif
 }
 
+bool PanelWindow::event(QEvent* e)
+{
+    const bool res = QQuickWindow::event(e);
+#ifdef Q_OS_WIN
+    if (e->type() == QEvent::WinIdChange) {
+        unregisterDesktopWindow();
+        if (m_desktopLayer && isVisible())
+            applyDesktopLayer();
+        if (m_acceptFileDrops && isVisible())
+            applyFileDrops();
+    } else if (e->type() == QEvent::Show) {
+        if (m_desktopLayer)
+            applyDesktopLayer();
+        if (m_acceptFileDrops)
+            applyFileDrops();
+    }
+#endif
+    return res;
+}
+
 bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintptr* result)
 {
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
         const MSG* msg = static_cast<const MSG*>(message);
+        if (msg && m_desktopLayer) {
+            if (msg->message == WM_SYSCOMMAND) {
+                const WPARAM cmd = msg->wParam & 0xFFF0;
+                if (cmd == SC_MINIMIZE || cmd == SC_MAXIMIZE) {
+                    if (result)
+                        *result = 0;
+                    return true;
+                }
+            } else if (msg->message == WM_MOUSEACTIVATE && !m_desktopAllowFocus) {
+                if (result)
+                    *result = MA_NOACTIVATE;
+                return true;
+            } else if (msg->message == WM_WINDOWPOSCHANGING) {
+                auto* pos = reinterpret_cast<WINDOWPOS*>(msg->lParam);
+                if (pos && !(pos->flags & SWP_NOZORDER)) {
+                    const HWND host = findDesktopHostHwnd();
+                    const HWND targetAfter = nonWidgetPrevAboveDesktopHost(host, msg->hwnd);
+                    if (targetAfter)
+                        pos->hwndInsertAfter = targetAfter;
+                    else if (host)
+                        pos->hwndInsertAfter = HWND_NOTOPMOST;
+                    else
+                        pos->hwndInsertAfter = HWND_BOTTOM;
+                }
+            }
+        }
         if (msg && msg->message == WM_DROPFILES && m_acceptFileDrops) {
             HDROP hDrop = reinterpret_cast<HDROP>(msg->wParam);
             const UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
@@ -571,9 +738,9 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
                 const UINT len = DragQueryFileW(hDrop, i, nullptr, 0);
                 if (len == 0)
                     continue;
-                QString path(static_cast<int>(len), Qt::Uninitialized);
-                DragQueryFileW(hDrop, i, reinterpret_cast<wchar_t*>(path.data()), len + 1);
-                dropped << path;
+                QVector<wchar_t> buf(static_cast<int>(len) + 1, 0);
+                DragQueryFileW(hDrop, i, buf.data(), len + 1);
+                dropped << QString::fromWCharArray(buf.data(), static_cast<int>(len));
             }
             DragFinish(hDrop);
             if (!dropped.isEmpty())
@@ -641,32 +808,115 @@ void PanelWindow::setDesktopLayer(bool on)
         return;
     m_desktopLayer = on;
     if (on) {
-        setFlags(flags() & ~Qt::WindowStaysOnTopHint);
+        setFlags((flags() | Qt::Tool) & ~Qt::WindowStaysOnTopHint);
+        applyDesktopLayer();
     } else {
+        unregisterDesktopWindow();
         setFlags(flags() | Qt::WindowStaysOnTopHint);
-    }
 #ifdef Q_OS_WIN
-    if (isVisible()) {
-        HWND hwnd = reinterpret_cast<HWND>(winId());
-        if (hwnd) {
-            SetWindowPos(hwnd, on ? HWND_NOTOPMOST : HWND_TOPMOST,
-                         0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        if (isVisible()) {
+            HWND hwnd = reinterpret_cast<HWND>(winId());
+            if (hwnd && IsWindow(hwnd)) {
+                LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+                exStyle &= ~WS_EX_NOACTIVATE;
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
+                BOOL excl = FALSE;
+                DwmSetWindowAttribute(hwnd, 12 /*DWMWA_EXCLUDED_FROM_PEEK*/, &excl, sizeof(excl));
+                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
         }
-    }
 #endif
+    }
     emit desktopLayerChanged();
 }
 
-void PanelWindow::raiseOnDesktop()
+void PanelWindow::setDesktopAllowFocus(bool on)
+{
+    if (m_desktopAllowFocus == on)
+        return;
+    m_desktopAllowFocus = on;
+#ifdef Q_OS_WIN
+    if (m_desktopLayer && isVisible()) {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd && IsWindow(hwnd)) {
+            LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            if (m_desktopAllowFocus)
+                exStyle &= ~WS_EX_NOACTIVATE;
+            else
+                exStyle |= WS_EX_NOACTIVATE;
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
+        }
+    }
+#endif
+    emit desktopAllowFocusChanged();
+}
+
+void PanelWindow::applyDesktopLayer()
 {
 #ifdef Q_OS_WIN
     if (!m_desktopLayer || !isVisible())
         return;
     HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (!hwnd)
+    if (!hwnd || !IsWindow(hwnd))
         return;
-    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    if (m_desktopHwnd && m_desktopHwnd != hwnd)
+        unregisterDesktopWindow();
+
+    m_desktopHwnd = hwnd;
+    s_desktopHwnds.insert(hwnd);
+    if (!s_desktopWindows.contains(this))
+        s_desktopWindows.append(this);
+    ensureDesktopHooksInstalled();
+
+    LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    exStyle |= WS_EX_TOOLWINDOW;
+    if (m_desktopAllowFocus)
+        exStyle &= ~WS_EX_NOACTIVATE;
+    else
+        exStyle |= WS_EX_NOACTIVATE;
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
+
+    BOOL excl = TRUE;
+    DwmSetWindowAttribute(hwnd, 12 /*DWMWA_EXCLUDED_FROM_PEEK*/, &excl, sizeof(excl));
+
+    restackOnDesktop();
+#endif
+}
+
+void PanelWindow::restackOnDesktop()
+{
+#ifdef Q_OS_WIN
+    if (!m_desktopLayer || !isVisible())
+        return;
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+    const HWND host = findDesktopHostHwnd();
+    const HWND targetAfter = nonWidgetPrevAboveDesktopHost(host, hwnd);
+    const HWND insertAfter = targetAfter ? targetAfter : (host ? HWND_NOTOPMOST : HWND_BOTTOM);
+    SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+#endif
+}
+
+void PanelWindow::unregisterDesktopWindow()
+{
+#ifdef Q_OS_WIN
+    s_desktopWindows.removeAll(this);
+    if (m_desktopHwnd) {
+        s_desktopHwnds.remove(static_cast<HWND>(m_desktopHwnd));
+        m_desktopHwnd = nullptr;
+    }
+    cleanupDesktopHooksIfEmpty();
+#endif
+}
+
+void PanelWindow::raiseOnDesktop()
+{
+#ifdef Q_OS_WIN
+    restackOnDesktop();
 #endif
 }
 
@@ -685,10 +935,12 @@ void PanelWindow::applyFileDrops()
     if (!isVisible())
         return;
     HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (!hwnd)
+    if (!hwnd || !IsWindow(hwnd))
         return;
-    DragAcceptFiles(hwnd, m_acceptFileDrops ? TRUE : FALSE);
     if (m_acceptFileDrops) {
+        // Qt DropArea / OLE IDropTarget suppresses legacy WM_DROPFILES and fails across UIPI;
+        // revoke any OLE drop target before enabling WM_DROPFILES + UIPI message filter.
+        RevokeDragDrop(hwnd);
         using FnFilterEx = BOOL(WINAPI*)(HWND, UINT, DWORD, void*);
         static auto fnFilter = reinterpret_cast<FnFilterEx>(
             GetProcAddress(GetModuleHandleW(L"user32.dll"), "ChangeWindowMessageFilterEx"));
@@ -699,6 +951,7 @@ void PanelWindow::applyFileDrops()
             fnFilter(hwnd, 0x0049 /*WM_COPYGLOBALDATA*/, 1 /*MSGFLT_ALLOW*/, nullptr);
         }
     }
+    DragAcceptFiles(hwnd, m_acceptFileDrops ? TRUE : FALSE);
 #endif
 }
 

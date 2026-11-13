@@ -12,18 +12,27 @@ Item {
     Connections {
         target: SystemControl
         function onSpotlightToggleRequested() {
-            if (!themeHub.spotlightOpen && (Date.now() - themeHub.spotlightClosedAt) < 200)
+            if (spotlightWin.visible) {
+                spotlightWin.closeSpotlight()
+                return
+            }
+            if ((Date.now() - themeHub.spotlightClosedAt) < 80)
                 return
             themeHub.clipboardOpen = false
             themeHub.settingsOpen = false
-            themeHub.spotlightOpen = !themeHub.spotlightOpen
+            themeHub.spotlightOpen = true
         }
         function onClipboardToggleRequested() {
-            if (!themeHub.clipboardOpen && (Date.now() - themeHub.clipboardClosedAt) < 200)
+            if (clipWin.visible) {
+                themeHub.clipboardClosedAt = Date.now()
+                themeHub.clipboardOpen = false
+                return
+            }
+            if ((Date.now() - themeHub.clipboardClosedAt) < 80)
                 return
             themeHub.spotlightOpen = false
             themeHub.settingsOpen = false
-            themeHub.clipboardOpen = !themeHub.clipboardOpen
+            themeHub.clipboardOpen = true
         }
     }
 
@@ -91,6 +100,10 @@ Item {
         }
 
         readonly property var systemCatalog: [
+            { name: "Shut Down PC", sub: "Power • Power off Windows computer", keys: "shutdown shut down power off turn off halt", badge: "POWER", act: "shutdown" },
+            { name: "Restart PC", sub: "Power • Reboot Windows computer", keys: "restart reboot reset", badge: "POWER", act: "restart" },
+            { name: "Hibernate PC", sub: "Power • Save session to disk & power off", keys: "hibernate suspend disk", badge: "POWER", act: "hibernate" },
+            { name: "Sign Out", sub: "Power • Log off current Windows user", keys: "sign out signout log off logoff", badge: "POWER", act: "signout" },
             { name: "Lock PC", sub: "Sys • Lock Windows workstation (Win+L)", keys: "lock workstation", badge: "SYS", act: "lock" },
             { name: "Sleep Computer", sub: "Sys • Suspend Windows to sleep", keys: "sleep suspend", badge: "SYS", act: "sleep" },
             { name: "Screenshot (Snip)", sub: "Sys • Open Windows Snipping overlay", keys: "screenshot snip capture", badge: "SYS", act: "screenshot" },
@@ -109,10 +122,37 @@ Item {
             { name: "Widget: Sticker Clock", sub: "Toggle floating SekaiPop clock widget", keys: "widget clock time", badge: "WIDGET", widgetKey: "clock" },
             { name: "Widget: Weather Card", sub: "Toggle live weather & forecast widget", keys: "widget weather forecast", badge: "WIDGET", widgetKey: "weather" },
             { name: "Widget: Profile Card", sub: "Toggle system stats & user utility card", keys: "widget profile card user stats", badge: "WIDGET", widgetKey: "profile" },
+            { name: "Widget: Calendar Card", sub: "Toggle desktop calendar & events widget", keys: "widget calendar events schedule", badge: "WIDGET", widgetKey: "calendar" },
             { name: "Widget: Todo Checklist", sub: "Toggle desktop task checklist", keys: "widget todo tasks list", badge: "WIDGET", widgetKey: "todo" },
             { name: "Widget: Sticky Note", sub: "Toggle quick desktop scratchpad", keys: "widget note sticky scratchpad", badge: "WIDGET", widgetKey: "notes" },
             { name: "Widget: Live Lyrics", sub: "Toggle synced karaoke lyrics widget", keys: "widget lyrics karaoke music", badge: "WIDGET", widgetKey: "lyrics" }
         ]
+
+        function scoreCatalogItem(sc, qLower) {
+            if (qLower === "")
+                return 0
+            const nameLower = sc.name.toLowerCase()
+            const actLower = (sc.act || "").toLowerCase()
+            const wKeyLower = (sc.widgetKey || "").toLowerCase()
+            const keysLower = sc.keys.toLowerCase()
+            const tokens = keysLower.split(/\s+/)
+
+            if (nameLower === qLower || actLower === qLower || wKeyLower === qLower)
+                return 1200
+            for (let i = 0; i < tokens.length; ++i) {
+                if (tokens[i] === qLower)
+                    return 1180
+            }
+            if (nameLower.startsWith(qLower) || actLower.startsWith(qLower) || keysLower.startsWith(qLower))
+                return 1080
+            for (let i = 0; i < tokens.length; ++i) {
+                if (tokens[i].startsWith(qLower))
+                    return 1020
+            }
+            if (nameLower.includes(qLower) || keysLower.includes(qLower))
+                return 550
+            return 0
+        }
 
         function refreshResults() {
             const raw = (query || "")
@@ -232,7 +272,7 @@ Item {
                 })
             }
 
-            // 5. Theme quick-switch (`theme ...` or matching band name)
+            // 5. Theme quick-switch (`theme ...`)
             if (qLower.startsWith("theme")) {
                 const tq = qLower.replace(/^theme\s*/, "").trim()
                 for (let b = 0; b < themeHub.bands.length; ++b) {
@@ -250,43 +290,69 @@ Item {
                 }
             }
 
-            // 6. Fuzzy Apps (C++ fuzzy + acronym + usage-frequency ranking)
+            // 6. Scored Merge: System/Power/Widgets + Fuzzy Apps
             if (!isPath && !q.startsWith(">")) {
-                const apps = AppLauncher.searchApps(q)
-                const maxApps = q === "" ? 6 : 7
-                for (let i = 0; i < apps.length && i < maxApps && out.length < 9; ++i) {
-                    const a = apps[i]
-                    out.push({
-                        kind: "app",
-                        name: a.name,
-                        sub: a.target,
-                        badge: a.category || "APP",
-                        target: a.target,
-                        args: a.args || "",
-                        completeText: a.name
-                    })
-                }
-            }
+                const ranked = []
 
-            // 7. System / Windows Settings / Widget quick actions when query matches
-            if (qLower !== "" && !isPath && !q.startsWith(">")) {
-                for (let s = 0; s < systemCatalog.length && out.length < 10; ++s) {
-                    const sc = systemCatalog[s]
-                    if (sc.name.toLowerCase().includes(qLower) || sc.keys.includes(qLower)) {
-                        out.push({
-                            kind: sc.widgetKey ? "widget" : (sc.act ? "sys" : "win"),
-                            name: sc.name,
-                            sub: sc.sub,
-                            badge: sc.badge,
-                            act: sc.act || "",
-                            widgetKey: sc.widgetKey || "",
-                            target: sc.target || ""
-                        })
+                if (qLower !== "") {
+                    for (let s = 0; s < systemCatalog.length; ++s) {
+                        const sc = systemCatalog[s]
+                        const scScore = scoreCatalogItem(sc, qLower)
+                        if (scScore > 0) {
+                            ranked.push({
+                                score: scScore,
+                                order: s,
+                                item: {
+                                    kind: sc.widgetKey ? "widget" : (sc.act ? "sys" : "win"),
+                                    name: sc.name,
+                                    sub: sc.sub,
+                                    badge: sc.badge,
+                                    act: sc.act || "",
+                                    widgetKey: sc.widgetKey || "",
+                                    target: sc.target || ""
+                                }
+                            })
+                        }
                     }
                 }
+
+                const apps = AppLauncher.searchApps(q)
+                const maxApps = q === "" ? 8 : 8
+                for (let i = 0; i < apps.length && i < maxApps; ++i) {
+                    const a = apps[i]
+                    const aNameLower = (a.name || "").toLowerCase()
+                    let aScore = 300 - i * 10
+                    if (qLower !== "") {
+                        if (aNameLower === qLower)
+                            aScore = 950
+                        else if (aNameLower.startsWith(qLower))
+                            aScore = 600 - i
+                    } else {
+                        aScore = 400 - i * 10
+                    }
+                    ranked.push({
+                        score: aScore,
+                        order: 100 + i,
+                        item: {
+                            kind: "app",
+                            name: a.name,
+                            sub: a.target,
+                            badge: a.category || "APP",
+                            target: a.target,
+                            args: a.args || "",
+                            completeText: a.name
+                        }
+                    })
+                }
+
+                ranked.sort((a, b) => (b.score !== a.score) ? (b.score - a.score) : (a.order - b.order))
+                const cap = q !== "" ? 8 : 9
+                for (let i = 0; i < ranked.length && out.length < cap; ++i) {
+                    out.push(ranked[i].item)
+                }
             }
 
-            // 8. Fallback Google Search when user typed text
+            // 7. Fallback Google Search ONLY last when user typed text
             if (q !== "" && !isPath && !q.startsWith(">") && !/^(g|gg|yt|gh|wiki|tr)\s+/i.test(q) && out.length < 9) {
                 out.push({
                     kind: "url",
@@ -323,6 +389,7 @@ Item {
                 const cur = (key === "clock") ? themeHub.wClockVisible
                           : (key === "weather") ? themeHub.wWeatherVisible
                           : (key === "profile") ? themeHub.wProfileVisible
+                          : (key === "calendar") ? themeHub.wCalendarVisible
                           : (key === "todo") ? themeHub.wTodoVisible
                           : (key === "notes") ? themeHub.wNotesVisible
                           : themeHub.wLyricsVisible
@@ -332,7 +399,11 @@ Item {
             }
             if (item.kind === "sys") {
                 closeSpotlight()
-                if (item.act === "lock") WindowTracker.lockWorkstation()
+                if (item.act === "shutdown") SystemControl.shutdownPc()
+                else if (item.act === "restart") SystemControl.restartPc()
+                else if (item.act === "hibernate") SystemControl.hibernatePc()
+                else if (item.act === "signout") SystemControl.signOut()
+                else if (item.act === "lock") WindowTracker.lockWorkstation()
                 else if (item.act === "sleep") WindowTracker.sleepComputer()
                 else if (item.act === "screenshot") WindowTracker.takeScreenshot()
                 else if (item.act === "emptybin") TrashService.emptyTrash()
@@ -505,7 +576,7 @@ Item {
                                 verticalAlignment: Text.AlignVCenter
                                 visible: parent.text === ""
                                 elide: Text.ElideRight
-                                text: "Apps, =math, C:\\path, >cmd, g/yt/gh web, sys, theme..."
+                                text: "Apps, shutdown/lock, =math, C:\\path, >cmd, g/yt/gh web, theme..."
                                 font.family: parent.font.family
                                 font.pixelSize: 13
                                 color: "#94A3B8"
@@ -522,7 +593,7 @@ Item {
                             border.color: themeHub.darkInk
                             Text {
                                 anchors.centerIn: parent
-                                text: "FLOW+ALT"
+                                text: "ALT+SPACE"
                                 font.family: "Consolas"
                                 font.pixelSize: 9
                                 font.weight: Font.Bold
@@ -573,12 +644,15 @@ Item {
                                 height: 24
                                 radius: 7
                                 visible: modelData.kind !== "app"
-                                color: isSel ? "#FFFFFF" : themeHub.bandDeep
+                                color: modelData.badge === "POWER"
+                                       ? (isSel ? "#FFFFFF" : "#FEE2E2")
+                                       : (isSel ? "#FFFFFF" : themeHub.bandDeep)
                                 border.width: 1.5
                                 border.color: themeHub.darkInk
                                 Text {
                                     anchors.centerIn: parent
-                                    text: modelData.kind === "math" ? "="
+                                    text: modelData.badge === "POWER" ? "⏻"
+                                        : modelData.kind === "math" ? "="
                                         : modelData.kind === "path" ? (modelData.badge === "DIR" ? "D" : "F")
                                         : modelData.kind === "shell" ? ">"
                                         : modelData.kind === "url" ? "W"
@@ -587,7 +661,9 @@ Item {
                                     font.family: "Consolas"
                                     font.pixelSize: 12
                                     font.weight: Font.Bold
-                                    color: isSel ? themeHub.darkInk : themeHub.accentA
+                                    color: modelData.badge === "POWER"
+                                           ? "#DC2626"
+                                           : (isSel ? themeHub.darkInk : themeHub.accentA)
                                 }
                             }
 
@@ -626,7 +702,7 @@ Item {
                                 width: Math.max(54, badgeTxt.implicitWidth + 14)
                                 height: 20
                                 radius: 6
-                                color: isSel ? "#FFFFFF" : "#E2E8F0"
+                                color: modelData.badge === "POWER" && !isSel ? "#FEE2E2" : (isSel ? "#FFFFFF" : "#E2E8F0")
                                 border.width: 1
                                 border.color: themeHub.darkInk
                                 Text {
@@ -636,7 +712,7 @@ Item {
                                     font.family: "Segoe UI"
                                     font.pixelSize: 9
                                     font.weight: Font.Bold
-                                    color: themeHub.darkInk
+                                    color: modelData.badge === "POWER" && !isSel ? "#DC2626" : themeHub.darkInk
                                 }
                             }
 
@@ -958,7 +1034,8 @@ Item {
     }
 
     // =========================================================================
-    // 3. DESKTOP DROP SHELF (Drag & Drop Staging Tray)
+    // 3. DESKTOP DROP SHELF (Native WM_DROPFILES + Add File + Paste CF_HDROP)
+    //    NO QML DropArea here so Qt never calls OLE RegisterDragDrop!
     // =========================================================================
     PanelWindow {
         id: shelfWin
@@ -972,7 +1049,7 @@ Item {
         readonly property int cardW: 360
         readonly property int shadow: 5
         width: cardW + shadow
-        height: 360 + shadow
+        height: 380 + shadow
         x: Math.max(12, themeHub.screenW - width - 16)
         y: 52
 
@@ -980,7 +1057,7 @@ Item {
             x: shelfWin.shadow
             y: shelfWin.shadow
             width: shelfWin.cardW
-            height: 360
+            height: 380
             radius: 16
             color: themeHub.darkInk
         }
@@ -990,22 +1067,11 @@ Item {
             x: 0
             y: 0
             width: shelfWin.cardW
-            height: 360
+            height: 380
             radius: 16
             color: "#F8FAFC"
             border.width: 2.5
             border.color: themeHub.darkInk
-
-            DropArea {
-                id: shelfDropArea
-                anchors.fill: parent
-                onDropped: drop => {
-                    if (drop.hasUrls) {
-                        DropShelfService.addUrls(drop.urls)
-                        drop.acceptProposedAction()
-                    }
-                }
-            }
 
             Column {
                 anchors.fill: parent
@@ -1131,17 +1197,17 @@ Item {
 
                 Rectangle {
                     width: parent.width
-                    height: parent.height - 36
+                    height: parent.height - 72
                     radius: 10
-                    color: shelfDropArea.containsDrag ? themeHub.hoverTint : "#FFFFFF"
-                    border.width: shelfDropArea.containsDrag ? 2 : 1.5
-                    border.color: shelfDropArea.containsDrag ? themeHub.darkInk : "#CBD5E1"
+                    color: "#FFFFFF"
+                    border.width: 1.5
+                    border.color: "#CBD5E1"
 
                     Text {
                         anchors.centerIn: parent
                         visible: DropShelfService.count === 0
                         horizontalAlignment: Text.AlignHCenter
-                        text: "Drag & drop files or folders here\nfrom Windows Explorer"
+                        text: "Drag & drop files or folders here\nfrom Windows Explorer\n\nOr use + Add File / Paste below"
                         font.family: "Segoe UI"
                         font.pixelSize: 12
                         color: "#64748B"
@@ -1248,6 +1314,61 @@ Item {
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+
+                // Fallback & Quick Actions Footer (+ Add File / Paste)
+                Row {
+                    width: parent.width
+                    height: 28
+                    spacing: 8
+
+                    Rectangle {
+                        width: (parent.width - 8) * 0.5
+                        height: 28
+                        radius: 8
+                        color: addFileMa.containsMouse ? themeHub.accentA : themeHub.accentB
+                        border.width: 1.5
+                        border.color: themeHub.darkInk
+                        Text {
+                            anchors.centerIn: parent
+                            text: "+ Add File"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                            color: themeHub.darkInk
+                        }
+                        MouseArea {
+                            id: addFileMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: DropShelfService.pickFiles()
+                        }
+                    }
+
+                    Rectangle {
+                        width: (parent.width - 8) * 0.5
+                        height: 28
+                        radius: 8
+                        color: pasteFileMa.containsMouse ? themeHub.hoverTint : "#FFFFFF"
+                        border.width: 1.5
+                        border.color: themeHub.darkInk
+                        Text {
+                            anchors.centerIn: parent
+                            text: "Paste Files / Path"
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                            color: themeHub.darkInk
+                        }
+                        MouseArea {
+                            id: pasteFileMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: DropShelfService.pasteFromClipboard()
                         }
                     }
                 }

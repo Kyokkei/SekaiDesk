@@ -4,6 +4,7 @@
 
 #include <QAbstractNativeEventFilter>
 #include <QObject>
+#include <QTimer>
 #include <QVariantList>
 
 class SystemControlService : public QObject, public QAbstractNativeEventFilter {
@@ -53,6 +54,11 @@ public:
     Q_INVOKABLE void openSettings(const QString& uri);
     Q_INVOKABLE void lockScreen();
     Q_INVOKABLE void sleepPc();
+    Q_INVOKABLE void shutdownPc();
+    Q_INVOKABLE void restartPc();
+    Q_INVOKABLE void hibernatePc();
+    Q_INVOKABLE void signOut();
+    Q_INVOKABLE QString pickImageFile(const QString& title = QStringLiteral("Select Image"));
 
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
 
@@ -68,6 +74,7 @@ private:
     void readBrightness();
     void readDarkMode();
     void readNetwork();
+    void registerHotkeys();
 
     bool m_brightnessSupported = false;
     int m_brightness = 100;
@@ -85,4 +92,7 @@ private:
     bool m_hotkeyRegistered = false;
     bool m_spotlightHotkeyRegistered = false;
     bool m_clipboardHotkeyRegistered = false;
+    void* m_kbdHook = nullptr;
+    void* m_hotkeyMsgHwnd = nullptr;
+    QTimer m_hotkeyRetryTimer;
 };

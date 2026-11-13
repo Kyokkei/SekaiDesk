@@ -3,6 +3,7 @@
 #include "core/SettingsStore.h"
 
 #include <QClipboard>
+#include <QDate>
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QDir>
@@ -12,20 +13,29 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMetaObject>
+#include <QMimeData>
 #include <QPointer>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QUrl>
 #include <QUrlQuery>
 #include <QVariantMap>
+#include <QVector>
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
 #include <thread>
+#include <vector>
 
 #ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
+#include <commdlg.h>
+#include <objbase.h>
+#include <shellapi.h>
 #include <winhttp.h>
 #endif
 
@@ -36,6 +46,117 @@ struct HttpResult {
     QByteArray body;
     QString error;
 };
+
+HttpResult curlGetSync(const QString& urlStr)
+{
+    HttpResult res;
+#ifdef Q_OS_WIN
+    const QUrl url(urlStr);
+    if (!url.isValid() || url.host().isEmpty()) {
+        res.error = QStringLiteral("Invalid URL");
+        return res;
+    }
+
+    QString encodedUrl = QString::fromLatin1(url.toEncoded());
+    encodedUrl.remove(QLatin1Char('"'));
+
+    wchar_t sysDir[MAX_PATH]{};
+    std::wstring curlExe = L"curl.exe";
+    if (GetSystemDirectoryW(sysDir, MAX_PATH) > 0) {
+        std::wstring candidate = std::wstring(sysDir) + L"\\curl.exe";
+        if (GetFileAttributesW(candidate.c_str()) != INVALID_FILE_ATTRIBUTES)
+            curlExe = std::move(candidate);
+    }
+
+    const std::wstring cmdLine =
+        L"\"" + curlExe + L"\" -4 -sS -L --connect-timeout 5 --max-time 8 "
+        L"-A \"SekaiDesk/0.2\" -w \"\\n%{http_code}\" \"" + encodedUrl.toStdWString() + L"\"";
+    std::vector<wchar_t> cmdBuf(cmdLine.begin(), cmdLine.end());
+    cmdBuf.push_back(L'\0');
+
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    HANDLE hRead = nullptr;
+    HANDLE hWrite = nullptr;
+    if (!CreatePipe(&hRead, &hWrite, &sa, 0)) {
+        res.error = QStringLiteral("CreatePipe failed");
+        return res;
+    }
+    SetHandleInformation(hRead, HANDLE_FLAG_INHERIT, 0);
+
+    HANDLE hNulOut = CreateFileW(L"NUL", GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                 &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE hNulIn = CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                                &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    si.hStdOutput = hWrite;
+    si.hStdError = (hNulOut != INVALID_HANDLE_VALUE) ? hNulOut : hWrite;
+    si.hStdInput = (hNulIn != INVALID_HANDLE_VALUE) ? hNulIn : nullptr;
+
+    PROCESS_INFORMATION pi{};
+    const BOOL ok = CreateProcessW(nullptr, cmdBuf.data(), nullptr, nullptr, TRUE,
+                                   CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(hWrite);
+    if (hNulOut != INVALID_HANDLE_VALUE)
+        CloseHandle(hNulOut);
+    if (hNulIn != INVALID_HANDLE_VALUE)
+        CloseHandle(hNulIn);
+
+    if (!ok) {
+        CloseHandle(hRead);
+        res.error = QStringLiteral("curl CreateProcessW failed (%1)").arg(GetLastError());
+        return res;
+    }
+
+    QByteArray out;
+    char buf[16384];
+    DWORD bytesRead = 0;
+    while (ReadFile(hRead, buf, sizeof(buf), &bytesRead, nullptr) && bytesRead > 0) {
+        out.append(buf, static_cast<int>(bytesRead));
+        if (out.size() > 4 * 1024 * 1024 + 64)
+            break;
+    }
+    CloseHandle(hRead);
+    WaitForSingleObject(pi.hProcess, 1500);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+
+    const int nl = out.lastIndexOf('\n');
+    if (nl >= 0) {
+        const QByteArray codeBytes = out.mid(nl + 1).trimmed();
+        bool codeOk = false;
+        const int code = codeBytes.toInt(&codeOk);
+        if (codeOk && codeBytes.size() == 3) {
+            res.statusCode = code;
+            res.body = out.left(nl);
+            if (res.statusCode == 0)
+                res.error = QStringLiteral("curl HTTP 000");
+            return res;
+        }
+    } else {
+        const QByteArray codeBytes = out.trimmed();
+        bool codeOk = false;
+        const int code = codeBytes.toInt(&codeOk);
+        if (codeOk && codeBytes.size() == 3) {
+            res.statusCode = code;
+            if (res.statusCode == 0)
+                res.error = QStringLiteral("curl HTTP 000");
+            return res;
+        }
+    }
+    res.error = QStringLiteral("curl parse failed");
+#else
+    Q_UNUSED(urlStr);
+    res.error = QStringLiteral("Unsupported platform");
+#endif
+    return res;
+}
 
 HttpResult winHttpGetSync(const QString& urlStr)
 {
@@ -68,7 +189,7 @@ HttpResult winHttpGetSync(const QString& urlStr)
         return res;
     }
 
-    WinHttpSetTimeouts(hSession, 8000, 8000, 8000, 10000);
+    WinHttpSetTimeouts(hSession, 6000, 6000, 6000, 6000);
     DWORD redirPolicy = WINHTTP_OPTION_REDIRECT_POLICY_ALWAYS;
     WinHttpSetOption(hSession, WINHTTP_OPTION_REDIRECT_POLICY, &redirPolicy, sizeof(redirPolicy));
 
@@ -141,7 +262,12 @@ void runHttpAsync(QObject* receiver, const QString& url, std::function<void(Http
 {
     QPointer<QObject> guard(receiver);
     std::thread([guard, url, cb = std::move(onDone)]() mutable {
-        HttpResult result = winHttpGetSync(url);
+        HttpResult result = curlGetSync(url);
+        if (result.statusCode <= 0) {
+            HttpResult fallback = winHttpGetSync(url);
+            if (fallback.statusCode > 0 || result.error.isEmpty())
+                result = std::move(fallback);
+        }
         if (!guard)
             return;
         QMetaObject::invokeMethod(
@@ -154,11 +280,31 @@ void runHttpAsync(QObject* receiver, const QString& url, std::function<void(Http
     }).detach();
 }
 
+QString sanitizeArtist(QString raw)
+{
+    static const QRegularExpression kTopicRe(
+        QStringLiteral("\\s*-\\s*Topic\\s*$"), QRegularExpression::CaseInsensitiveOption);
+    raw.remove(kTopicRe);
+    static const QRegularExpression kOfficialRe(
+        QStringLiteral("\\s*(?:-\\s*)?(?:Official(?:\\s+Channel)?|VEVO)\\s*$"),
+        QRegularExpression::CaseInsensitiveOption);
+    raw.remove(kOfficialRe);
+    return raw.simplified().trimmed();
+}
+
 QString sanitizeTrackText(QString raw)
 {
-    static const QRegularExpression kParenRe(QStringLiteral("\\s*[\\[(](?:official|lyrics|audio|mv|music video|hd|4k|remix|feat\\.|ft\\.|explicit|ver\\.|version|visualizer)[^\\])]*[\\])]"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kJpBracketRe(
+        QStringLiteral("【[^】]*(?:official|mv|pv|audio|lyrics|full|visualizer|ver\\.|version|公式|歌詞|字幕|高画質|高音質)[^】]*】"),
+        QRegularExpression::CaseInsensitiveOption);
+    raw.remove(kJpBracketRe);
+    static const QRegularExpression kParenRe(
+        QStringLiteral("\\s*[\\[(](?:official|lyrics|audio|mv|music video|hd|4k|remix|feat\\.|ft\\.|explicit|ver\\.|version|visualizer|公式|歌詞)[^\\])]*[\\])]"),
+        QRegularExpression::CaseInsensitiveOption);
     raw.remove(kParenRe);
-    static const QRegularExpression kFeatRe(QStringLiteral("\\s+(?:feat\\.|ft\\.)\\s+.*$"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression kFeatRe(
+        QStringLiteral("\\s+(?:feat\\.|ft\\.)\\s+.*$"),
+        QRegularExpression::CaseInsensitiveOption);
     raw.remove(kFeatRe);
     return raw.simplified().trimmed();
 }
@@ -291,16 +437,20 @@ void LyricsService::fetchLyrics(const QString& title, const QString& artist, dou
     emit lyricsChanged();
     emit activeIndexChanged();
 
+    const QString cleanTitle = sanitizeTrackText(title);
+    const QString queryTitle = cleanTitle.isEmpty() ? title : cleanTitle;
+    const QString cleanArtist = sanitizeArtist(artist);
+
     QUrl url(QStringLiteral("https://lrclib.net/api/get"));
     QUrlQuery q;
-    q.addQueryItem(QStringLiteral("track_name"), title);
-    if (!artist.isEmpty())
-        q.addQueryItem(QStringLiteral("artist_name"), artist);
+    q.addQueryItem(QStringLiteral("track_name"), queryTitle);
+    if (!cleanArtist.isEmpty())
+        q.addQueryItem(QStringLiteral("artist_name"), cleanArtist);
     if (durationSec > 10.0)
         q.addQueryItem(QStringLiteral("duration"), QString::number(qRound(durationSec)));
     url.setQuery(q);
 
-    runHttpAsync(this, url.toString(QUrl::FullyEncoded), [this, gen, title, artist, durationSec](const HttpResult& res) {
+    runHttpAsync(this, url.toString(QUrl::FullyEncoded), [this, gen, queryTitle, cleanArtist, durationSec](const HttpResult& res) {
         if (gen != m_requestGen)
             return;
 
@@ -312,12 +462,9 @@ void LyricsService::fetchLyrics(const QString& title, const QString& artist, dou
         }
 
         // Clean up YouTube / Spotify suffixes for search fallback
-        QString searchQ = sanitizeTrackText(title);
-        const QString cleanArtist = sanitizeTrackText(artist);
+        QString searchQ = queryTitle;
         if (!cleanArtist.isEmpty() && !searchQ.contains(cleanArtist, Qt::CaseInsensitive))
             searchQ = searchQ + QStringLiteral(" ") + cleanArtist;
-        if (searchQ.isEmpty())
-            searchQ = title;
 
         fetchSearchFallback(searchQ, durationSec, gen);
     });
@@ -652,9 +799,9 @@ void WeatherService::fetchForecast(double lat, double lon, const QString& cityLa
 
     const QString urlStr = QStringLiteral(
         "https://api.open-meteo.com/v1/forecast?latitude=%1&longitude=%2"
-        "&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m"
-        "&hourly=temperature_2m,weather_code,uv_index,is_day"
-        "&daily=temperature_2m_max,temperature_2m_min,uv_index_max&timezone=auto&forecast_days=2")
+        "&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,weather_code,wind_speed_10m,wind_direction_10m,pressure_msl,precipitation"
+        "&hourly=temperature_2m,apparent_temperature,precipitation_probability,weather_code,uv_index,is_day,visibility"
+        "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset&timezone=auto&forecast_days=3")
         .arg(lat, 0, 'f', 4)
         .arg(lon, 0, 'f', 4);
 
@@ -667,31 +814,86 @@ void WeatherService::fetchForecast(double lat, double lon, const QString& cityLa
             const QJsonObject root = QJsonDocument::fromJson(res.body).object();
             const QJsonObject cur = root.value(QStringLiteral("current")).toObject();
             if (!cur.isEmpty()) {
+                static const char* kCompass16[] = {
+                    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"
+                };
+
                 m_city = cityLabel;
                 m_temperature = qRound(cur.value(QStringLiteral("temperature_2m")).toDouble(28.0));
                 m_feelsLike = qRound(cur.value(QStringLiteral("apparent_temperature")).toDouble(m_temperature));
                 m_humidity = qRound(cur.value(QStringLiteral("relative_humidity_2m")).toDouble(70.0));
                 m_windSpeed = qRound(cur.value(QStringLiteral("wind_speed_10m")).toDouble(8.0));
+                int deg = qRound(cur.value(QStringLiteral("wind_direction_10m")).toDouble(0.0)) % 360;
+                if (deg < 0)
+                    deg += 360;
+                m_windDeg = deg;
+                m_windDirection = QString::fromLatin1(kCompass16[qRound(deg / 22.5) % 16]);
+                m_pressure = qRound(cur.value(QStringLiteral("pressure_msl")).toDouble(1013.0));
                 m_isDay = (cur.value(QStringLiteral("is_day")).toInt(1) != 0);
                 m_weatherCode = cur.value(QStringLiteral("weather_code")).toInt(2);
                 m_conditionText = describeWmo(m_weatherCode);
 
                 const QJsonObject daily = root.value(QStringLiteral("daily")).toObject();
+                const QJsonArray dTimes = daily.value(QStringLiteral("time")).toArray();
+                const QJsonArray dCodes = daily.value(QStringLiteral("weather_code")).toArray();
                 const QJsonArray maxArr = daily.value(QStringLiteral("temperature_2m_max")).toArray();
                 const QJsonArray minArr = daily.value(QStringLiteral("temperature_2m_min")).toArray();
+                const QJsonArray rainMaxArr = daily.value(QStringLiteral("precipitation_probability_max")).toArray();
                 const QJsonArray uvDailyArr = daily.value(QStringLiteral("uv_index_max")).toArray();
+                const QJsonArray sunriseArr = daily.value(QStringLiteral("sunrise")).toArray();
+                const QJsonArray sunsetArr = daily.value(QStringLiteral("sunset")).toArray();
+
                 if (!maxArr.isEmpty())
                     m_tempMax = qRound(maxArr.first().toDouble(m_temperature + 3));
                 if (!minArr.isEmpty())
                     m_tempMin = qRound(minArr.first().toDouble(m_temperature - 4));
                 if (!uvDailyArr.isEmpty())
                     m_uvIndex = qRound(uvDailyArr.first().toDouble(4.0));
+                if (!sunriseArr.isEmpty()) {
+                    const QString sr = sunriseArr.first().toString().mid(11, 5);
+                    if (!sr.isEmpty())
+                        m_sunrise = sr;
+                }
+                if (!sunsetArr.isEmpty()) {
+                    const QString ss = sunsetArr.first().toString().mid(11, 5);
+                    if (!ss.isEmpty())
+                        m_sunset = ss;
+                }
 
-                // Build next 6 hourly slots starting from current local hour
+                m_dailyForecast.clear();
+                const int dayCount = qMin<int>(3, dTimes.size());
+                for (int i = 0; i < dayCount; ++i) {
+                    const QString dateStr = dTimes.at(i).toString();
+                    QString dayLabel;
+                    if (i == 0) {
+                        dayLabel = QStringLiteral("Today");
+                    } else if (i == 1) {
+                        dayLabel = QStringLiteral("Tomorrow");
+                    } else {
+                        const QDate dt = QDate::fromString(dateStr, Qt::ISODate);
+                        dayLabel = dt.isValid() ? dt.toString(QStringLiteral("ddd")) : dateStr.mid(5);
+                    }
+                    const int dCode = (i < dCodes.size()) ? dCodes.at(i).toInt(m_weatherCode) : m_weatherCode;
+                    QVariantMap dSlot;
+                    dSlot[QStringLiteral("label")] = dayLabel;
+                    dSlot[QStringLiteral("date")] = dateStr;
+                    dSlot[QStringLiteral("code")] = dCode;
+                    dSlot[QStringLiteral("isDay")] = true;
+                    dSlot[QStringLiteral("condition")] = describeWmo(dCode);
+                    dSlot[QStringLiteral("high")] = (i < maxArr.size()) ? qRound(maxArr.at(i).toDouble(m_tempMax)) : m_tempMax;
+                    dSlot[QStringLiteral("low")] = (i < minArr.size()) ? qRound(minArr.at(i).toDouble(m_tempMin)) : m_tempMin;
+                    dSlot[QStringLiteral("rain")] = (i < rainMaxArr.size()) ? qRound(rainMaxArr.at(i).toDouble(0.0)) : 0;
+                    m_dailyForecast.append(dSlot);
+                }
+
+                // Build next 8 3-hour slots starting from current local hour
                 m_hourlyForecast.clear();
                 const QJsonObject hourly = root.value(QStringLiteral("hourly")).toObject();
                 const QJsonArray hTimes = hourly.value(QStringLiteral("time")).toArray();
                 const QJsonArray hTemps = hourly.value(QStringLiteral("temperature_2m")).toArray();
+                const QJsonArray hFeels = hourly.value(QStringLiteral("apparent_temperature")).toArray();
+                const QJsonArray hRain = hourly.value(QStringLiteral("precipitation_probability")).toArray();
                 const QJsonArray hCodes = hourly.value(QStringLiteral("weather_code")).toArray();
                 const QJsonArray hUvs = hourly.value(QStringLiteral("uv_index")).toArray();
                 const QJsonArray hIsDay = hourly.value(QStringLiteral("is_day")).toArray();
@@ -707,18 +909,29 @@ void WeatherService::fetchForecast(double lat, double lon, const QString& cityLa
                 }
                 if (startIdx < hUvs.size())
                     m_uvIndex = qRound(hUvs.at(startIdx).toDouble(m_uvIndex));
+                if (startIdx < hRain.size())
+                    m_precipProb = qRound(hRain.at(startIdx).toDouble(0.0));
 
-                for (int k = 0; k < 6 && (startIdx + k) < hTimes.size(); ++k) {
-                    const int idx = startIdx + k;
+                for (int k = 0; k < 8 && (startIdx + k * 3) < hTimes.size(); ++k) {
+                    const int idx = startIdx + k * 3;
                     const QString tStr = hTimes.at(idx).toString();
                     QString hh = tStr.mid(11, 5);
                     if (hh.isEmpty())
                         hh = QStringLiteral("--:--");
+                    const int hCode = idx < hCodes.size() ? hCodes.at(idx).toInt() : m_weatherCode;
+                    const int hTemp = idx < hTemps.size() ? qRound(hTemps.at(idx).toDouble()) : m_temperature;
+                    const int hFeel = idx < hFeels.size() ? qRound(hFeels.at(idx).toDouble()) : hTemp;
+                    const int hProb = idx < hRain.size() ? qRound(hRain.at(idx).toDouble()) : 0;
+                    const bool hDay = idx < hIsDay.size() ? (hIsDay.at(idx).toInt(1) != 0) : m_isDay;
                     QVariantMap slot;
                     slot[QStringLiteral("time")] = (k == 0) ? QStringLiteral("Now") : hh.left(2) + QStringLiteral("h");
-                    slot[QStringLiteral("temp")] = idx < hTemps.size() ? qRound(hTemps.at(idx).toDouble()) : m_temperature;
-                    slot[QStringLiteral("code")] = idx < hCodes.size() ? hCodes.at(idx).toInt() : m_weatherCode;
-                    slot[QStringLiteral("isDay")] = idx < hIsDay.size() ? (hIsDay.at(idx).toInt(1) != 0) : m_isDay;
+                    slot[QStringLiteral("label")] = (k == 0) ? QStringLiteral("Now") : hh;
+                    slot[QStringLiteral("temp")] = hTemp;
+                    slot[QStringLiteral("feels")] = hFeel;
+                    slot[QStringLiteral("code")] = hCode;
+                    slot[QStringLiteral("isDay")] = hDay;
+                    slot[QStringLiteral("condition")] = describeWmo(hCode);
+                    slot[QStringLiteral("rain")] = hProb;
                     m_hourlyForecast.append(slot);
                 }
 
@@ -815,6 +1028,119 @@ void DropShelfService::addPaths(const QStringList& paths)
         appendSinglePath(p);
     if (m_items.size() != before)
         emit itemsChanged();
+}
+
+void DropShelfService::pickFiles()
+{
+#ifdef Q_OS_WIN
+    QPointer<DropShelfService> guard(this);
+    std::thread([guard]() {
+        const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        const bool didCoInit = SUCCEEDED(hr);
+
+        using FnGetOpenFileNameW = BOOL(WINAPI*)(LPOPENFILENAMEW);
+        HMODULE comdlg = LoadLibraryW(L"comdlg32.dll");
+        auto pGetOpen = comdlg
+            ? reinterpret_cast<FnGetOpenFileNameW>(GetProcAddress(comdlg, "GetOpenFileNameW"))
+            : nullptr;
+
+        QStringList picked;
+        if (pGetOpen) {
+            QVector<wchar_t> buf(65536, 0);
+            OPENFILENAMEW ofn{};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = nullptr;
+            ofn.lpstrFilter = L"All Files (*.*)\0*.*\0\0";
+            ofn.lpstrFile = buf.data();
+            ofn.nMaxFile = static_cast<DWORD>(buf.size());
+            ofn.lpstrTitle = L"Add Files to Drop Shelf";
+            ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST
+                      | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+            if (pGetOpen(&ofn)) {
+                const wchar_t* p = buf.data();
+                const QString first = QString::fromWCharArray(p);
+                p += first.size() + 1;
+                if (*p == L'\0') {
+                    if (!first.isEmpty())
+                        picked << first;
+                } else {
+                    const QDir dir(first);
+                    while (*p != L'\0') {
+                        const QString name = QString::fromWCharArray(p);
+                        p += name.size() + 1;
+                        picked << dir.filePath(name);
+                    }
+                }
+            }
+        }
+
+        if (didCoInit)
+            CoUninitialize();
+
+        if (!guard || picked.isEmpty())
+            return;
+        QMetaObject::invokeMethod(
+            guard.data(),
+            [guard, picked = std::move(picked)]() {
+                if (guard)
+                    guard->addPaths(picked);
+            },
+            Qt::QueuedConnection);
+    }).detach();
+#endif
+}
+
+int DropShelfService::pasteFromClipboard()
+{
+    QStringList paths;
+#ifdef Q_OS_WIN
+    if (IsClipboardFormatAvailable(CF_HDROP) && OpenClipboard(nullptr)) {
+        if (HANDLE hData = GetClipboardData(CF_HDROP)) {
+            if (HDROP hDrop = static_cast<HDROP>(GlobalLock(hData))) {
+                const UINT count = DragQueryFileW(hDrop, 0xFFFFFFFF, nullptr, 0);
+                for (UINT i = 0; i < count; ++i) {
+                    const UINT len = DragQueryFileW(hDrop, i, nullptr, 0);
+                    if (len == 0)
+                        continue;
+                    QVector<wchar_t> buf(static_cast<int>(len) + 1, 0);
+                    DragQueryFileW(hDrop, i, buf.data(), len + 1);
+                    paths << QString::fromWCharArray(buf.data(), static_cast<int>(len));
+                }
+                GlobalUnlock(hData);
+            }
+        }
+        CloseClipboard();
+    }
+#endif
+    if (paths.isEmpty()) {
+        if (const auto* cb = QGuiApplication::clipboard()) {
+            if (const QMimeData* mime = cb->mimeData()) {
+                if (mime->hasUrls()) {
+                    for (const QUrl& u : mime->urls()) {
+                        if (u.isLocalFile())
+                            paths << u.toLocalFile();
+                    }
+                }
+                if (paths.isEmpty() && mime->hasText()) {
+                    const QStringList lines = mime->text().split(QRegularExpression(QStringLiteral("[\r\n]+")),
+                                                                 Qt::SkipEmptyParts);
+                    for (QString line : lines) {
+                        line = line.trimmed();
+                        if (line.size() >= 2 && line.startsWith(QLatin1Char('"')) && line.endsWith(QLatin1Char('"')))
+                            line = line.mid(1, line.size() - 2);
+                        if (!line.isEmpty() && QFileInfo::exists(line))
+                            paths << line;
+                    }
+                }
+            }
+        }
+    }
+
+    if (paths.isEmpty())
+        return 0;
+    const int before = m_items.size();
+    addPaths(paths);
+    return m_items.size() - before;
 }
 
 void DropShelfService::openItem(int index)
