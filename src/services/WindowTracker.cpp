@@ -196,6 +196,81 @@ void WindowTracker::refresh()
         m_runningApps = std::move(nextList);
         emit runningAppsChanged();
     }
+
+#ifdef Q_OS_WIN
+    if (ctx.foreground && IsWindow(ctx.foreground) && IsWindowVisible(ctx.foreground) && !IsIconic(ctx.foreground)) {
+        DWORD fgPid = 0;
+        GetWindowThreadProcessId(ctx.foreground, &fgPid);
+        if (fgPid != ctx.selfPid) {
+            wchar_t cls[64] = {};
+            GetClassNameW(ctx.foreground, cls, 64);
+            const QString clsName = QString::fromWCharArray(cls);
+            QString nextApp = m_activeAppName;
+            QString nextTitle = m_activeWindowTitle;
+            if (clsName == QStringLiteral("Progman") || clsName == QStringLiteral("WorkerW")) {
+                nextApp = QStringLiteral("Desktop");
+                nextTitle.clear();
+            } else if (clsName != QStringLiteral("Shell_TrayWnd") && clsName != QStringLiteral("Shell_SecondaryTrayWnd")) {
+                const QString exe = queryProcessExe(ctx.foreground);
+                nextApp = exe.isEmpty() ? QStringLiteral("Window") : friendlyNameFromExe(exe);
+                wchar_t tbuf[256] = {};
+                GetWindowTextW(ctx.foreground, tbuf, 256);
+                nextTitle = QString::fromWCharArray(tbuf).trimmed();
+            }
+            if (nextApp != m_activeAppName || nextTitle != m_activeWindowTitle) {
+                m_activeAppName = nextApp;
+                m_activeWindowTitle = nextTitle;
+                emit activeWindowChanged();
+            }
+        }
+    } else if (!ctx.foreground) {
+        if (m_activeAppName != QStringLiteral("Desktop") || !m_activeWindowTitle.isEmpty()) {
+            m_activeAppName = QStringLiteral("Desktop");
+            m_activeWindowTitle.clear();
+            emit activeWindowChanged();
+        }
+    }
+    updateSystemStats();
+#endif
+}
+
+void WindowTracker::updateSystemStats()
+{
+#ifdef Q_OS_WIN
+    int nextCpu = m_cpuUsage;
+    FILETIME idleFt{}, kernelFt{}, userFt{};
+    if (GetSystemTimes(&idleFt, &kernelFt, &userFt)) {
+        const auto toU64 = [](const FILETIME& ft) -> quint64 {
+            return (static_cast<quint64>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        };
+        const quint64 idle = toU64(idleFt);
+        const quint64 kernel = toU64(kernelFt);
+        const quint64 user = toU64(userFt);
+        if (m_prevKernelTime != 0 || m_prevUserTime != 0) {
+            const quint64 idleDiff = idle - m_prevIdleTime;
+            const quint64 totalDiff = (kernel - m_prevKernelTime) + (user - m_prevUserTime);
+            if (totalDiff > 0 && idleDiff <= totalDiff) {
+                nextCpu = static_cast<int>(((totalDiff - idleDiff) * 100ULL) / totalDiff);
+            }
+        }
+        m_prevIdleTime = idle;
+        m_prevKernelTime = kernel;
+        m_prevUserTime = user;
+    }
+
+    int nextRam = m_ramUsage;
+    MEMORYSTATUSEX ms{};
+    ms.dwLength = sizeof(ms);
+    if (GlobalMemoryStatusEx(&ms)) {
+        nextRam = static_cast<int>(ms.dwMemoryLoad);
+    }
+
+    if (nextCpu != m_cpuUsage || nextRam != m_ramUsage) {
+        m_cpuUsage = nextCpu;
+        m_ramUsage = nextRam;
+        emit statsChanged();
+    }
+#endif
 }
 
 void WindowTracker::pollEdgeAndOverlap()
@@ -208,21 +283,31 @@ void WindowTracker::pollEdgeAndOverlap()
         return;
 
     POINT pt{};
-    bool nextEdge = m_bottomEdgeHovered;
+    bool nextBottomEdge = m_bottomEdgeHovered;
+    bool nextTopEdge = m_topEdgeHovered;
     if (GetCursorPos(&pt)) {
         const bool inX = (pt.x >= mi.rcMonitor.left && pt.x <= mi.rcMonitor.right);
-        const int triggerY = m_bottomEdgeHovered ? (mi.rcMonitor.bottom - 96) : (mi.rcMonitor.bottom - 4);
-        nextEdge = inX && (pt.y >= triggerY);
+        const int botTriggerY = m_bottomEdgeHovered ? (mi.rcMonitor.bottom - 96) : (mi.rcMonitor.bottom - 4);
+        nextBottomEdge = inX && (pt.y >= botTriggerY);
+        const int topTriggerY = m_topEdgeHovered ? (mi.rcMonitor.top + 56) : (mi.rcMonitor.top + 3);
+        const bool avoidWindowControls = !m_topEdgeHovered && (pt.x >= mi.rcMonitor.right - 150);
+        nextTopEdge = inX && !avoidWindowControls && (pt.y <= topTriggerY);
     }
-    if (nextEdge != m_bottomEdgeHovered) {
-        m_bottomEdgeHovered = nextEdge;
+    if (nextBottomEdge != m_bottomEdgeHovered) {
+        m_bottomEdgeHovered = nextBottomEdge;
         emit bottomEdgeHoveredChanged();
     }
+    if (nextTopEdge != m_topEdgeHovered) {
+        m_topEdgeHovered = nextTopEdge;
+        emit topEdgeHoveredChanged();
+    }
 
-    bool nextOverlap = m_dockOverlap;
+    bool nextDockOverlap = m_dockOverlap;
+    bool nextTopOverlap = m_topOverlap;
     const HWND fg = GetForegroundWindow();
     if (!fg || !IsWindowVisible(fg) || IsIconic(fg)) {
-        nextOverlap = false;
+        nextDockOverlap = false;
+        nextTopOverlap = false;
     } else {
         DWORD fgPid = 0;
         GetWindowThreadProcessId(fg, &fgPid);
@@ -234,20 +319,25 @@ void WindowTracker::pollEdgeAndOverlap()
                 || clsName == QStringLiteral("WorkerW")
                 || clsName == QStringLiteral("Shell_TrayWnd")
                 || clsName == QStringLiteral("Shell_SecondaryTrayWnd")) {
-                nextOverlap = false;
+                nextDockOverlap = false;
+                nextTopOverlap = false;
             } else {
                 RECT rc{};
                 if (FAILED(DwmGetWindowAttribute(fg, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc))))
                     GetWindowRect(fg, &rc);
-                nextOverlap = (rc.bottom >= mi.rcMonitor.bottom - 86)
-                    && (rc.right > mi.rcMonitor.left)
-                    && (rc.left < mi.rcMonitor.right);
+                const bool inScreenX = (rc.right > mi.rcMonitor.left) && (rc.left < mi.rcMonitor.right);
+                nextDockOverlap = inScreenX && (rc.bottom >= mi.rcMonitor.bottom - 86);
+                nextTopOverlap = inScreenX && (rc.top <= mi.rcMonitor.top + 52);
             }
         }
     }
-    if (nextOverlap != m_dockOverlap) {
-        m_dockOverlap = nextOverlap;
+    if (nextDockOverlap != m_dockOverlap) {
+        m_dockOverlap = nextDockOverlap;
         emit dockOverlapChanged();
+    }
+    if (nextTopOverlap != m_topOverlap) {
+        m_topOverlap = nextTopOverlap;
+        emit topOverlapChanged();
     }
 #endif
 }

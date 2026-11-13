@@ -131,9 +131,13 @@ class PanelWindow : public QQuickWindow {
     Q_PROPERTY(int exclusiveZone READ exclusiveZone WRITE setExclusiveZone NOTIFY exclusiveZoneChanged)
     Q_PROPERTY(bool clickThrough READ clickThrough WRITE setClickThrough NOTIFY clickThroughChanged)
     Q_PROPERTY(QVariant mask READ maskProperty WRITE setMaskProperty NOTIFY maskChanged)
+    Q_PROPERTY(bool reserveTopBar READ reserveTopBar WRITE setReserveTopBar NOTIFY reserveTopBarChanged)
+    Q_PROPERTY(int reserveHeight READ reserveHeight WRITE setReserveHeight NOTIFY reserveHeightChanged)
+    Q_PROPERTY(bool fullscreenActive READ fullscreenActive NOTIFY fullscreenActiveChanged)
 
 public:
     explicit PanelWindow(QWindow* parent = nullptr);
+    ~PanelWindow() override;
 
     WindowAnchors* anchors() const { return m_anchors; }
 
@@ -151,17 +155,35 @@ public:
     QVariant maskProperty() const { return m_mask; }
     void setMaskProperty(const QVariant& mask);
 
+    bool reserveTopBar() const { return m_reserveTopBar; }
+    void setReserveTopBar(bool on);
+
+    int reserveHeight() const { return m_reserveHeight; }
+    void setReserveHeight(int h);
+
+    bool fullscreenActive() const { return m_fullscreenActive; }
+
     Q_INVOKABLE void recompute();
+    Q_INVOKABLE bool isPointerOutsideAndPressed() const;
 
 signals:
     void exclusiveZoneChanged();
     void clickThroughChanged();
     void maskChanged();
+    void reserveTopBarChanged();
+    void reserveHeightChanged();
+    void fullscreenActiveChanged();
+    void windowDeactivated();
+
+protected:
+    bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
 
 private:
     void recomputeGeometry();
     void applyClickThrough();
     void updateMask();
+    void registerOrUpdateAppBar();
+    void unregisterAppBar();
 
     WindowAnchors* m_anchors;
     int m_exclusiveZone = -1;
@@ -170,5 +192,9 @@ private:
     QVariant m_mask;
     QRegion m_lastMask;
     bool m_hasAppliedMask = false;
+    bool m_reserveTopBar = false;
+    int m_reserveHeight = 48;
+    bool m_appBarRegistered = false;
+    bool m_fullscreenActive = false;
     QMetaObject::Connection m_screenGeoConn;
 };
