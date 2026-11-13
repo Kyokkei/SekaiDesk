@@ -142,12 +142,18 @@ class PanelWindow : public QQuickWindow {
     Q_PROPERTY(int blurInsetRight READ blurInsetRight WRITE setBlurInsetRight NOTIFY blurChanged)
     Q_PROPERTY(int blurInsetBottom READ blurInsetBottom WRITE setBlurInsetBottom NOTIFY blurChanged)
     Q_PROPERTY(QColor blurTint READ blurTint WRITE setBlurTint NOTIFY blurChanged)
+    Q_PROPERTY(bool desktopLayer READ desktopLayer WRITE setDesktopLayer NOTIFY desktopLayerChanged)
 
 public:
     explicit PanelWindow(QWindow* parent = nullptr);
     ~PanelWindow() override;
 
     WindowAnchors* anchors() const { return m_anchors; }
+
+    bool desktopLayer() const { return m_desktopLayer; }
+    void setDesktopLayer(bool on);
+    Q_INVOKABLE void raiseOnDesktop();
+    Q_INVOKABLE void focusActivate();
 
     int exclusiveZone() const { return m_exclusiveZone; }
     void setExclusiveZone(int zone) {
@@ -198,6 +204,7 @@ signals:
     void fullscreenActiveChanged();
     void windowDeactivated();
     void blurChanged();
+    void desktopLayerChanged();
 
 protected:
     bool nativeEvent(const QByteArray& eventType, void* message, qintptr* result) override;
@@ -228,5 +235,6 @@ private:
     int m_blurInsetRight = 0;
     int m_blurInsetBottom = 0;
     QColor m_blurTint = QColor(20, 26, 42, 165);
+    bool m_desktopLayer = false;
     QMetaObject::Connection m_screenGeoConn;
 };

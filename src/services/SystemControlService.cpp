@@ -19,6 +19,8 @@
 
 namespace {
 constexpr int kQuickPanelHotkeyId = 0x534B;
+constexpr int kSpotlightHotkeyId = 0x534C;
+constexpr int kClipboardHotkeyId = 0x5343;
 
 struct PhysicalMonitor {
     HANDLE hPhysicalMonitor;
@@ -76,6 +78,8 @@ SystemControlService::SystemControlService(QObject* parent)
     if (QCoreApplication::instance())
         QCoreApplication::instance()->installNativeEventFilter(this);
     m_hotkeyRegistered = (RegisterHotKey(nullptr, kQuickPanelHotkeyId, MOD_CONTROL | MOD_ALT, 'A') != FALSE);
+    m_spotlightHotkeyRegistered = (RegisterHotKey(nullptr, kSpotlightHotkeyId, MOD_ALT, VK_SPACE) != FALSE);
+    m_clipboardHotkeyRegistered = (RegisterHotKey(nullptr, kClipboardHotkeyId, MOD_CONTROL | MOD_ALT, 'V') != FALSE);
     refresh();
 #endif
 }
@@ -85,6 +89,10 @@ SystemControlService::~SystemControlService()
 #ifdef Q_OS_WIN
     if (m_hotkeyRegistered)
         UnregisterHotKey(nullptr, kQuickPanelHotkeyId);
+    if (m_spotlightHotkeyRegistered)
+        UnregisterHotKey(nullptr, kSpotlightHotkeyId);
+    if (m_clipboardHotkeyRegistered)
+        UnregisterHotKey(nullptr, kClipboardHotkeyId);
     if (QCoreApplication::instance())
         QCoreApplication::instance()->removeNativeEventFilter(this);
 #endif
@@ -96,9 +104,20 @@ bool SystemControlService::nativeEventFilter(const QByteArray& eventType, void* 
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
         const MSG* msg = static_cast<const MSG*>(message);
-        if (msg && msg->message == WM_HOTKEY && static_cast<int>(msg->wParam) == kQuickPanelHotkeyId) {
-            emit quickPanelToggleRequested();
-            return true;
+        if (msg && msg->message == WM_HOTKEY) {
+            const int id = static_cast<int>(msg->wParam);
+            if (id == kQuickPanelHotkeyId) {
+                emit quickPanelToggleRequested();
+                return true;
+            }
+            if (id == kSpotlightHotkeyId) {
+                emit spotlightToggleRequested();
+                return true;
+            }
+            if (id == kClipboardHotkeyId) {
+                emit clipboardToggleRequested();
+                return true;
+            }
         }
     }
 #else

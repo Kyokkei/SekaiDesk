@@ -560,3 +560,50 @@ bool PanelWindow::isPointerOutsideAndPressed() const
     return false;
 #endif
 }
+
+void PanelWindow::setDesktopLayer(bool on)
+{
+    if (m_desktopLayer == on)
+        return;
+    m_desktopLayer = on;
+    if (on) {
+        setFlags(flags() & ~Qt::WindowStaysOnTopHint);
+    } else {
+        setFlags(flags() | Qt::WindowStaysOnTopHint);
+    }
+#ifdef Q_OS_WIN
+    if (isVisible()) {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd) {
+            SetWindowPos(hwnd, on ? HWND_NOTOPMOST : HWND_TOPMOST,
+                         0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+#endif
+    emit desktopLayerChanged();
+}
+
+void PanelWindow::raiseOnDesktop()
+{
+#ifdef Q_OS_WIN
+    if (!m_desktopLayer || !isVisible())
+        return;
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd)
+        return;
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+#endif
+}
+
+void PanelWindow::focusActivate()
+{
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (hwnd) {
+        SetForegroundWindow(hwnd);
+        BringWindowToTop(hwnd);
+    }
+#endif
+    requestActivate();
+}

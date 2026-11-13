@@ -61,6 +61,8 @@ signals:
     void wifiChanged();
     void bluetoothChanged();
     void quickPanelToggleRequested();
+    void spotlightToggleRequested();
+    void clipboardToggleRequested();
 
 private:
     void readBrightness();
@@ -81,4 +83,6 @@ private:
     bool m_bluetoothEnabled = false;
     QVariantList m_bluetoothDevices;
     bool m_hotkeyRegistered = false;
+    bool m_spotlightHotkeyRegistered = false;
+    bool m_clipboardHotkeyRegistered = false;
 };

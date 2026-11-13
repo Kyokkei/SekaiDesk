@@ -1,8 +1,12 @@
 #include "AppLauncher.h"
 #include "core/SettingsStore.h"
 
+#include <QDirIterator>
 #include <QFileInfo>
+#include <QSet>
+#include <QStandardPaths>
 #include <QVariantMap>
+#include <algorithm>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -14,6 +18,7 @@ AppLauncher::AppLauncher(SettingsStore* settings, QObject* parent)
     , m_settings(settings)
 {
     reload();
+    refreshInstalledApps();
 }
 
 void AppLauncher::reload()
@@ -239,4 +244,116 @@ void AppLauncher::reorderDock(const QVariantList& currentAppItems,
     m_pinnedApps = nextPinned;
     savePinnedApps();
     emit pinnedAppsChanged();
+}
+
+void AppLauncher::refreshInstalledApps()
+{
+    QVariantList out;
+    QSet<QString> seenNames;
+
+    auto addItem = [&](const QString& name, const QString& target,
+                       const QString& category, const QString& args = {}) {
+        const QString clean = name.trimmed();
+        if (clean.isEmpty())
+            return;
+        const QString key = clean.toLower();
+        if (seenNames.contains(key))
+            return;
+        seenNames.insert(key);
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), clean);
+        m.insert(QStringLiteral("target"), target);
+        m.insert(QStringLiteral("args"), args);
+        m.insert(QStringLiteral("category"), category);
+        out.append(m);
+    };
+
+    for (const QVariant& v : m_pinnedApps) {
+        const QVariantMap pm = v.toMap();
+        if (pm.value(QStringLiteral("kind")).toString() == QStringLiteral("separator"))
+            continue;
+        addItem(pm.value(QStringLiteral("name")).toString(),
+                pm.value(QStringLiteral("target")).toString(),
+                QStringLiteral("Pinned"),
+                pm.value(QStringLiteral("args")).toString());
+    }
+
+#ifdef Q_OS_WIN
+    addItem(QStringLiteral("Task Manager"), QStringLiteral("taskmgr.exe"), QStringLiteral("System"));
+    addItem(QStringLiteral("Control Panel"), QStringLiteral("control.exe"), QStringLiteral("System"));
+    addItem(QStringLiteral("Display Settings"), QStringLiteral("ms-settings:display"), QStringLiteral("System"));
+    addItem(QStringLiteral("Sound Settings"), QStringLiteral("ms-settings:sound"), QStringLiteral("System"));
+    addItem(QStringLiteral("Windows Settings"), QStringLiteral("ms-settings:"), QStringLiteral("System"));
+    addItem(QStringLiteral("Device Manager"), QStringLiteral("devmgmt.msc"), QStringLiteral("System"));
+    addItem(QStringLiteral("Registry Editor"), QStringLiteral("regedit.exe"), QStringLiteral("System"));
+
+    const QString progData = qEnvironmentVariable("ProgramData");
+    const QString appData = qEnvironmentVariable("AppData");
+    QStringList roots;
+    if (!progData.isEmpty())
+        roots << (progData + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs"));
+    if (!appData.isEmpty())
+        roots << (appData + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs"));
+
+    for (const QString& root : roots) {
+        QDirIterator it(root, QStringList() << QStringLiteral("*.lnk"),
+                        QDir::Files, QDirIterator::Subdirectories);
+        while (it.hasNext()) {
+            const QString filePath = it.next();
+            const QFileInfo fi(filePath);
+            const QString base = fi.completeBaseName();
+            const QString low = base.toLower();
+            if (low.contains(QStringLiteral("uninstall"))
+                || low.contains(QStringLiteral("readme"))
+                || low.contains(QStringLiteral("help"))
+                || low.contains(QStringLiteral("manual"))
+                || low.contains(QStringLiteral("website"))) {
+                continue;
+            }
+            addItem(base, filePath, QStringLiteral("App"));
+        }
+    }
+#endif
+
+    std::sort(out.begin(), out.end(), [](const QVariant& a, const QVariant& b) {
+        const QString na = a.toMap().value(QStringLiteral("name")).toString().toLower();
+        const QString nb = b.toMap().value(QStringLiteral("name")).toString().toLower();
+        return na < nb;
+    });
+
+    m_installedApps = std::move(out);
+    emit installedAppsChanged();
+}
+
+QVariantList AppLauncher::searchApps(const QString& query) const
+{
+    const QString q = query.trimmed().toLower();
+    if (q.isEmpty()) {
+        QVariantList top;
+        for (int i = 0; i < m_pinnedApps.size() && top.size() < 8; ++i) {
+            QVariantMap pm = m_pinnedApps.at(i).toMap();
+            if (pm.value(QStringLiteral("kind")).toString() == QStringLiteral("separator"))
+                continue;
+            pm.insert(QStringLiteral("category"), QStringLiteral("Pinned"));
+            top.append(pm);
+        }
+        return top;
+    }
+
+    QVariantList startsWith;
+    QVariantList contains;
+    for (const QVariant& v : m_installedApps) {
+        const QVariantMap m = v.toMap();
+        const QString name = m.value(QStringLiteral("name")).toString().toLower();
+        if (name.startsWith(q))
+            startsWith.append(m);
+        else if (name.contains(q))
+            contains.append(m);
+    }
+
+    QVariantList res = startsWith;
+    res.append(contains);
+    if (res.size() > 14)
+        res = res.mid(0, 14);
+    return res;
 }

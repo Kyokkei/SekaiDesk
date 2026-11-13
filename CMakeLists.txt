@@ -25,6 +25,8 @@ qt_add_executable(SekaiDesk WIN32
     src/services/AudioService.h    src/services/AudioService.cpp
     src/services/SystemControlService.h src/services/SystemControlService.cpp
     src/services/TrayService.h     src/services/TrayService.cpp
+    src/services/ClipboardService.h src/services/ClipboardService.cpp
+    src/services/DeskExtrasService.h src/services/DeskExtrasService.cpp
     src/SekaiDesk.rc
 )
 
@@ -35,23 +37,54 @@ qt_add_resources(SekaiDesk "qml"
     PREFIX "/"
     FILES
         qml/Shell.qml
+        qml/ThemeHub.qml
+        qml/ScreenRound.qml
+        qml/SettingsModal.qml
+        qml/PowerTools.qml
+        qml/DesktopWidgets.qml
         qml/icons/alt-arrow-down-dark.svg
         qml/icons/alt-arrow-down-light.svg
         qml/icons/alt-arrow-up-dark.svg
         qml/icons/alt-arrow-up-light.svg
         qml/icons/bt-dark.svg
         qml/icons/bt-light.svg
+        qml/icons/check-circle-dark.svg
+        qml/icons/checklist-dark.svg
+        qml/icons/clipboard-text-dark.svg
+        qml/icons/clipboard-text-light.svg
+        qml/icons/clock-circle-dark.svg
+        qml/icons/close-circle-dark.svg
+        qml/icons/cloud-dark.svg
+        qml/icons/cloud-rain-dark.svg
+        qml/icons/cloud-snowfall-dark.svg
+        qml/icons/cloud-storm-dark.svg
+        qml/icons/cloud-sun-dark.svg
+        qml/icons/cloudy-moon-dark.svg
+        qml/icons/copy-dark.svg
+        qml/icons/folder-with-files-dark.svg
+        qml/icons/folder-with-files-light.svg
         qml/icons/headphones-round-dark.svg
+        qml/icons/magnifer-dark.svg
+        qml/icons/magnifer-light.svg
         qml/icons/moon-dark.svg
         qml/icons/music-note-dark.svg
         qml/icons/music-note-teal.svg
         qml/icons/network-dark.svg
         qml/icons/network-light.svg
+        qml/icons/notes-dark.svg
+        qml/icons/palette-dark.svg
+        qml/icons/palette-light.svg
         qml/icons/pause-dark.svg
+        qml/icons/pin-dark.svg
         qml/icons/play-dark.svg
+        qml/icons/settings-dark.svg
+        qml/icons/settings-light.svg
         qml/icons/skip-next-dark.svg
         qml/icons/skip-previous-dark.svg
         qml/icons/sun-dark.svg
+        qml/icons/trash-bin-trash-dark.svg
+        qml/icons/trash-bin-trash-red.svg
+        qml/icons/user-rounded-dark.svg
         qml/icons/volume-cross-dark.svg
         qml/icons/volume-cross-light.svg
         qml/icons/volume-loud-dark.svg

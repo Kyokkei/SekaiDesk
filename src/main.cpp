@@ -27,6 +27,8 @@
 #include "services/TrashService.h"
 #include "services/WinIconProvider.h"
 #include "services/WindowTracker.h"
+#include "services/ClipboardService.h"
+#include "services/DeskExtrasService.h"
 
 int main(int argc, char* argv[])
 {
@@ -47,6 +49,10 @@ int main(int argc, char* argv[])
     static AudioService audioService;
     static SystemControlService systemControl;
     static TrayService trayService;
+    static ClipboardService clipboardService;
+    static LyricsService lyricsService(&mediaService);
+    static WeatherService weatherService(&settings);
+    static DropShelfService dropShelfService;
 
     // --- Quickshell compat registrations -----------------------------------
     // Unversioned imports (`import Quickshell`) resolve to the highest
@@ -85,6 +91,14 @@ int main(int argc, char* argv[])
                                  "SystemControl", &systemControl);
     qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
                                  "TrayService", &trayService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "ClipboardService", &clipboardService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "LyricsService", &lyricsService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "WeatherService", &weatherService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "DropShelfService", &dropShelfService);
     qmlRegisterType<DwmThumbnailItem>("SekaiDesk", 1, 0,
                                       "DwmThumbnail");
 

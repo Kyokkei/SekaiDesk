@@ -31,8 +31,14 @@ PanelWindow {
     property real pointerX: 0
     property real waveStrength: (dockHovered && dragFromSlot < 0) ? 1.0 : 0.0
 
+    ThemeHub {
+        id: themeHub
+        screenW: topBarWindow.screen ? topBarWindow.screen.width : 1920
+        screenH: topBarWindow.screen ? topBarWindow.screen.height : 1080
+    }
+
     // Phase 3: Dock Auto-Hide / Dodge Active Window
-    property bool dockAutoHideEnabled: true
+    property bool dockAutoHideEnabled: themeHub.dockAutoHide
     readonly property bool dockShouldHide: dockAutoHideEnabled
         && WindowTracker.dockOverlap
         && !WindowTracker.bottomEdgeHovered
@@ -1504,7 +1510,7 @@ PanelWindow {
                         width: appNameTxt.implicitWidth + 14
                         height: 20
                         radius: 8
-                        color: "#22D3EE"
+                        color: themeHub.accentA
                         border.width: 1.5
                         border.color: "#1A1B2E"
 
@@ -1545,8 +1551,8 @@ PanelWindow {
                             clip: true
                             gradient: Gradient {
                                 orientation: Gradient.Vertical
-                                GradientStop { position: 0.0; color: "#5EEAD4" }
-                                GradientStop { position: 1.0; color: "#22D3EE" }
+                                GradientStop { position: 0.0; color: themeHub.accentB }
+                                GradientStop { position: 1.0; color: themeHub.accentA }
                             }
 
                             Item {
@@ -1655,13 +1661,170 @@ PanelWindow {
                     }
                 }
 
-                // --- Right Zone: CPU, RAM, Date & Clock ---
+                // --- Right Zone: PowerTools, Hardware, Tray, Audio, Clock ---
                 Row {
                     id: rightContentRow
                     anchors.verticalCenter: parent.verticalCenter
                     anchors.right: parent.right
                     anchors.rightMargin: 5
                     spacing: 5
+
+                    // --- Band Theme / Settings Pill ---
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: bandPillRow.implicitWidth + 10
+                        height: 20
+                        radius: 7
+                        color: themeHub.settingsOpen ? themeHub.accentA : (bandPillMa.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: themeHub.accentA
+                        Row {
+                            id: bandPillRow
+                            anchors.centerIn: parent
+                            spacing: 4
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 11
+                                height: 11
+                                sourceSize.width: 22
+                                sourceSize.height: 22
+                                smooth: true
+                                source: themeHub.settingsOpen ? "qrc:/qml/icons/palette-dark.svg" : "qrc:/qml/icons/palette-light.svg"
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: themeHub.bandShort
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.settingsOpen ? themeHub.darkInk : themeHub.accentA
+                            }
+                        }
+                        MouseArea {
+                            id: bandPillMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!themeHub.settingsOpen && (Date.now() - themeHub.settingsClosedAt) < 220)
+                                    return
+                                themeHub.spotlightOpen = false
+                                themeHub.clipboardOpen = false
+                                themeHub.settingsOpen = !themeHub.settingsOpen
+                            }
+                        }
+                    }
+
+                    // --- Spotlight Search Pill ---
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 22
+                        height: 20
+                        radius: 7
+                        color: themeHub.spotlightOpen ? themeHub.accentA : (spotPillMa.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: "#64748B"
+                        Image {
+                            anchors.centerIn: parent
+                            width: 12
+                            height: 12
+                            sourceSize.width: 24
+                            sourceSize.height: 24
+                            smooth: true
+                            source: themeHub.spotlightOpen ? "qrc:/qml/icons/magnifer-dark.svg" : "qrc:/qml/icons/magnifer-light.svg"
+                        }
+                        MouseArea {
+                            id: spotPillMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!themeHub.spotlightOpen && (Date.now() - themeHub.spotlightClosedAt) < 220)
+                                    return
+                                themeHub.settingsOpen = false
+                                themeHub.clipboardOpen = false
+                                themeHub.spotlightOpen = !themeHub.spotlightOpen
+                            }
+                        }
+                    }
+
+                    // --- Clipboard History Pill ---
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 22
+                        height: 20
+                        radius: 7
+                        color: themeHub.clipboardOpen ? themeHub.accentA : (clipPillMa.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: "#64748B"
+                        Image {
+                            anchors.centerIn: parent
+                            width: 12
+                            height: 12
+                            sourceSize.width: 24
+                            sourceSize.height: 24
+                            smooth: true
+                            source: themeHub.clipboardOpen ? "qrc:/qml/icons/clipboard-text-dark.svg" : "qrc:/qml/icons/clipboard-text-light.svg"
+                        }
+                        MouseArea {
+                            id: clipPillMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!themeHub.clipboardOpen && (Date.now() - themeHub.clipboardClosedAt) < 220)
+                                    return
+                                themeHub.settingsOpen = false
+                                themeHub.spotlightOpen = false
+                                themeHub.clipboardOpen = !themeHub.clipboardOpen
+                            }
+                        }
+                    }
+
+                    // --- Drop Shelf Pill ---
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: DropShelfService.count > 0 ? (shelfPillRow.implicitWidth + 10) : 22
+                        height: 20
+                        radius: 7
+                        color: themeHub.dropShelfOpen ? themeHub.accentB : (shelfPillMa.containsMouse ? "#334155" : "#1E293B")
+                        border.width: 1
+                        border.color: DropShelfService.count > 0 ? themeHub.accentB : "#64748B"
+                        Row {
+                            id: shelfPillRow
+                            anchors.centerIn: parent
+                            spacing: 3
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 12
+                                height: 12
+                                sourceSize.width: 24
+                                sourceSize.height: 24
+                                smooth: true
+                                source: themeHub.dropShelfOpen ? "qrc:/qml/icons/folder-with-files-dark.svg" : "qrc:/qml/icons/folder-with-files-light.svg"
+                            }
+                            Text {
+                                visible: DropShelfService.count > 0
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "" + DropShelfService.count
+                                font.family: "Consolas"
+                                font.pixelSize: 10
+                                font.weight: Font.Bold
+                                color: themeHub.dropShelfOpen ? themeHub.darkInk : themeHub.accentB
+                            }
+                        }
+                        MouseArea {
+                            id: shelfPillMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!themeHub.dropShelfOpen && (Date.now() - themeHub.dropShelfClosedAt) < 220)
+                                    return
+                                themeHub.dropShelfOpen = !themeHub.dropShelfOpen
+                            }
+                        }
+                    }
 
                     Rectangle {
                         anchors.verticalCenter: parent.verticalCenter
@@ -1728,7 +1891,7 @@ PanelWindow {
                         width: trayPillRow.implicitWidth + 10
                         height: 20
                         radius: 7
-                        color: topBarWindow.trayPopupOpen ? "#22D3EE" : (trayPillMouse.containsMouse ? "#334155" : "#1E293B")
+                        color: topBarWindow.trayPopupOpen ? themeHub.accentA : (trayPillMouse.containsMouse ? "#334155" : "#1E293B")
                         border.width: 1
                         border.color: "#64748B"
 
@@ -1778,7 +1941,7 @@ PanelWindow {
                         width: 24
                         height: 20
                         radius: 7
-                        color: topBarWindow.wifiPopupOpen ? "#22D3EE" : (wifiPillMouse.containsMouse ? "#334155" : "#1E293B")
+                        color: topBarWindow.wifiPopupOpen ? themeHub.accentA : (wifiPillMouse.containsMouse ? "#334155" : "#1E293B")
                         border.width: 1
                         border.color: "#38BDF8"
                         Image {
@@ -1815,7 +1978,7 @@ PanelWindow {
                         width: 22
                         height: 20
                         radius: 7
-                        color: topBarWindow.btPopupOpen ? "#22D3EE" : (btPillMouse.containsMouse ? "#334155" : "#1E293B")
+                        color: topBarWindow.btPopupOpen ? themeHub.accentA : (btPillMouse.containsMouse ? "#334155" : "#1E293B")
                         border.width: 1
                         border.color: "#818CF8"
                         Image {
@@ -1852,7 +2015,7 @@ PanelWindow {
                         radius: 7
                         color: volPillMouse.containsMouse ? "#334155" : "#1E293B"
                         border.width: 1
-                        border.color: AudioService.masterMuted ? "#F59E0B" : "#5EEAD4"
+                        border.color: AudioService.masterMuted ? "#F59E0B" : themeHub.accentB
 
                         Text {
                             id: volPillTxt
@@ -1861,7 +2024,7 @@ PanelWindow {
                             font.family: "Consolas"
                             font.pixelSize: 10
                             font.weight: Font.Bold
-                            color: AudioService.masterMuted ? "#FCD34D" : "#5EEAD4"
+                            color: AudioService.masterMuted ? "#FCD34D" : themeHub.accentB
                         }
 
                         MouseArea {
@@ -1898,7 +2061,7 @@ PanelWindow {
                         width: clockRow.implicitWidth + 12
                         height: 20
                         radius: 8
-                        color: topBarWindow.calendarOpen ? "#5EEAD4" : (clockPillMouse.containsMouse ? "#67E8F9" : "#22D3EE")
+                        color: topBarWindow.calendarOpen ? themeHub.accentB : (clockPillMouse.containsMouse ? "#67E8F9" : themeHub.accentA)
                         border.width: 1.5
                         border.color: "#1A1B2E"
 
@@ -2110,7 +2273,7 @@ PanelWindow {
                             width: tabLbl.implicitWidth + 18
                             height: 24
                             radius: 10
-                            color: isCurrent ? "#22D3EE" : "#FFFFFF"
+                            color: isCurrent ? themeHub.accentA : "#FFFFFF"
                             border.width: 1.5
                             border.color: "#1A1B2E"
 
@@ -2171,8 +2334,8 @@ PanelWindow {
                                 radius: parent.radius - 2
                                 gradient: Gradient {
                                     orientation: Gradient.Vertical
-                                    GradientStop { position: 0.0; color: "#5EEAD4" }
-                                    GradientStop { position: 1.0; color: "#22D3EE" }
+                                    GradientStop { position: 0.0; color: themeHub.accentB }
+                                    GradientStop { position: 1.0; color: themeHub.accentA }
                                 }
                             }
                         }
@@ -2443,8 +2606,8 @@ PanelWindow {
                             width: Math.max(0, seekTrack.headX + seekTrack.headSize / 2 - 2)
                             gradient: Gradient {
                                 orientation: Gradient.Horizontal
-                                GradientStop { position: 0.0; color: "#5EEAD4" }
-                                GradientStop { position: 1.0; color: "#22D3EE" }
+                                GradientStop { position: 0.0; color: themeHub.accentB }
+                                GradientStop { position: 1.0; color: themeHub.accentA }
                             }
                         }
 
@@ -2455,7 +2618,7 @@ PanelWindow {
                             height: seekTrack.headSize
                             radius: 3
                             rotation: 45
-                            color: "#22D3EE"
+                            color: themeHub.accentA
                             border.width: 2
                             border.color: "#1A1B2E"
                             scale: mediaPopupWindow.scrubbing ? 1.3 : (seekMouse.containsMouse ? 1.15 : 1.0)
@@ -2592,8 +2755,8 @@ PanelWindow {
                             border.color: "#1A1B2E"
                             gradient: Gradient {
                                 orientation: Gradient.Vertical
-                                GradientStop { position: 0.0; color: "#5EEAD4" }
-                                GradientStop { position: 1.0; color: "#22D3EE" }
+                                GradientStop { position: 0.0; color: themeHub.accentB }
+                                GradientStop { position: 1.0; color: themeHub.accentA }
                             }
                             Row {
                                 anchors.centerIn: parent
@@ -2998,7 +3161,7 @@ PanelWindow {
                             width: 8
                             height: 8
                             rotation: 45
-                            color: "#22D3EE"
+                            color: themeHub.accentA
                             border.width: 1.5
                             border.color: "#1A1B2E"
                         }
@@ -3022,7 +3185,7 @@ PanelWindow {
                             width: phoneModeLbl.implicitWidth + 14
                             height: 24
                             radius: 9
-                            color: topBarWindow.phoneMode ? "#5EEAD4" : "#FFFFFF"
+                            color: topBarWindow.phoneMode ? themeHub.accentB : "#FFFFFF"
                             border.width: 1.5
                             border.color: "#1A1B2E"
                             Text {
@@ -3150,8 +3313,8 @@ PanelWindow {
                                         width: Math.max(0, (parent.width - 2) * (AudioService.masterVolume / 100.0))
                                         gradient: Gradient {
                                             orientation: Gradient.Horizontal
-                                            GradientStop { position: 0.0; color: "#5EEAD4" }
-                                            GradientStop { position: 1.0; color: "#22D3EE" }
+                                            GradientStop { position: 0.0; color: themeHub.accentB }
+                                            GradientStop { position: 1.0; color: themeHub.accentA }
                                         }
                                     }
                                 }
@@ -3179,7 +3342,7 @@ PanelWindow {
                                     width: Math.min(masterVolCol.width, devRow.implicitWidth + 14)
                                     height: 22
                                     radius: 8
-                                    color: modelData.isDefault ? "#5EEAD4" : (devMouse.containsMouse ? "#E2E8F0" : "#F8FAFC")
+                                    color: modelData.isDefault ? themeHub.accentB : (devMouse.containsMouse ? "#E2E8F0" : "#F8FAFC")
                                     border.width: 1.5
                                     border.color: "#1A1B2E"
 
@@ -3332,7 +3495,7 @@ PanelWindow {
                                 width: dmTxt.implicitWidth + 14
                                 height: 20
                                 radius: 8
-                                color: SystemControl.darkMode ? "#5EEAD4" : "#F1F5F9"
+                                color: SystemControl.darkMode ? themeHub.accentB : "#F1F5F9"
                                 border.width: 1.5
                                 border.color: "#1A1B2E"
                                 Row {
@@ -3380,7 +3543,7 @@ PanelWindow {
                                     width: Math.floor((parent.width - 15) / 4)
                                     height: 22
                                     radius: 8
-                                    color: mirMouse.containsMouse ? "#5EEAD4" : "#F1F5F9"
+                                    color: mirMouse.containsMouse ? themeHub.accentB : "#F1F5F9"
                                     border.width: 1.5
                                     border.color: "#1A1B2E"
                                     Text {
@@ -3506,7 +3669,7 @@ PanelWindow {
                                             height: 6
                                             radius: 3
                                             width: Math.max(0, (parent.width - 2) * (modelData.volume / 100.0))
-                                            color: modelData.muted ? "#94A3B8" : "#22D3EE"
+                                            color: modelData.muted ? "#94A3B8" : themeHub.accentA
                                         }
                                     }
                                     MouseArea {
@@ -3670,8 +3833,8 @@ PanelWindow {
                     border.color: "#0F172A"
                     gradient: Gradient {
                         orientation: Gradient.Horizontal
-                        GradientStop { position: 0.0; color: "#22D3EE" }
-                        GradientStop { position: 1.0; color: "#5EEAD4" }
+                        GradientStop { position: 0.0; color: themeHub.accentA }
+                        GradientStop { position: 1.0; color: themeHub.accentB }
                     }
 
                     // Tilted Day Badge (Click to return to Today)
@@ -3704,7 +3867,7 @@ PanelWindow {
                                 font.family: "Segoe UI"
                                 font.pixelSize: 22
                                 font.weight: Font.Black
-                                color: "#5EEAD4"
+                                color: themeHub.accentB
                             }
                         }
 
@@ -3812,7 +3975,7 @@ PanelWindow {
                                     height: 16
                                     radius: 6
                                     visible: isTodayDow
-                                    color: "#22D3EE"
+                                    color: themeHub.accentA
                                 }
                                 Text {
                                     anchors.centerIn: parent
@@ -3878,7 +4041,7 @@ PanelWindow {
                                     height: 24
                                     radius: 8
                                     visible: modelData.isToday
-                                    color: "#22D3EE"
+                                    color: themeHub.accentA
                                 }
 
                                 Text {
@@ -3954,7 +4117,7 @@ PanelWindow {
                                     text: "◆"
                                     font.family: "Segoe UI Symbol"
                                     font.pixelSize: index === calendarPopupWindow.viewMonth ? 11 : 8
-                                    color: index === calendarPopupWindow.viewMonth ? "#22D3EE" : "#475569"
+                                    color: index === calendarPopupWindow.viewMonth ? themeHub.accentA : "#475569"
                                     anchors.verticalCenter: parent.verticalCenter
                                     MouseArea {
                                         anchors.fill: parent
@@ -4132,7 +4295,7 @@ PanelWindow {
                         width: 40
                         height: 22
                         radius: 11
-                        color: SystemControl.wifiEnabled ? "#22D3EE" : "#CBD5E1"
+                        color: SystemControl.wifiEnabled ? themeHub.accentA : "#CBD5E1"
                         border.width: 1.5
                         border.color: "#1A1B2E"
                         Rectangle {
@@ -4181,7 +4344,7 @@ PanelWindow {
                                 width: wifiNetCol.width
                                 height: 28
                                 radius: 9
-                                color: modelData.connected ? "#5EEAD4" : (wnMouse.containsMouse ? "#E0F2FE" : "#FFFFFF")
+                                color: modelData.connected ? themeHub.accentB : (wnMouse.containsMouse ? "#E0F2FE" : "#FFFFFF")
                                 border.width: 1.5
                                 border.color: "#1A1B2E"
 
@@ -4564,8 +4727,8 @@ PanelWindow {
                         width: Math.max(0, (parent.width - 4) * (osdVolumeWindow.shownVol / 100.0))
                         gradient: Gradient {
                             orientation: Gradient.Horizontal
-                            GradientStop { position: 0.0; color: "#5EEAD4" }
-                            GradientStop { position: 1.0; color: "#22D3EE" }
+                            GradientStop { position: 0.0; color: themeHub.accentB }
+                            GradientStop { position: 1.0; color: themeHub.accentA }
                         }
                     }
                 }
@@ -4582,5 +4745,27 @@ PanelWindow {
                 }
             }
         }
+    }
+
+    ScreenRound {
+        themeHub: themeHub
+        fullscreenActive: topBarWindow.fullscreenActive
+        scrW: themeHub.screenW
+        scrH: themeHub.screenH
+    }
+
+    SettingsModal {
+        themeHub: themeHub
+        fullscreenActive: topBarWindow.fullscreenActive
+    }
+
+    PowerTools {
+        themeHub: themeHub
+        fullscreenActive: topBarWindow.fullscreenActive
+    }
+
+    DesktopWidgets {
+        themeHub: themeHub
+        fullscreenActive: topBarWindow.fullscreenActive
     }
 }
