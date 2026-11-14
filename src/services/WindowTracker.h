@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QVariantList>
 #include <QVariantMap>
+#include <QVector>
 
 class WindowTracker : public QObject {
     Q_OBJECT
@@ -92,9 +93,13 @@ private:
     QString m_uptimeText = QStringLiteral("0m");
     QString m_machineName;
     QString m_userName;
-    quint64 m_prevIdleTime = 0;
-    quint64 m_prevKernelTime = 0;
-    quint64 m_prevUserTime = 0;
+    struct CpuSample {
+        quint64 idle = 0;
+        quint64 total = 0;
+    };
+    QVector<CpuSample> m_cpuSamples;
+    double m_cpuEma = -1.0;
+    int m_cpuTick = 0;
     QVariantList m_runningApps;
     QHash<QString, AppGroup> m_groups;
 };

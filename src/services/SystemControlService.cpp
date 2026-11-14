@@ -1,6 +1,8 @@
 #include "SystemControlService.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
+#include <QGuiApplication>
 #include <QHash>
 #include <QHostAddress>
 #include <QNetworkInterface>
@@ -9,54 +11,209 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVariantMap>
+#include <QWindow>
 
 #ifdef Q_OS_WIN
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#if !defined(_WIN32_WINNT) || (_WIN32_WINNT < 0x0600)
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#include <winsock2.h>
+#include <ws2ipdef.h>
 #include <windows.h>
+#include <iphlpapi.h>
+#include <netioapi.h>
 #include <commdlg.h>
 #include <shellapi.h>
 #include <thread>
+
+#ifndef MOD_NOREPEAT
+#define MOD_NOREPEAT 0x4000
+#endif
+
+#ifndef EVENT_OBJECT_UNCLOAKED
+#define EVENT_OBJECT_UNCLOAKED 0x8018
+#endif
 
 namespace {
 constexpr int kQuickPanelHotkeyId = 0x534B;
 constexpr int kSpotlightHotkeyId = 0x534C;
 constexpr int kClipboardHotkeyId = 0x5343;
 constexpr UINT kLlAltSpaceMsg = WM_APP + 0x51;
+constexpr UINT kLlQuickPanelMsg = WM_APP + 0x52;
+constexpr UINT kLlVolMuteMsg = WM_APP + 0x53;
+constexpr UINT kLlVolDownMsg = WM_APP + 0x54;
+constexpr UINT kLlVolUpMsg = WM_APP + 0x56;
 
 HWND s_hotkeyMsgHwnd = nullptr;
 bool s_altSpaceDown = false;
+bool s_ctrlAltADown = false;
+bool s_volMuteDown = false;
+bool s_volDownDown = false;
+bool s_volUpDown = false;
+HWINEVENTHOOK s_osdWinEventHook = nullptr;
+HWINEVENTHOOK s_osdUncloakHook = nullptr;
+bool s_suppressStockOsd = false;
+
+bool isWin10StockOsdWindow(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd))
+        return false;
+
+    wchar_t cls[64]{};
+    if (GetClassNameW(hwnd, cls, 64) == 0 || wcscmp(cls, L"NativeHWNDHost") != 0)
+        return false;
+
+    if (GetWindowTextLengthW(hwnd) != 0)
+        return false;
+
+    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_TOOLWINDOW) == 0)
+        return false;
+
+    if (!FindWindowExW(hwnd, nullptr, L"DirectUIHWND", nullptr))
+        return false;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0 || pid == GetCurrentProcessId())
+        return false;
+
+    HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!hProc)
+        return false;
+
+    wchar_t exePath[MAX_PATH]{};
+    DWORD sz = MAX_PATH;
+    bool isShellHost = false;
+    if (QueryFullProcessImageNameW(hProc, 0, exePath, &sz)) {
+        const wchar_t* base = wcsrchr(exePath, L'\\');
+        const wchar_t* name = base ? base + 1 : exePath;
+        isShellHost = (_wcsicmp(name, L"explorer.exe") == 0
+                       || _wcsicmp(name, L"ShellExperienceHost.exe") == 0);
+    }
+    CloseHandle(hProc);
+    return isShellHost;
+}
+
+void hideStockOsdTree(HWND hwnd)
+{
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+    if (HWND child = FindWindowExW(hwnd, nullptr, L"DirectUIHWND", nullptr))
+        ShowWindowAsync(child, SW_HIDE);
+    ShowWindowAsync(hwnd, SW_HIDE);
+}
+
+BOOL CALLBACK hideExistingStockOsdProc(HWND hwnd, LPARAM)
+{
+    if (IsWindowVisible(hwnd) && isWin10StockOsdWindow(hwnd))
+        hideStockOsdTree(hwnd);
+    return TRUE;
+}
+
+void CALLBACK osdWinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject,
+                              LONG idChild, DWORD, DWORD)
+{
+    if (!s_suppressStockOsd
+        || (event != EVENT_OBJECT_SHOW && event != EVENT_OBJECT_UNCLOAKED)) {
+        return;
+    }
+    if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || !hwnd || !IsWindow(hwnd))
+        return;
+
+    HWND target = hwnd;
+    wchar_t cls[64]{};
+    if (GetClassNameW(hwnd, cls, 64) > 0 && wcscmp(cls, L"DirectUIHWND") == 0) {
+        HWND parent = GetParent(hwnd);
+        if (parent)
+            target = parent;
+    }
+    if (isWin10StockOsdWindow(target))
+        hideStockOsdTree(target);
+}
 
 LRESULT CALLBACK lowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     if (nCode == HC_ACTION && lParam) {
         const auto* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
-        if ((kb->flags & LLKHF_INJECTED) == 0 && kb->vkCode == VK_SPACE) {
+        if ((kb->flags & LLKHF_INJECTED) == 0) {
             const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
             const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
-            if (isUp && s_altSpaceDown) {
-                s_altSpaceDown = false;
-                return 1;
-            }
-            const bool altDown = (kb->flags & LLKHF_ALTDOWN) != 0;
+            const bool altDown = ((kb->flags & LLKHF_ALTDOWN) != 0)
+                                 || ((GetAsyncKeyState(VK_MENU) & 0x8000) != 0);
             const bool ctrlDown = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
             const bool shiftDown = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
             const bool winDown = ((GetAsyncKeyState(VK_LWIN) & 0x8000) != 0)
                                 || ((GetAsyncKeyState(VK_RWIN) & 0x8000) != 0);
-            if (isDown && altDown && !ctrlDown && !shiftDown && !winDown) {
-                if (!s_altSpaceDown) {
-                    s_altSpaceDown = true;
-                    // Cancel pending Alt menu activation (SC_KEYMENU) on Alt release.
-                    INPUT in{};
-                    in.type = INPUT_KEYBOARD;
-                    in.ki.wVk = 0xFF;
-                    in.ki.dwFlags = KEYEVENTF_KEYUP;
-                    SendInput(1, &in, sizeof(INPUT));
-                    if (s_hotkeyMsgHwnd)
-                        PostMessageW(s_hotkeyMsgHwnd, kLlAltSpaceMsg, 0, 0);
+
+            if (kb->vkCode == VK_SPACE) {
+                if (isUp && s_altSpaceDown) {
+                    s_altSpaceDown = false;
+                    return 1;
                 }
-                return 1;
+                if (isDown && altDown && !ctrlDown && !shiftDown && !winDown) {
+                    if (!s_altSpaceDown) {
+                        s_altSpaceDown = true;
+                        // Cancel pending Alt menu activation (SC_KEYMENU) on Alt release.
+                        INPUT in{};
+                        in.type = INPUT_KEYBOARD;
+                        in.ki.wVk = 0xFF;
+                        in.ki.dwFlags = KEYEVENTF_KEYUP;
+                        SendInput(1, &in, sizeof(INPUT));
+                        if (s_hotkeyMsgHwnd)
+                            PostMessageW(s_hotkeyMsgHwnd, kLlAltSpaceMsg, 0, 0);
+                    }
+                    return 1;
+                }
+            } else if (kb->vkCode == 'A') {
+                if (isUp && s_ctrlAltADown) {
+                    s_ctrlAltADown = false;
+                    return 1;
+                }
+                if (isDown && ctrlDown && altDown && !shiftDown && !winDown) {
+                    if (!s_ctrlAltADown) {
+                        s_ctrlAltADown = true;
+                        if (s_hotkeyMsgHwnd)
+                            PostMessageW(s_hotkeyMsgHwnd, kLlQuickPanelMsg, 0, 0);
+                    }
+                    return 1;
+                }
+            } else if (kb->vkCode == VK_VOLUME_UP) {
+                if (isUp && s_volUpDown) {
+                    s_volUpDown = false;
+                    return 1;
+                }
+                if (isDown && s_suppressStockOsd && s_hotkeyMsgHwnd) {
+                    s_volUpDown = true;
+                    PostMessageW(s_hotkeyMsgHwnd, kLlVolUpMsg, 0, 0);
+                    return 1;
+                }
+            } else if (kb->vkCode == VK_VOLUME_DOWN) {
+                if (isUp && s_volDownDown) {
+                    s_volDownDown = false;
+                    return 1;
+                }
+                if (isDown && s_suppressStockOsd && s_hotkeyMsgHwnd) {
+                    s_volDownDown = true;
+                    PostMessageW(s_hotkeyMsgHwnd, kLlVolDownMsg, 0, 0);
+                    return 1;
+                }
+            } else if (kb->vkCode == VK_VOLUME_MUTE) {
+                if (isUp && s_volMuteDown) {
+                    s_volMuteDown = false;
+                    return 1;
+                }
+                if (isDown && s_suppressStockOsd && s_hotkeyMsgHwnd) {
+                    if (!s_volMuteDown) {
+                        s_volMuteDown = true;
+                        PostMessageW(s_hotkeyMsgHwnd, kLlVolMuteMsg, 0, 0);
+                    }
+                    return 1;
+                }
             }
         }
     }
@@ -135,6 +292,7 @@ SystemControlService::SystemControlService(QObject* parent)
     : QObject(parent)
 {
 #ifdef Q_OS_WIN
+    m_startupTimer.start();
     if (QCoreApplication::instance())
         QCoreApplication::instance()->installNativeEventFilter(this);
 
@@ -147,12 +305,16 @@ SystemControlService::SystemControlService(QObject* parent)
     HHOOK kbdHook = SetWindowsHookExW(WH_KEYBOARD_LL, lowLevelKeyboardProc,
                                       GetModuleHandleW(nullptr), 0);
     m_kbdHook = kbdHook;
-    qInfo("SystemControlService: WH_KEYBOARD_LL Alt+Space hook %s",
+    qInfo("SystemControlService: WH_KEYBOARD_LL hook (Alt+Space, Ctrl+Alt+A) %s",
           kbdHook ? "installed" : "failed");
 
     m_hotkeyRetryTimer.setInterval(5000);
     connect(&m_hotkeyRetryTimer, &QTimer::timeout, this, &SystemControlService::registerHotkeys);
     registerHotkeys();
+
+    m_netSpeedTimer.setInterval(1000);
+    connect(&m_netSpeedTimer, &QTimer::timeout, this, &SystemControlService::sampleNetSpeed);
+
     refresh();
 #endif
 }
@@ -160,6 +322,13 @@ SystemControlService::SystemControlService(QObject* parent)
 SystemControlService::~SystemControlService()
 {
 #ifdef Q_OS_WIN
+    applyStockOsdSuppression(false);
+    m_suppressStockOsd = false;
+    m_netSpeedTimer.stop();
+    if (m_keepAwake) {
+        SetThreadExecutionState(ES_CONTINUOUS);
+        m_keepAwake = false;
+    }
     m_hotkeyRetryTimer.stop();
     if (m_kbdHook) {
         UnhookWindowsHookEx(static_cast<HHOOK>(m_kbdHook));
@@ -167,16 +336,21 @@ SystemControlService::~SystemControlService()
     }
     s_hotkeyMsgHwnd = nullptr;
     s_altSpaceDown = false;
-    if (m_hotkeyMsgHwnd) {
-        DestroyWindow(static_cast<HWND>(m_hotkeyMsgHwnd));
+    s_ctrlAltADown = false;
+    s_volMuteDown = false;
+    s_volDownDown = false;
+    s_volUpDown = false;
+    HWND msgHwnd = static_cast<HWND>(m_hotkeyMsgHwnd);
+    if (m_hotkeyRegistered)
+        UnregisterHotKey(msgHwnd, kQuickPanelHotkeyId);
+    if (m_spotlightHotkeyRegistered)
+        UnregisterHotKey(msgHwnd, kSpotlightHotkeyId);
+    if (m_clipboardHotkeyRegistered)
+        UnregisterHotKey(msgHwnd, kClipboardHotkeyId);
+    if (msgHwnd) {
+        DestroyWindow(msgHwnd);
         m_hotkeyMsgHwnd = nullptr;
     }
-    if (m_hotkeyRegistered)
-        UnregisterHotKey(nullptr, kQuickPanelHotkeyId);
-    if (m_spotlightHotkeyRegistered)
-        UnregisterHotKey(nullptr, kSpotlightHotkeyId);
-    if (m_clipboardHotkeyRegistered)
-        UnregisterHotKey(nullptr, kClipboardHotkeyId);
     if (QCoreApplication::instance())
         QCoreApplication::instance()->removeNativeEventFilter(this);
 #endif
@@ -185,18 +359,22 @@ SystemControlService::~SystemControlService()
 void SystemControlService::registerHotkeys()
 {
 #ifdef Q_OS_WIN
+    HWND msgHwnd = static_cast<HWND>(m_hotkeyMsgHwnd);
     if (!m_hotkeyRegistered) {
-        m_hotkeyRegistered = (RegisterHotKey(nullptr, kQuickPanelHotkeyId, MOD_CONTROL | MOD_ALT, 'A') != FALSE);
+        m_hotkeyRegistered = (RegisterHotKey(msgHwnd, kQuickPanelHotkeyId,
+                                             MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'A') != FALSE);
         qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+A %s",
               m_hotkeyRegistered ? "ok" : "pending");
     }
     if (!m_clipboardHotkeyRegistered) {
-        m_clipboardHotkeyRegistered = (RegisterHotKey(nullptr, kClipboardHotkeyId, MOD_CONTROL | MOD_ALT, 'V') != FALSE);
+        m_clipboardHotkeyRegistered = (RegisterHotKey(msgHwnd, kClipboardHotkeyId,
+                                                      MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'V') != FALSE);
         qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+V %s",
               m_clipboardHotkeyRegistered ? "ok" : "pending");
     }
     if (!m_kbdHook && !m_spotlightHotkeyRegistered) {
-        m_spotlightHotkeyRegistered = (RegisterHotKey(nullptr, kSpotlightHotkeyId, MOD_ALT, VK_SPACE) != FALSE);
+        m_spotlightHotkeyRegistered = (RegisterHotKey(msgHwnd, kSpotlightHotkeyId,
+                                                      MOD_ALT | MOD_NOREPEAT, VK_SPACE) != FALSE);
     }
 
     const bool needRetry = !m_hotkeyRegistered || !m_clipboardHotkeyRegistered
@@ -208,20 +386,46 @@ void SystemControlService::registerHotkeys()
 #endif
 }
 
+void SystemControlService::triggerQuickPanelToggle()
+{
+    if (m_quickPanelToggleTimer.isValid() && m_quickPanelToggleTimer.elapsed() < 150)
+        return;
+    m_quickPanelToggleTimer.start();
+    emit quickPanelToggleRequested();
+}
+
 bool SystemControlService::nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result)
 {
     Q_UNUSED(result);
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
         const MSG* msg = static_cast<const MSG*>(message);
-        if (msg && msg->message == kLlAltSpaceMsg && msg->hwnd == static_cast<HWND>(m_hotkeyMsgHwnd)) {
-            emit spotlightToggleRequested();
-            return true;
+        if (msg && msg->hwnd == static_cast<HWND>(m_hotkeyMsgHwnd)) {
+            if (msg->message == kLlAltSpaceMsg) {
+                emit spotlightToggleRequested();
+                return true;
+            }
+            if (msg->message == kLlQuickPanelMsg) {
+                triggerQuickPanelToggle();
+                return true;
+            }
+            if (msg->message == kLlVolUpMsg) {
+                emit volumeStepRequested(2);
+                return true;
+            }
+            if (msg->message == kLlVolDownMsg) {
+                emit volumeStepRequested(-2);
+                return true;
+            }
+            if (msg->message == kLlVolMuteMsg) {
+                emit volumeMuteToggleRequested();
+                return true;
+            }
         }
         if (msg && msg->message == WM_HOTKEY) {
             const int id = static_cast<int>(msg->wParam);
             if (id == kQuickPanelHotkeyId) {
-                emit quickPanelToggleRequested();
+                triggerQuickPanelToggle();
                 return true;
             }
             if (id == kSpotlightHotkeyId) {
@@ -319,6 +523,7 @@ void SystemControlService::toggleDarkMode()
                         SMTO_ABORTIFHUNG, 500, nullptr);
     m_darkMode = (nextVal == 0);
     emit stateChanged();
+    emit darkModeOsdRequested(m_darkMode);
 #endif
 }
 
@@ -374,6 +579,10 @@ BOOL CALLBACK collectMonitorsProc(HMONITOR hMon, HDC, LPRECT, LPARAM lParam)
 void SystemControlService::readBrightness()
 {
 #ifdef Q_OS_WIN
+    const bool wasInitialized = m_brightnessInitialized;
+    const bool prevSupported = m_brightnessSupported;
+    const int prevBrightness = m_brightness;
+
     m_brightnessSupported = false;
     m_monitorName.clear();
     m_monitors.clear();
@@ -428,6 +637,15 @@ void SystemControlService::readBrightness()
         }
         api.destroyPhys(count, mons.data());
     }
+
+    m_brightnessInitialized = true;
+    if (wasInitialized && prevSupported && m_brightnessSupported && m_brightness != prevBrightness) {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+        if ((!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 800)
+            && now - m_lastSelfBrightnessMs > 500) {
+            emit brightnessOsdRequested(m_brightness);
+        }
+    }
 #endif
 }
 
@@ -474,7 +692,10 @@ void SystemControlService::setMonitorBrightness(int index, int percent)
         }
         api.destroyPhys(count, mons.data());
     }
+    m_lastSelfBrightnessMs = QDateTime::currentMSecsSinceEpoch();
     emit stateChanged();
+    if (index == 0)
+        emit brightnessOsdRequested(clamped);
 #else
     Q_UNUSED(index);
     Q_UNUSED(percent);
@@ -581,17 +802,57 @@ QString SystemControlService::pickImageFile(const QString& title)
     if (!pGetOpen)
         return {};
 
+    HWND ownerHwnd = nullptr;
+    if (QWindow* fw = QGuiApplication::focusWindow()) {
+        HWND h = reinterpret_cast<HWND>(fw->winId());
+        if (h && IsWindow(h))
+            ownerHwnd = h;
+    }
+    if (!ownerHwnd) {
+        const auto wins = QGuiApplication::topLevelWindows();
+        for (QWindow* w : wins) {
+            if (!w || !w->isVisible())
+                continue;
+            HWND h = reinterpret_cast<HWND>(w->winId());
+            if (h && IsWindow(h) && (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) {
+                ownerHwnd = h;
+                break;
+            }
+        }
+        if (!ownerHwnd) {
+            for (QWindow* w : wins) {
+                if (!w || !w->isVisible())
+                    continue;
+                HWND h = reinterpret_cast<HWND>(w->winId());
+                if (h && IsWindow(h)) {
+                    ownerHwnd = h;
+                    break;
+                }
+            }
+        }
+    }
+    HWND tempOwner = nullptr;
+    if (!ownerHwnd) {
+        tempOwner = CreateWindowExW(0, L"STATIC", L"SekaiDesk", WS_POPUP,
+                                    0, 0, 0, 0, nullptr, nullptr,
+                                    GetModuleHandleW(nullptr), nullptr);
+        ownerHwnd = tempOwner;
+    }
+
     wchar_t fileBuf[MAX_PATH * 4]{};
     const std::wstring wTitle = title.isEmpty() ? std::wstring(L"Select Image") : title.toStdWString();
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
-    ofn.hwndOwner = nullptr;
+    ofn.hwndOwner = ownerHwnd;
     ofn.lpstrFilter = L"Image Files (*.png;*.jpg;*.jpeg;*.webp)\0*.png;*.jpg;*.jpeg;*.webp\0All Files (*.*)\0*.*\0\0";
     ofn.lpstrFile = fileBuf;
     ofn.nMaxFile = static_cast<DWORD>(sizeof(fileBuf) / sizeof(wchar_t));
     ofn.lpstrTitle = wTitle.c_str();
     ofn.Flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-    if (pGetOpen(&ofn)) {
+    const BOOL ok = pGetOpen(&ofn);
+    if (tempOwner)
+        DestroyWindow(tempOwner);
+    if (ok) {
         return QUrl::fromLocalFile(QString::fromWCharArray(fileBuf)).toString();
     }
 #else
@@ -1116,5 +1377,164 @@ void SystemControlService::toggleBluetooth()
     refreshBluetooth();
     if (nextState == 1)
         QTimer::singleShot(450, this, &SystemControlService::refreshBluetooth);
+#endif
+}
+
+void SystemControlService::setNetSpeedActive(bool active)
+{
+#ifdef Q_OS_WIN
+    if (m_netSpeedActive == active)
+        return;
+    m_netSpeedActive = active;
+    if (active) {
+        m_hasNetBaseline = false;
+        sampleNetSpeed();
+        m_netSpeedTimer.start();
+    } else {
+        m_netSpeedTimer.stop();
+        m_hasNetBaseline = false;
+        if (!qFuzzyIsNull(m_downloadBps) || !qFuzzyIsNull(m_uploadBps)) {
+            m_downloadBps = 0.0;
+            m_uploadBps = 0.0;
+            emit netSpeedChanged();
+        }
+    }
+#else
+    Q_UNUSED(active);
+#endif
+}
+
+void SystemControlService::sampleNetSpeed()
+{
+#ifdef Q_OS_WIN
+    PMIB_IF_TABLE2 table = nullptr;
+    if (GetIfTable2(&table) != NO_ERROR || !table)
+        return;
+
+    quint64 totalRx = 0;
+    quint64 totalTx = 0;
+    for (ULONG i = 0; i < table->NumEntries; ++i) {
+        const MIB_IF_ROW2& row = table->Table[i];
+        if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK)
+            continue;
+        if (row.Type != IF_TYPE_ETHERNET_CSMACD && row.Type != IF_TYPE_IEEE80211)
+            continue;
+        if (row.MediaConnectState != MediaConnectStateConnected || row.OperStatus != IfOperStatusUp)
+            continue;
+        if (row.InterfaceAndOperStatusFlags.FilterInterface)
+            continue;
+
+        const QString desc = QString::fromWCharArray(row.Description).toLower();
+        if (desc.contains(QStringLiteral("vmware"))
+            || desc.contains(QStringLiteral("virtualbox"))
+            || desc.contains(QStringLiteral("vethernet"))
+            || desc.contains(QStringLiteral("hyper-v"))
+            || desc.contains(QStringLiteral("tailscale"))
+            || desc.contains(QStringLiteral("radmin"))
+            || desc.contains(QStringLiteral("zerotier"))
+            || desc.contains(QStringLiteral("hamachi"))
+            || desc.contains(QStringLiteral("wireguard"))
+            || desc.contains(QStringLiteral("openvpn"))
+            || desc.contains(QStringLiteral("wintun"))
+            || desc.contains(QStringLiteral("loopback"))
+            || desc.contains(QStringLiteral("qos"))
+            || desc.contains(QStringLiteral("lightweight filter"))
+            || desc.contains(QStringLiteral("wfp"))
+            || desc.contains(QStringLiteral("npcap"))) {
+            continue;
+        }
+        totalRx += static_cast<quint64>(row.InOctets);
+        totalTx += static_cast<quint64>(row.OutOctets);
+    }
+    FreeMibTable(table);
+
+    if (!m_hasNetBaseline) {
+        m_prevRxBytes = totalRx;
+        m_prevTxBytes = totalTx;
+        m_netElapsed.restart();
+        m_hasNetBaseline = true;
+        return;
+    }
+
+    const qint64 elapsedMs = m_netElapsed.restart();
+    if (elapsedMs <= 0)
+        return;
+
+    const double sec = static_cast<double>(elapsedMs) / 1000.0;
+    const qreal nextDl = (totalRx >= m_prevRxBytes) ? static_cast<qreal>(totalRx - m_prevRxBytes) / sec : 0.0;
+    const qreal nextUl = (totalTx >= m_prevTxBytes) ? static_cast<qreal>(totalTx - m_prevTxBytes) / sec : 0.0;
+    m_prevRxBytes = totalRx;
+    m_prevTxBytes = totalTx;
+
+    if (!qFuzzyCompare(nextDl + 1.0, m_downloadBps + 1.0)
+        || !qFuzzyCompare(nextUl + 1.0, m_uploadBps + 1.0)) {
+        m_downloadBps = nextDl;
+        m_uploadBps = nextUl;
+        emit netSpeedChanged();
+    }
+#endif
+}
+
+void SystemControlService::toggleKeepAwake()
+{
+#ifdef Q_OS_WIN
+    const bool next = !m_keepAwake;
+    const EXECUTION_STATE flags = next
+        ? (ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED)
+        : ES_CONTINUOUS;
+    if (SetThreadExecutionState(flags) != 0) {
+        m_keepAwake = next;
+        emit keepAwakeChanged();
+    }
+#endif
+}
+
+void SystemControlService::applyStockOsdSuppression(bool on)
+{
+#ifdef Q_OS_WIN
+    s_suppressStockOsd = on;
+    if (on) {
+        if (!s_osdWinEventHook) {
+            s_osdWinEventHook = SetWinEventHook(
+                EVENT_OBJECT_SHOW, EVENT_OBJECT_SHOW,
+                nullptr, osdWinEventProc, 0, 0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        }
+        if (!s_osdUncloakHook) {
+            s_osdUncloakHook = SetWinEventHook(
+                EVENT_OBJECT_UNCLOAKED, EVENT_OBJECT_UNCLOAKED,
+                nullptr, osdWinEventProc, 0, 0,
+                WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        }
+        EnumWindows(hideExistingStockOsdProc, 0);
+    } else {
+        if (s_osdWinEventHook) {
+            UnhookWinEvent(s_osdWinEventHook);
+            s_osdWinEventHook = nullptr;
+        }
+        if (s_osdUncloakHook) {
+            UnhookWinEvent(s_osdUncloakHook);
+            s_osdUncloakHook = nullptr;
+        }
+    }
+#else
+    Q_UNUSED(on);
+#endif
+}
+
+void SystemControlService::setSuppressStockOsd(bool on)
+{
+    if (m_suppressStockOsd == on)
+        return;
+    m_suppressStockOsd = on;
+    applyStockOsdSuppression(on);
+    emit suppressStockOsdChanged();
+}
+
+void SystemControlService::hideStockOsdIfActive()
+{
+#ifdef Q_OS_WIN
+    if (m_suppressStockOsd)
+        EnumWindows(hideExistingStockOsdProc, 0);
 #endif
 }

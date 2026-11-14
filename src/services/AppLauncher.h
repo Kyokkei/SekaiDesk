@@ -12,16 +12,26 @@ class AppLauncher : public QObject {
     Q_OBJECT
     Q_PROPERTY(QVariantList pinnedApps READ pinnedApps NOTIFY pinnedAppsChanged)
     Q_PROPERTY(QVariantList installedApps READ installedApps NOTIFY installedAppsChanged)
+    Q_PROPERTY(QVariantList hiddenApps READ hiddenApps NOTIFY hiddenAppsChanged)
 
 public:
     explicit AppLauncher(SettingsStore* settings, QObject* parent = nullptr);
 
     QVariantList pinnedApps() const { return m_pinnedApps; }
     QVariantList installedApps() const { return m_installedApps; }
+    Q_INVOKABLE QVariantList hiddenApps() const;
 
     Q_INVOKABLE bool launch(const QString& target, const QString& args = {});
+    Q_INVOKABLE bool runAsDifferentUser(const QString& target, const QString& args = {});
     Q_INVOKABLE bool runElevated(const QString& target, const QString& args = {});
     Q_INVOKABLE bool revealInExplorer(const QString& target);
+    Q_INVOKABLE bool openContainingFolder(const QString& target);
+    Q_INVOKABLE bool openTargetFolder(const QString& target);
+    Q_INVOKABLE void hideApp(const QString& target, const QString& name = {});
+    Q_INVOKABLE void unhideApp(const QString& target);
+    Q_INVOKABLE void clearHiddenApps();
+    Q_INVOKABLE bool isHidden(const QString& target) const;
+    Q_INVOKABLE QVariantMap inspectTarget(const QString& target) const;
     Q_INVOKABLE void recordUsage(const QString& target);
     Q_INVOKABLE QVariantList searchApps(const QString& query) const;
     Q_INVOKABLE QVariantList listPathSuggestions(const QString& rawPath) const;
@@ -41,13 +51,16 @@ public:
 signals:
     void pinnedAppsChanged();
     void installedAppsChanged();
+    void hiddenAppsChanged();
 
 private:
     void seedDefaultsIfEmpty();
     void savePinnedApps();
+    void saveHiddenApps();
 
     SettingsStore* m_settings = nullptr;
     QVariantList m_pinnedApps;
     QVariantList m_installedApps;
     QVariantMap m_usageCounts;
+    QVariantMap m_hiddenApps;
 };

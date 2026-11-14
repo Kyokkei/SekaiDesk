@@ -27,6 +27,9 @@ qt_add_executable(SekaiDesk WIN32
     src/services/TrayService.h     src/services/TrayService.cpp
     src/services/ClipboardService.h src/services/ClipboardService.cpp
     src/services/DeskExtrasService.h src/services/DeskExtrasService.cpp
+    src/services/NotificationService.h src/services/NotificationService.cpp
+    src/services/VisualizerService.h src/services/VisualizerService.cpp
+    src/services/WallpaperService.h src/services/WallpaperService.cpp
     src/SekaiDesk.rc
 )
 
@@ -42,17 +45,24 @@ qt_add_resources(SekaiDesk "qml"
         qml/SettingsModal.qml
         qml/PowerTools.qml
         qml/DesktopWidgets.qml
+        qml/VisualizerOverlay.qml
+        qml/SekaiOsd.qml
+        qml/WallpaperSelector.qml
         qml/icons/alt-arrow-down-dark.svg
         qml/icons/alt-arrow-down-light.svg
         qml/icons/alt-arrow-up-dark.svg
         qml/icons/alt-arrow-up-light.svg
+        qml/icons/arrow-down-dark.svg
+        qml/icons/arrow-up-dark.svg
         qml/icons/bt-dark.svg
         qml/icons/bt-light.svg
+        qml/icons/calendar-light.svg
         qml/icons/check-circle-dark.svg
         qml/icons/checklist-dark.svg
         qml/icons/clipboard-text-dark.svg
         qml/icons/clipboard-text-light.svg
         qml/icons/clock-circle-dark.svg
+        qml/icons/clock-circle-light.svg
         qml/icons/close-circle-dark.svg
         qml/icons/cloud-dark.svg
         qml/icons/cloud-rain-dark.svg
@@ -61,11 +71,14 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/cloud-sun-dark.svg
         qml/icons/cloudy-moon-dark.svg
         qml/icons/copy-dark.svg
+        qml/icons/fog-dark.svg
         qml/icons/folder-with-files-dark.svg
         qml/icons/folder-with-files-light.svg
+        qml/icons/handsig-yozora.png
         qml/icons/headphones-round-dark.svg
         qml/icons/magnifer-dark.svg
         qml/icons/magnifer-light.svg
+        qml/icons/map-point-teal.svg
         qml/icons/moon-dark.svg
         qml/icons/music-note-dark.svg
         qml/icons/music-note-teal.svg
@@ -77,6 +90,7 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/pause-dark.svg
         qml/icons/pin-dark.svg
         qml/icons/play-dark.svg
+        qml/icons/refresh-light.svg
         qml/icons/settings-dark.svg
         qml/icons/settings-light.svg
         qml/icons/skip-next-dark.svg
@@ -89,8 +103,10 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/volume-cross-light.svg
         qml/icons/volume-loud-dark.svg
         qml/icons/volume-loud-light.svg
+        qml/icons/waterdrop-dark.svg
         qml/icons/wifi-dark.svg
         qml/icons/wifi-light.svg
+        qml/icons/wind-dark.svg
 )
 
 target_link_libraries(SekaiDesk PRIVATE
@@ -99,7 +115,7 @@ target_link_libraries(SekaiDesk PRIVATE
 
 if(WIN32)
     target_link_libraries(SekaiDesk PRIVATE
-        dwmapi user32 shell32 ole32 oleaut32 ws2_32 winhttp
+        dwmapi user32 shell32 ole32 oleaut32 ws2_32 winhttp iphlpapi
     )
 endif()
 

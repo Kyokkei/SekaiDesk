@@ -7,8 +7,9 @@ PanelWindow {
     required property var themeHub
     required property bool fullscreenActive
 
-    visible: themeHub.settingsOpen && !fullscreenActive
-    clickThrough: false
+    // Disabled in Round 5: Landscape Phone Settings inside quickPanelWindow replaces SettingsModal
+    visible: false
+    clickThrough: true
     color: "transparent"
 
     readonly property int cardW: 500
@@ -319,8 +320,9 @@ PanelWindow {
             // Desktop Widgets Toggles
             Row {
                 width: parent.width
+                spacing: 6
                 Text {
-                    width: parent.width - 105
+                    width: parent.width - 204
                     anchors.verticalCenter: parent.verticalCenter
                     text: "DESKTOP WIDGETS (DESKTOP LAYER)"
                     font.family: "Segoe UI"
@@ -329,7 +331,34 @@ PanelWindow {
                     color: "#64748B"
                 }
                 Rectangle {
-                    width: 105
+                    width: 90
+                    height: 22
+                    radius: 7
+                    color: themeHub.editMode ? themeHub.accentA : (editDskMa.containsMouse ? themeHub.hoverTint : themeHub.accentB)
+                    border.width: 1.5
+                    border.color: themeHub.darkInk
+                    Text {
+                        anchors.centerIn: parent
+                        text: themeHub.editMode ? "Editing ✓" : "Edit Desktop"
+                        font.family: "Segoe UI"
+                        font.pixelSize: 10
+                        font.weight: Font.Bold
+                        color: themeHub.darkInk
+                    }
+                    MouseArea {
+                        id: editDskMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            themeHub.settingsClosedAt = Date.now()
+                            themeHub.settingsOpen = false
+                            themeHub.setEditMode(true)
+                        }
+                    }
+                }
+                Rectangle {
+                    width: 102
                     height: 22
                     radius: 7
                     color: resetWMa.containsMouse ? "#E2E8F0" : "#FFFFFF"

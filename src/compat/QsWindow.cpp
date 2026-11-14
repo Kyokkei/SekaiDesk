@@ -12,6 +12,10 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#if !defined(_WIN32_WINNT) || (_WIN32_WINNT < 0x0601)
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
 #include <windows.h>
 #include <dwmapi.h>
 #include <ole2.h>
@@ -108,10 +112,34 @@ QRegion QsRegion::regionRelativeTo(const QQuickWindow* win) const
 #ifdef Q_OS_WIN
 namespace {
 QSet<HWND> s_desktopHwnds;
+QSet<HWND> s_overlayTopmostHwnds;
 QList<PanelWindow*> s_desktopWindows;
 HWINEVENTHOOK s_fgHook = nullptr;
 HWINEVENTHOOK s_minHook = nullptr;
+HWINEVENTHOOK s_reorderHook = nullptr;
+HWINEVENTHOOK s_locChangeHook = nullptr;
+HWINEVENTHOOK s_desktopSwitchHook = nullptr;
 QTimer* s_restackTimer = nullptr;
+QTimer* s_followupRestackTimer = nullptr;
+QTimer* s_showDesktopWatchTimer = nullptr;
+bool s_inRestack = false;
+bool s_showDesktopPromoted = false;
+
+bool isShellOrSystemWindowClass(HWND hwnd)
+{
+    wchar_t cls[64]{};
+    if (GetClassNameW(hwnd, cls, 64) <= 0)
+        return false;
+    return wcscmp(cls, L"Progman") == 0
+        || wcscmp(cls, L"WorkerW") == 0
+        || wcscmp(cls, L"SHELLDLL_DefView") == 0
+        || wcscmp(cls, L"Shell_TrayWnd") == 0
+        || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0
+        || wcscmp(cls, L"TaskListThumbnailWnd") == 0
+        || wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0
+        || wcscmp(cls, L"MultitaskingViewFrame") == 0
+        || wcscmp(cls, L"NotifyIconOverflowWindow") == 0;
+}
 
 HWND findDesktopHostHwnd()
 {
@@ -132,15 +160,135 @@ HWND findDesktopHostHwnd()
     return ctx.host ? ctx.host : progman;
 }
 
+HWND lowestOwnTopmostHwnd()
+{
+    HWND lowest = nullptr;
+    HWND cur = GetTopWindow(nullptr);
+    int steps = 0;
+    while (cur && steps < 1024) {
+        ++steps;
+        if ((GetWindowLongPtrW(cur, GWL_EXSTYLE) & WS_EX_TOPMOST) == 0)
+            break;
+        if (s_overlayTopmostHwnds.contains(cur) && IsWindowVisible(cur))
+            lowest = cur;
+        cur = GetWindow(cur, GW_HWNDNEXT);
+    }
+    return lowest;
+}
+
+bool isWindowBehind(HWND hwnd, HWND ref)
+{
+    if (!hwnd || !ref || !IsWindow(hwnd) || !IsWindow(ref))
+        return false;
+    HWND cur = GetWindow(ref, GW_HWNDNEXT);
+    int steps = 0;
+    while (cur && steps < 1024) {
+        ++steps;
+        if (cur == hwnd)
+            return true;
+        cur = GetWindow(cur, GW_HWNDNEXT);
+    }
+    return false;
+}
+
+bool isNormalAppWindow(HWND cur)
+{
+    if (!cur || !IsWindow(cur) || !IsWindowVisible(cur) || IsIconic(cur))
+        return false;
+    if (s_desktopHwnds.contains(cur) || s_overlayTopmostHwnds.contains(cur))
+        return false;
+    const LONG_PTR ex = GetWindowLongPtrW(cur, GWL_EXSTYLE);
+    if ((ex & WS_EX_TOPMOST) != 0 || ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_APPWINDOW) == 0))
+        return false;
+    if (GetWindow(cur, GW_OWNER) != nullptr && (ex & WS_EX_APPWINDOW) == 0)
+        return false;
+    if (isShellOrSystemWindowClass(cur))
+        return false;
+    BOOL cloaked = FALSE;
+    if (SUCCEEDED(DwmGetWindowAttribute(cur, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked)
+        return false;
+    RECT rc{};
+    if (!GetWindowRect(cur, &rc) || (rc.right - rc.left) <= 0 || (rc.bottom - rc.top) <= 0)
+        return false;
+    return true;
+}
+
+bool isShowDesktopActive(HWND host)
+{
+    if (s_desktopHwnds.isEmpty() || !host || !IsWindow(host))
+        return false;
+
+    // Walk top-to-bottom non-topmost windows before desktop host.
+    HWND cur = GetTopWindow(nullptr);
+    int steps = 0;
+    while (cur && cur != host && steps < 1024) {
+        ++steps;
+        if (isNormalAppWindow(cur))
+            return false;
+        cur = GetWindow(cur, GW_HWNDNEXT);
+    }
+
+    const HWND fg = GetForegroundWindow();
+    if (!fg || fg == host || s_desktopHwnds.contains(fg)
+        || s_overlayTopmostHwnds.contains(fg)
+        || isShellOrSystemWindowClass(fg)
+        || IsIconic(fg)) {
+        return true;
+    }
+
+    // Win+D on Windows 10 can raise WorkerW/Progman above non-minimized normal windows.
+    return isWindowBehind(fg, host);
+}
+
+HWND lowestNormalAppWindow()
+{
+    HWND lowest = nullptr;
+    HWND cur = GetTopWindow(nullptr);
+    int steps = 0;
+    while (cur && steps < 1024) {
+        ++steps;
+        if (isNormalAppWindow(cur))
+            lowest = cur;
+        cur = GetWindow(cur, GW_HWNDNEXT);
+    }
+    return lowest;
+}
+
 HWND nonWidgetPrevAboveDesktopHost(HWND host, HWND self)
 {
     if (!host || !IsWindow(host))
         return nullptr;
     HWND cur = GetWindow(host, GW_HWNDPREV);
-    while (cur) {
-        if (cur != self && !s_desktopHwnds.contains(cur) && IsWindowVisible(cur)) {
-            if ((GetWindowLongPtrW(cur, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0)
+    int steps = 0;
+    while (cur && steps < 1024) {
+        ++steps;
+        if (cur != self && !s_desktopHwnds.contains(cur) && !s_overlayTopmostHwnds.contains(cur)
+            && IsWindowVisible(cur) && !IsIconic(cur)) {
+            const LONG_PTR ex = GetWindowLongPtrW(cur, GWL_EXSTYLE);
+            if ((ex & WS_EX_TOPMOST) != 0)
                 return nullptr;
+            if ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_APPWINDOW) == 0) {
+                cur = GetWindow(cur, GW_HWNDPREV);
+                continue;
+            }
+            if (GetWindow(cur, GW_OWNER) != nullptr && (ex & WS_EX_APPWINDOW) == 0) {
+                cur = GetWindow(cur, GW_HWNDPREV);
+                continue;
+            }
+            if (isShellOrSystemWindowClass(cur)) {
+                cur = GetWindow(cur, GW_HWNDPREV);
+                continue;
+            }
+            BOOL cloaked = FALSE;
+            if (SUCCEEDED(DwmGetWindowAttribute(cur, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked) {
+                cur = GetWindow(cur, GW_HWNDPREV);
+                continue;
+            }
+            RECT rc{};
+            if (!GetWindowRect(cur, &rc) || (rc.right - rc.left) <= 0 || (rc.bottom - rc.top) <= 0) {
+                cur = GetWindow(cur, GW_HWNDPREV);
+                continue;
+            }
             return cur;
         }
         cur = GetWindow(cur, GW_HWNDPREV);
@@ -148,22 +296,113 @@ HWND nonWidgetPrevAboveDesktopHost(HWND host, HWND self)
     return nullptr;
 }
 
+void applySingleDesktopZOrder(HWND hwnd, HWND host, bool showDesk, HWND lowestTop)
+{
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+
+    if (showDesk) {
+        const HWND insertAfter = lowestTop ? lowestTop : HWND_TOPMOST;
+        const bool hasTopmost = (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+        const bool needsMove = !hasTopmost
+            || (lowestTop && isWindowBehind(lowestTop, hwnd))
+            || (!lowestTop && GetWindow(hwnd, GW_HWNDPREV) != nullptr
+                && !s_desktopHwnds.contains(GetWindow(hwnd, GW_HWNDPREV)));
+        if (needsMove) {
+            SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+        }
+    } else {
+        if ((GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0) {
+            SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+        }
+        HWND targetAfter = nonWidgetPrevAboveDesktopHost(host, hwnd);
+        if (!targetAfter)
+            targetAfter = lowestNormalAppWindow();
+
+        if (targetAfter) {
+            const bool behindTarget = isWindowBehind(hwnd, targetAfter);
+            const bool aboveHost = !host || isWindowBehind(host, hwnd);
+            if (behindTarget && aboveHost)
+                return;
+            SetWindowPos(hwnd, targetAfter, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+        } else {
+            if (host && isWindowBehind(host, hwnd))
+                return;
+            const HWND insertAfter = host ? HWND_TOP : HWND_BOTTOM;
+            SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+        }
+    }
+}
+
+void restackAllDesktopWindows()
+{
+    if (s_inRestack)
+        return;
+    s_inRestack = true;
+    const HWND host = findDesktopHostHwnd();
+    const bool showDesk = isShowDesktopActive(host);
+    s_showDesktopPromoted = showDesk;
+    const HWND lowestTop = showDesk ? lowestOwnTopmostHwnd() : nullptr;
+
+    const QList<PanelWindow*> wins = s_desktopWindows;
+    for (PanelWindow* w : wins) {
+        if (!w || !w->isVisible() || !w->desktopLayer() || w->isInNativeDrag())
+            continue;
+        HWND h = reinterpret_cast<HWND>(w->winId());
+        if (!h || !IsWindow(h))
+            continue;
+        if (IsIconic(h))
+            ShowWindow(h, SW_SHOWNOACTIVATE);
+        applySingleDesktopZOrder(h, host, showDesk, lowestTop);
+    }
+    s_inRestack = false;
+}
+
 void CALLBACK desktopWinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject,
-                                  LONG, DWORD, DWORD)
+                                  LONG idChild, DWORD, DWORD)
 {
     if (s_desktopWindows.isEmpty())
         return;
     if (event == EVENT_SYSTEM_FOREGROUND && idObject == OBJID_WINDOW && hwnd) {
-        wchar_t cls[64]{};
-        GetClassNameW(hwnd, cls, 64);
-        const bool isDesktop = (wcscmp(cls, L"Progman") == 0 || wcscmp(cls, L"WorkerW") == 0);
+        if (!IsWindow(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd)
+            return;
+        const bool isDesktop = isShellOrSystemWindowClass(hwnd);
         if (!isDesktop && s_desktopHwnds.contains(hwnd))
             return;
         if (s_restackTimer)
             s_restackTimer->start(30);
-    } else if (event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND) {
+        if (isDesktop && s_followupRestackTimer)
+            s_followupRestackTimer->start(150);
+    } else if (event == EVENT_SYSTEM_MINIMIZESTART || event == EVENT_SYSTEM_MINIMIZEEND
+               || event == EVENT_SYSTEM_DESKTOPSWITCH) {
         if (s_restackTimer)
             s_restackTimer->start(30);
+        if (s_followupRestackTimer)
+            s_followupRestackTimer->start(150);
+    } else if (event == EVENT_OBJECT_REORDER && idObject == OBJID_WINDOW && hwnd) {
+        if (!IsWindow(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd)
+            return;
+        const bool isHost = isShellOrSystemWindowClass(hwnd);
+        if (s_desktopHwnds.contains(hwnd) || isHost) {
+            if (s_restackTimer)
+                s_restackTimer->start(30);
+            if (isHost && s_followupRestackTimer)
+                s_followupRestackTimer->start(150);
+        }
+    } else if (event == EVENT_OBJECT_LOCATIONCHANGE && idObject == OBJID_WINDOW
+               && idChild == 0 /*CHILDID_SELF*/ && hwnd) {
+        if (!IsWindow(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd)
+            return;
+        if (!s_desktopHwnds.contains(hwnd) && !s_overlayTopmostHwnds.contains(hwnd)) {
+            if (s_showDesktopPromoted || isShellOrSystemWindowClass(hwnd)) {
+                if (s_restackTimer && !s_restackTimer->isActive())
+                    s_restackTimer->start(30);
+            }
+        }
     }
 }
 
@@ -173,19 +412,57 @@ void ensureDesktopHooksInstalled()
         s_restackTimer = new QTimer(QCoreApplication::instance());
         s_restackTimer->setSingleShot(true);
         QObject::connect(s_restackTimer, &QTimer::timeout, []() {
-            const QList<PanelWindow*> wins = s_desktopWindows;
-            for (PanelWindow* w : wins) {
-                if (!w || !w->isVisible() || !w->desktopLayer())
-                    continue;
-                HWND h = reinterpret_cast<HWND>(w->winId());
-                if (!h || !IsWindow(h))
-                    continue;
-                if (IsIconic(h))
-                    ShowWindow(h, SW_SHOWNOACTIVATE);
-                w->raiseOnDesktop();
-            }
+            restackAllDesktopWindows();
         });
     }
+    if (!s_followupRestackTimer) {
+        s_followupRestackTimer = new QTimer(QCoreApplication::instance());
+        s_followupRestackTimer->setSingleShot(true);
+        QObject::connect(s_followupRestackTimer, &QTimer::timeout, []() {
+            restackAllDesktopWindows();
+        });
+    }
+    if (!s_showDesktopWatchTimer) {
+        s_showDesktopWatchTimer = new QTimer(QCoreApplication::instance());
+        s_showDesktopWatchTimer->setInterval(120);
+        QObject::connect(s_showDesktopWatchTimer, &QTimer::timeout, []() {
+            if (s_inRestack || s_desktopWindows.isEmpty())
+                return;
+            const HWND host = findDesktopHostHwnd();
+            const bool showDesk = isShowDesktopActive(host);
+            bool needsRestack = (showDesk != s_showDesktopPromoted);
+            if (!needsRestack) {
+                const HWND lowestTop = showDesk ? lowestOwnTopmostHwnd() : nullptr;
+                const HWND lowestApp = showDesk ? nullptr : lowestNormalAppWindow();
+                for (PanelWindow* w : s_desktopWindows) {
+                    if (!w || !w->isVisible() || !w->desktopLayer() || w->isInNativeDrag())
+                        continue;
+                    HWND h = reinterpret_cast<HWND>(w->winId());
+                    if (!h || !IsWindow(h))
+                        continue;
+                    const bool hasTopmost = (GetWindowLongPtrW(h, GWL_EXSTYLE) & WS_EX_TOPMOST) != 0;
+                    if (showDesk) {
+                        if (!hasTopmost || (lowestTop && isWindowBehind(lowestTop, h))) {
+                            needsRestack = true;
+                            break;
+                        }
+                    } else {
+                        if (hasTopmost
+                            || (host && isWindowBehind(h, host))
+                            || (lowestApp && !isWindowBehind(h, lowestApp))) {
+                            needsRestack = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (needsRestack)
+                restackAllDesktopWindows();
+        });
+    }
+    if (!s_showDesktopWatchTimer->isActive())
+        s_showDesktopWatchTimer->start();
+
     if (!s_fgHook) {
         s_fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND,
                                    nullptr, desktopWinEventProc, 0, 0,
@@ -196,14 +473,34 @@ void ensureDesktopHooksInstalled()
                                     nullptr, desktopWinEventProc, 0, 0,
                                     WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
     }
+    if (!s_reorderHook) {
+        s_reorderHook = SetWinEventHook(EVENT_OBJECT_REORDER, EVENT_OBJECT_REORDER,
+                                        nullptr, desktopWinEventProc, 0, 0,
+                                        WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    }
+    if (!s_locChangeHook) {
+        s_locChangeHook = SetWinEventHook(EVENT_OBJECT_LOCATIONCHANGE, EVENT_OBJECT_LOCATIONCHANGE,
+                                          nullptr, desktopWinEventProc, 0, 0,
+                                          WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    }
+    if (!s_desktopSwitchHook) {
+        s_desktopSwitchHook = SetWinEventHook(EVENT_SYSTEM_DESKTOPSWITCH, EVENT_SYSTEM_DESKTOPSWITCH,
+                                              nullptr, desktopWinEventProc, 0, 0,
+                                              WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    }
 }
 
 void cleanupDesktopHooksIfEmpty()
 {
     if (!s_desktopWindows.isEmpty())
         return;
+    s_showDesktopPromoted = false;
     if (s_restackTimer)
         s_restackTimer->stop();
+    if (s_followupRestackTimer)
+        s_followupRestackTimer->stop();
+    if (s_showDesktopWatchTimer)
+        s_showDesktopWatchTimer->stop();
     if (s_fgHook) {
         UnhookWinEvent(s_fgHook);
         s_fgHook = nullptr;
@@ -211,6 +508,18 @@ void cleanupDesktopHooksIfEmpty()
     if (s_minHook) {
         UnhookWinEvent(s_minHook);
         s_minHook = nullptr;
+    }
+    if (s_reorderHook) {
+        UnhookWinEvent(s_reorderHook);
+        s_reorderHook = nullptr;
+    }
+    if (s_locChangeHook) {
+        UnhookWinEvent(s_locChangeHook);
+        s_locChangeHook = nullptr;
+    }
+    if (s_desktopSwitchHook) {
+        UnhookWinEvent(s_desktopSwitchHook);
+        s_desktopSwitchHook = nullptr;
     }
 }
 } // namespace
@@ -249,13 +558,36 @@ PanelWindow::PanelWindow(QWindow* parent)
             applyBlurBehind();
             applyDesktopLayer();
             applyFileDrops();
+#ifdef Q_OS_WIN
+            if (!m_desktopLayer && handle()) {
+                HWND hwnd = reinterpret_cast<HWND>(winId());
+                if (hwnd && IsWindow(hwnd)) {
+                    s_overlayTopmostHwnds.insert(hwnd);
+                    if (s_showDesktopPromoted && s_restackTimer)
+                        s_restackTimer->start(10);
+                }
+            }
+#endif
             if (m_reserveTopBar)
                 registerOrUpdateAppBar();
+            if (!m_desktopLayer) {
+                verifyFullscreenState();
+                m_fsGuardTimer.start();
+            }
         } else {
+#ifdef Q_OS_WIN
+            if (handle())
+                s_overlayTopmostHwnds.remove(reinterpret_cast<HWND>(winId()));
+#endif
+            m_fsGuardTimer.stop();
+            if (m_fullscreenActive) {
+                m_fullscreenActive = false;
+                emit fullscreenActiveChanged();
+            }
             unregisterAppBar();
         }
     });
-    m_fsGuardTimer.setInterval(300);
+    m_fsGuardTimer.setInterval(200);
     connect(&m_fsGuardTimer, &QTimer::timeout, this, &PanelWindow::verifyFullscreenState);
     connect(this, &QWindow::screenChanged, this, [this](QScreen*) {
         recomputeGeometry();
@@ -270,6 +602,12 @@ PanelWindow::PanelWindow(QWindow* parent)
 
 PanelWindow::~PanelWindow()
 {
+    m_fsGuardTimer.stop();
+    m_inNativeDrag = false;
+#ifdef Q_OS_WIN
+    if (handle())
+        s_overlayTopmostHwnds.remove(reinterpret_cast<HWND>(winId()));
+#endif
     unregisterDesktopWindow();
     unregisterAppBar();
 }
@@ -356,9 +694,6 @@ void PanelWindow::applyClickThrough()
 
 void PanelWindow::setMaskProperty(const QVariant& mask)
 {
-    if (m_mask == mask)
-        return;
-
     m_mask = mask;
 
     // Track dynamic region sources (item-anchored masks move on layout).
@@ -600,7 +935,7 @@ void PanelWindow::unregisterAppBar()
 }
 
 #ifdef Q_OS_WIN
-static bool isGenuineFullscreenForeground()
+static bool isGenuineFullscreenForeground(HWND selfHwnd)
 {
     HWND fg = GetForegroundWindow();
     if (!fg || !IsWindow(fg) || !IsWindowVisible(fg) || IsIconic(fg))
@@ -640,40 +975,59 @@ static bool isGenuineFullscreenForeground()
     }
 
     const HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+    if (selfHwnd && IsWindow(selfHwnd)) {
+        const HMONITOR selfMon = MonitorFromWindow(selfHwnd, MONITOR_DEFAULTTONEAREST);
+        if (mon != selfMon)
+            return false;
+    }
+
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
     if (!GetMonitorInfoW(mon, &mi))
         return false;
 
     RECT rc{};
-    if (!GetWindowRect(fg, &rc))
+    if (FAILED(DwmGetWindowAttribute(fg, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc)))) {
+        if (!GetWindowRect(fg, &rc))
+            return false;
+    }
+
+    const bool coversMonitor = rc.left <= mi.rcMonitor.left
+                            && rc.top <= mi.rcMonitor.top
+                            && rc.right >= mi.rcMonitor.right
+                            && rc.bottom >= mi.rcMonitor.bottom;
+    if (!coversMonitor)
         return false;
 
-    // Normal maximized app with titlebar respects TopBar work area or sits above taskbar: not exclusive fullscreen
+    // A normal maximized window with WS_CAPTION on a monitor where rcWork == rcMonitor
+    // (e.g. auto-hidden taskbar + barAutoHide) also covers rcMonitor, so distinguish it
+    // from genuine borderless / D3D / presentation fullscreen.
     const LONG_PTR style = GetWindowLongPtrW(fg, GWL_STYLE);
-    if ((style & WS_CAPTION) == WS_CAPTION)
-        return false;
+    if ((style & WS_CAPTION) == WS_CAPTION && IsZoomed(fg)) {
+        QUERY_USER_NOTIFICATION_STATE qns = QUNS_ACCEPTS_NOTIFICATIONS;
+        if (FAILED(SHQueryUserNotificationState(&qns))
+            || (qns != QUNS_RUNNING_D3D_FULL_SCREEN && qns != QUNS_PRESENTATION_MODE)) {
+            return false;
+        }
+    }
 
-    return rc.left <= mi.rcMonitor.left
-        && rc.top <= mi.rcMonitor.top
-        && rc.right >= mi.rcMonitor.right
-        && rc.bottom >= mi.rcMonitor.bottom;
+    return true;
 }
 #endif
 
 void PanelWindow::verifyFullscreenState()
 {
 #ifdef Q_OS_WIN
-    if (m_fullscreenActive && !isGenuineFullscreenForeground()) {
-        m_fullscreenActive = false;
-        m_fsGuardTimer.stop();
+    HWND hwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
+    const bool fs = (!m_desktopLayer && isVisible() && hwnd)
+                        ? isGenuineFullscreenForeground(hwnd)
+                        : false;
+    if (m_fullscreenActive != fs) {
+        m_fullscreenActive = fs;
         emit fullscreenActiveChanged();
-        if (!m_desktopLayer && isVisible()) {
-            HWND hwnd = reinterpret_cast<HWND>(winId());
-            if (hwnd) {
-                SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-            }
+        if (!fs && !m_desktopLayer && isVisible() && hwnd) {
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
         }
     }
 #endif
@@ -684,16 +1038,27 @@ bool PanelWindow::event(QEvent* e)
     const bool res = QQuickWindow::event(e);
 #ifdef Q_OS_WIN
     if (e->type() == QEvent::WinIdChange) {
+        m_inNativeDrag = false;
+        if (handle())
+            s_overlayTopmostHwnds.remove(reinterpret_cast<HWND>(winId()));
         unregisterDesktopWindow();
         if (m_desktopLayer && isVisible())
             applyDesktopLayer();
+        else if (!m_desktopLayer && isVisible() && handle())
+            s_overlayTopmostHwnds.insert(reinterpret_cast<HWND>(winId()));
         if (m_acceptFileDrops && isVisible())
             applyFileDrops();
     } else if (e->type() == QEvent::Show) {
         if (m_desktopLayer)
             applyDesktopLayer();
+        else if (handle())
+            s_overlayTopmostHwnds.insert(reinterpret_cast<HWND>(winId()));
         if (m_acceptFileDrops)
             applyFileDrops();
+    } else if (e->type() == QEvent::Hide) {
+        m_inNativeDrag = false;
+        if (handle())
+            s_overlayTopmostHwnds.remove(reinterpret_cast<HWND>(winId()));
     }
 #endif
     return res;
@@ -704,6 +1069,9 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
 #ifdef Q_OS_WIN
     if (eventType == "windows_generic_MSG" || eventType == "windows_dispatcher_MSG") {
         const MSG* msg = static_cast<const MSG*>(message);
+        if (msg && !m_desktopLayer && msg->message == WM_ACTIVATE && LOWORD(msg->wParam) == WA_INACTIVE) {
+            emit windowDeactivated();
+        }
         if (msg && m_desktopLayer) {
             if (msg->message == WM_SYSCOMMAND) {
                 const WPARAM cmd = msg->wParam & 0xFFF0;
@@ -717,16 +1085,23 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
                     *result = MA_NOACTIVATE;
                 return true;
             } else if (msg->message == WM_WINDOWPOSCHANGING) {
-                auto* pos = reinterpret_cast<WINDOWPOS*>(msg->lParam);
-                if (pos && !(pos->flags & SWP_NOZORDER)) {
-                    const HWND host = findDesktopHostHwnd();
-                    const HWND targetAfter = nonWidgetPrevAboveDesktopHost(host, msg->hwnd);
-                    if (targetAfter)
-                        pos->hwndInsertAfter = targetAfter;
-                    else if (host)
-                        pos->hwndInsertAfter = HWND_NOTOPMOST;
-                    else
-                        pos->hwndInsertAfter = HWND_BOTTOM;
+                if (!m_inNativeDrag && !s_inRestack) {
+                    auto* pos = reinterpret_cast<WINDOWPOS*>(msg->lParam);
+                    if (pos && !(pos->flags & SWP_NOZORDER)) {
+                        if (s_showDesktopPromoted) {
+                            const HWND lowestTop = lowestOwnTopmostHwnd();
+                            pos->hwndInsertAfter = lowestTop ? lowestTop : HWND_TOPMOST;
+                        } else {
+                            const HWND host = findDesktopHostHwnd();
+                            HWND targetAfter = nonWidgetPrevAboveDesktopHost(host, msg->hwnd);
+                            if (!targetAfter)
+                                targetAfter = lowestNormalAppWindow();
+                            if (targetAfter)
+                                pos->hwndInsertAfter = targetAfter;
+                            else
+                                pos->hwndInsertAfter = host ? HWND_TOP : HWND_BOTTOM;
+                        }
+                    }
                 }
             }
         }
@@ -759,14 +1134,15 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
                                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
                 }
             } else if (msg->wParam == ABN_FULLSCREENAPP) {
-                bool fs = (msg->lParam != 0) && isGenuineFullscreenForeground();
+                HWND selfHwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
+                const bool fs = (msg->lParam != 0) && isGenuineFullscreenForeground(selfHwnd);
                 if (m_fullscreenActive != fs) {
                     m_fullscreenActive = fs;
-                    if (fs)
-                        m_fsGuardTimer.start();
-                    else
-                        m_fsGuardTimer.stop();
                     emit fullscreenActiveChanged();
+                    if (!fs && !m_desktopLayer && isVisible() && selfHwnd) {
+                        SetWindowPos(selfHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    }
                 }
             }
         }
@@ -795,8 +1171,17 @@ bool PanelWindow::isPointerOutsideAndPressed() const
     POINT pt{};
     if (!GetCursorPos(&pt))
         return false;
-    const bool inside = (pt.x >= rc.left && pt.x <= rc.right && pt.y >= rc.top && pt.y <= rc.bottom);
-    return !inside;
+    const bool insideRect = (pt.x >= rc.left && pt.x <= rc.right && pt.y >= rc.top && pt.y <= rc.bottom);
+    if (!insideRect)
+        return true;
+    if (m_hasAppliedMask && !m_lastMask.isEmpty()) {
+        const qreal dpr = (devicePixelRatio() > 0.0) ? devicePixelRatio() : 1.0;
+        const int localX = qRound((pt.x - rc.left) / dpr);
+        const int localY = qRound((pt.y - rc.top) / dpr);
+        if (!m_lastMask.contains(QPoint(localX, localY)))
+            return true;
+    }
+    return false;
 #else
     return false;
 #endif
@@ -808,6 +1193,15 @@ void PanelWindow::setDesktopLayer(bool on)
         return;
     m_desktopLayer = on;
     if (on) {
+        m_fsGuardTimer.stop();
+        if (m_fullscreenActive) {
+            m_fullscreenActive = false;
+            emit fullscreenActiveChanged();
+        }
+#ifdef Q_OS_WIN
+        if (handle())
+            s_overlayTopmostHwnds.remove(reinterpret_cast<HWND>(winId()));
+#endif
         setFlags((flags() | Qt::Tool) & ~Qt::WindowStaysOnTopHint);
         applyDesktopLayer();
     } else {
@@ -817,6 +1211,7 @@ void PanelWindow::setDesktopLayer(bool on)
         if (isVisible()) {
             HWND hwnd = reinterpret_cast<HWND>(winId());
             if (hwnd && IsWindow(hwnd)) {
+                s_overlayTopmostHwnds.insert(hwnd);
                 LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
                 exStyle &= ~WS_EX_NOACTIVATE;
                 SetWindowLongPtrW(hwnd, GWL_EXSTYLE, exStyle);
@@ -825,6 +1220,8 @@ void PanelWindow::setDesktopLayer(bool on)
                 SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
+            verifyFullscreenState();
+            m_fsGuardTimer.start();
         }
 #endif
     }
@@ -881,6 +1278,8 @@ void PanelWindow::applyDesktopLayer()
     BOOL excl = TRUE;
     DwmSetWindowAttribute(hwnd, 12 /*DWMWA_EXCLUDED_FROM_PEEK*/, &excl, sizeof(excl));
 
+    SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     restackOnDesktop();
 #endif
 }
@@ -888,16 +1287,19 @@ void PanelWindow::applyDesktopLayer()
 void PanelWindow::restackOnDesktop()
 {
 #ifdef Q_OS_WIN
-    if (!m_desktopLayer || !isVisible())
+    if (!m_desktopLayer || !isVisible() || m_inNativeDrag)
         return;
     HWND hwnd = reinterpret_cast<HWND>(winId());
     if (!hwnd || !IsWindow(hwnd))
         return;
+    const bool prevInRestack = s_inRestack;
+    s_inRestack = true;
     const HWND host = findDesktopHostHwnd();
-    const HWND targetAfter = nonWidgetPrevAboveDesktopHost(host, hwnd);
-    const HWND insertAfter = targetAfter ? targetAfter : (host ? HWND_NOTOPMOST : HWND_BOTTOM);
-    SetWindowPos(hwnd, insertAfter, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    const bool showDesk = isShowDesktopActive(host);
+    s_showDesktopPromoted = showDesk;
+    const HWND lowestTop = showDesk ? lowestOwnTopmostHwnd() : nullptr;
+    applySingleDesktopZOrder(hwnd, host, showDesk, lowestTop);
+    s_inRestack = prevInRestack;
 #endif
 }
 
@@ -965,4 +1367,90 @@ void PanelWindow::focusActivate()
     }
 #endif
     requestActivate();
+}
+
+void PanelWindow::beginNativeDrag(int minLogicalX, int minLogicalY, int maxLogicalX, int maxLogicalY)
+{
+#ifdef Q_OS_WIN
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+    POINT pt{};
+    if (!GetCursorPos(&pt))
+        return;
+    RECT rc{};
+    if (!GetWindowRect(hwnd, &rc))
+        return;
+
+    const qreal dpr = (devicePixelRatio() > 0.0) ? devicePixelRatio() : 1.0;
+    QScreen* scr = screen();
+    if (!scr)
+        scr = QGuiApplication::primaryScreen();
+    const QPoint origin = scr ? scr->geometry().topLeft() : QPoint(0, 0);
+
+    int minPxX = qRound((origin.x() + minLogicalX) * dpr);
+    int minPxY = qRound((origin.y() + minLogicalY) * dpr);
+    int maxPxX = qRound((origin.x() + maxLogicalX) * dpr);
+    int maxPxY = qRound((origin.y() + maxLogicalY) * dpr);
+
+    const int virtLeft = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    const int virtTop = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    const int virtRight = virtLeft + GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    const int virtBottom = virtTop + GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    const int winW = qMax(1, static_cast<int>(rc.right - rc.left));
+    const int winH = qMax(1, static_cast<int>(rc.bottom - rc.top));
+
+    if (virtRight > virtLeft && virtBottom > virtTop) {
+        minPxX = qBound(virtLeft, minPxX, qMax(virtLeft, virtRight - 40));
+        minPxY = qBound(virtTop, minPxY, qMax(virtTop, virtBottom - 40));
+        maxPxX = qBound(minPxX, maxPxX, qMax(minPxX, virtRight - qMin(winW, 80)));
+        maxPxY = qBound(minPxY, maxPxY, qMax(minPxY, virtBottom - qMin(winH, 60)));
+    } else {
+        maxPxX = qMax(minPxX, maxPxX);
+        maxPxY = qMax(minPxY, maxPxY);
+    }
+
+    m_dragStartCursorPxX = pt.x;
+    m_dragStartCursorPxY = pt.y;
+    m_dragStartWinPxX = rc.left;
+    m_dragStartWinPxY = rc.top;
+    m_dragMinPxX = minPxX;
+    m_dragMinPxY = minPxY;
+    m_dragMaxPxX = maxPxX;
+    m_dragMaxPxY = maxPxY;
+    m_inNativeDrag = true;
+#else
+    Q_UNUSED(minLogicalX);
+    Q_UNUSED(minLogicalY);
+    Q_UNUSED(maxLogicalX);
+    Q_UNUSED(maxLogicalY);
+#endif
+}
+
+void PanelWindow::stepNativeDrag()
+{
+#ifdef Q_OS_WIN
+    if (!m_inNativeDrag)
+        return;
+    HWND hwnd = reinterpret_cast<HWND>(winId());
+    if (!hwnd || !IsWindow(hwnd))
+        return;
+    POINT cur{};
+    if (!GetCursorPos(&cur))
+        return;
+
+    const int tx = qBound(m_dragMinPxX,
+                          m_dragStartWinPxX + static_cast<int>(cur.x - m_dragStartCursorPxX),
+                          m_dragMaxPxX);
+    const int ty = qBound(m_dragMinPxY,
+                          m_dragStartWinPxY + static_cast<int>(cur.y - m_dragStartCursorPxY),
+                          m_dragMaxPxY);
+    SetWindowPos(hwnd, nullptr, tx, ty, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+#endif
+}
+
+void PanelWindow::endNativeDrag()
+{
+    m_inNativeDrag = false;
 }

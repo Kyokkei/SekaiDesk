@@ -10,8 +10,178 @@
 #include <algorithm>
 
 #ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <shellapi.h>
+#include <shlobj.h>
+#include <shobjidl.h>
+#include <objbase.h>
+
+namespace {
+QString expandEnvVars(const QString& raw)
+{
+    if (raw.isEmpty())
+        return {};
+    wchar_t expanded[MAX_PATH * 4] = {};
+    const DWORD n = ExpandEnvironmentStringsW(
+        reinterpret_cast<const wchar_t*>(raw.utf16()),
+        expanded, MAX_PATH * 4);
+    if (n > 0 && n < MAX_PATH * 4)
+        return QString::fromWCharArray(expanded);
+    return raw;
+}
+
+bool isUriOrShellTarget(const QString& target)
+{
+    if (target.startsWith(QStringLiteral("ms-settings:"), Qt::CaseInsensitive)
+        || target.startsWith(QStringLiteral("shell:"), Qt::CaseInsensitive)) {
+        return true;
+    }
+    return target.contains(QStringLiteral("://"));
+}
+
+struct ResolvedTarget {
+    QString inputPath;
+    QString resolvedPath;
+    QString shortcutArgs;
+    QString workingDir;
+    bool isUriOrShell = false;
+    bool isShortcut = false;
+    bool inputExists = false;
+    bool inputIsDir = false;
+    bool targetExists = false;
+    bool targetIsDir = false;
+};
+
+ResolvedTarget resolveTargetDetails(const QString& rawTarget)
+{
+    ResolvedTarget out;
+    QString clean = rawTarget.trimmed();
+    if (clean.size() >= 2 && clean.startsWith(QLatin1Char('"')) && clean.endsWith(QLatin1Char('"')))
+        clean = clean.mid(1, clean.size() - 2).trimmed();
+    if (clean.isEmpty())
+        return out;
+
+    if (isUriOrShellTarget(clean)) {
+        out.isUriOrShell = true;
+        out.inputPath = clean;
+        out.resolvedPath = clean;
+        return out;
+    }
+
+    clean = QDir::toNativeSeparators(expandEnvVars(clean).trimmed());
+    if (!clean.contains(QLatin1Char('\\')) && !clean.contains(QLatin1Char('/'))
+        && !clean.contains(QLatin1Char(':'))) {
+        wchar_t found[MAX_PATH * 2] = {};
+        if (SearchPathW(nullptr,
+                        reinterpret_cast<const wchar_t*>(clean.utf16()),
+                        nullptr, MAX_PATH * 2, found, nullptr) > 0) {
+            clean = QDir::toNativeSeparators(QString::fromWCharArray(found));
+        }
+    }
+
+    out.inputPath = clean;
+    out.resolvedPath = clean;
+
+    const QFileInfo inputFi(out.inputPath);
+    out.inputExists = inputFi.exists();
+    out.inputIsDir = inputFi.isDir();
+
+    if (out.inputExists && !out.inputIsDir
+        && inputFi.suffix().compare(QStringLiteral("lnk"), Qt::CaseInsensitive) == 0) {
+        out.isShortcut = true;
+        out.resolvedPath.clear();
+
+        static const CLSID kCLSID_ShellLink = {
+            0x00021401, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}
+        };
+        static const IID kIID_IShellLinkW = {
+            0x000214F9, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}
+        };
+        static const IID kIID_IPersistFile = {
+            0x0000010B, 0x0000, 0x0000, {0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46}
+        };
+
+        const HRESULT hrCom = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        IShellLinkW* psl = nullptr;
+        if (SUCCEEDED(CoCreateInstance(kCLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                       kIID_IShellLinkW, reinterpret_cast<void**>(&psl))) && psl) {
+            IPersistFile* ppf = nullptr;
+            if (SUCCEEDED(psl->QueryInterface(kIID_IPersistFile, reinterpret_cast<void**>(&ppf))) && ppf) {
+                if (SUCCEEDED(ppf->Load(reinterpret_cast<const wchar_t*>(out.inputPath.utf16()), STGM_READ))) {
+                    wchar_t targetBuf[MAX_PATH * 4] = {};
+                    HRESULT hrPath = psl->GetPath(targetBuf, MAX_PATH * 4, nullptr, 0);
+                    if (FAILED(hrPath) || targetBuf[0] == L'\0') {
+                        targetBuf[0] = L'\0';
+                        hrPath = psl->GetPath(targetBuf, MAX_PATH * 4, nullptr, SLGP_RAWPATH);
+                    }
+                    if (SUCCEEDED(hrPath) && targetBuf[0] != L'\0') {
+                        const QString expanded = expandEnvVars(QString::fromWCharArray(targetBuf)).trimmed();
+                        if (!expanded.isEmpty())
+                            out.resolvedPath = QDir::toNativeSeparators(expanded);
+                    }
+
+                    wchar_t argBuf[2048] = {};
+                    if (SUCCEEDED(psl->GetArguments(argBuf, 2048)) && argBuf[0] != L'\0')
+                        out.shortcutArgs = QString::fromWCharArray(argBuf).trimmed();
+
+                    wchar_t dirBuf[MAX_PATH * 4] = {};
+                    if (SUCCEEDED(psl->GetWorkingDirectory(dirBuf, MAX_PATH * 4)) && dirBuf[0] != L'\0') {
+                        out.workingDir = QDir::toNativeSeparators(
+                            expandEnvVars(QString::fromWCharArray(dirBuf)).trimmed());
+                    }
+                }
+                ppf->Release();
+            }
+            psl->Release();
+        }
+        if (SUCCEEDED(hrCom))
+            CoUninitialize();
+    }
+
+    if (!out.resolvedPath.isEmpty()) {
+        const QFileInfo targetFi(out.resolvedPath);
+        out.targetExists = targetFi.exists();
+        out.targetIsDir = targetFi.isDir();
+        if (out.workingDir.isEmpty() && out.targetExists) {
+            out.workingDir = out.targetIsDir
+                ? out.resolvedPath
+                : QDir::toNativeSeparators(targetFi.absolutePath());
+        }
+    }
+
+    return out;
+}
+
+bool shellExecuteVerb(const wchar_t* verb, const QString& file,
+                      const QString& args, const QString& workDir)
+{
+    if (file.isEmpty())
+        return false;
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize = sizeof(sei);
+    sei.fMask = 0;
+    sei.lpVerb = verb;
+    sei.lpFile = reinterpret_cast<const wchar_t*>(file.utf16());
+    sei.lpParameters = args.isEmpty() ? nullptr : reinterpret_cast<const wchar_t*>(args.utf16());
+    sei.lpDirectory = workDir.isEmpty() ? nullptr : reinterpret_cast<const wchar_t*>(workDir.utf16());
+    sei.nShow = SW_SHOWNORMAL;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+QString combineArgs(const QString& shortcutArgs, const QString& extraArgs)
+{
+    const QString a = shortcutArgs.trimmed();
+    const QString b = extraArgs.trimmed();
+    if (a.isEmpty())
+        return b;
+    if (b.isEmpty())
+        return a;
+    return a + QLatin1Char(' ') + b;
+}
+} // namespace
 #endif
 
 AppLauncher::AppLauncher(SettingsStore* settings, QObject* parent)
@@ -36,10 +206,12 @@ void AppLauncher::reload()
             }
         }
         m_usageCounts = m_settings->get(QStringLiteral("launcher.usage")).toMap();
+        m_hiddenApps = m_settings->get(QStringLiteral("launcher.hiddenApps")).toMap();
     }
     if (!hasKey)
         seedDefaultsIfEmpty();
     emit pinnedAppsChanged();
+    emit hiddenAppsChanged();
 }
 
 void AppLauncher::seedDefaultsIfEmpty()
@@ -97,6 +269,12 @@ void AppLauncher::savePinnedApps()
         m_settings->set(QStringLiteral("dock.pinnedApps"), m_pinnedApps);
 }
 
+void AppLauncher::saveHiddenApps()
+{
+    if (m_settings)
+        m_settings->set(QStringLiteral("launcher.hiddenApps"), m_hiddenApps);
+}
+
 void AppLauncher::recordUsage(const QString& target)
 {
     const QString key = target.trimmed().toLower();
@@ -135,19 +313,21 @@ bool AppLauncher::launch(const QString& target, const QString& args)
 #endif
 }
 
-bool AppLauncher::runElevated(const QString& target, const QString& args)
+bool AppLauncher::runAsDifferentUser(const QString& target, const QString& args)
 {
 #ifdef Q_OS_WIN
     if (target.trimmed().isEmpty())
         return false;
-    const HINSTANCE res = ShellExecuteW(
-        nullptr,
-        L"runas",
-        reinterpret_cast<const wchar_t*>(target.utf16()),
-        args.isEmpty() ? nullptr : reinterpret_cast<const wchar_t*>(args.utf16()),
-        nullptr,
-        SW_SHOWNORMAL);
-    return reinterpret_cast<INT_PTR>(res) > 32;
+    const ResolvedTarget details = resolveTargetDetails(target);
+    if (details.isUriOrShell || details.resolvedPath.isEmpty()
+        || !details.targetExists || details.targetIsDir) {
+        return false;
+    }
+    const QString combinedArgs = combineArgs(details.shortcutArgs, args);
+    if (!shellExecuteVerb(L"runasuser", details.resolvedPath, combinedArgs, details.workingDir))
+        return false;
+    recordUsage(target);
+    return true;
 #else
     Q_UNUSED(target);
     Q_UNUSED(args);
@@ -155,21 +335,179 @@ bool AppLauncher::runElevated(const QString& target, const QString& args)
 #endif
 }
 
-bool AppLauncher::revealInExplorer(const QString& target)
+bool AppLauncher::runElevated(const QString& target, const QString& args)
 {
 #ifdef Q_OS_WIN
-    const QString clean = QDir::toNativeSeparators(target.trimmed());
-    if (clean.isEmpty() || !QFileInfo::exists(clean))
+    const QString raw = target.trimmed();
+    if (raw.isEmpty())
         return false;
-    const QString arg = QStringLiteral("/select,\"%1\"").arg(clean);
-    ShellExecuteW(nullptr, L"open", L"explorer.exe",
-                  reinterpret_cast<const wchar_t*>(arg.utf16()),
-                  nullptr, SW_SHOWNORMAL);
+    const ResolvedTarget details = resolveTargetDetails(raw);
+    const bool useResolved = !details.isUriOrShell && !details.resolvedPath.isEmpty()
+                             && details.targetExists && !details.targetIsDir;
+    const QString execFile = useResolved ? details.resolvedPath : raw;
+    const QString combinedArgs = useResolved
+        ? combineArgs(details.shortcutArgs, args)
+        : args.trimmed();
+    if (!shellExecuteVerb(L"runas", execFile, combinedArgs, details.workingDir))
+        return false;
+    recordUsage(target);
     return true;
+#else
+    Q_UNUSED(target);
+    Q_UNUSED(args);
+    return false;
+#endif
+}
+
+bool AppLauncher::openContainingFolder(const QString& target)
+{
+#ifdef Q_OS_WIN
+    const ResolvedTarget details = resolveTargetDetails(target);
+    if (details.isUriOrShell || details.inputPath.isEmpty() || !details.inputExists)
+        return false;
+    const QString arg = QStringLiteral("/select,\"%1\"").arg(details.inputPath);
+    const HINSTANCE res = ShellExecuteW(
+        nullptr, L"open", L"explorer.exe",
+        reinterpret_cast<const wchar_t*>(arg.utf16()),
+        nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(res) > 32;
 #else
     Q_UNUSED(target);
     return false;
 #endif
+}
+
+bool AppLauncher::openTargetFolder(const QString& target)
+{
+#ifdef Q_OS_WIN
+    const ResolvedTarget details = resolveTargetDetails(target);
+    if (details.isUriOrShell || details.resolvedPath.isEmpty() || !details.targetExists)
+        return false;
+    if (details.targetIsDir) {
+        const HINSTANCE res = ShellExecuteW(
+            nullptr, L"open",
+            reinterpret_cast<const wchar_t*>(details.resolvedPath.utf16()),
+            nullptr, nullptr, SW_SHOWNORMAL);
+        return reinterpret_cast<INT_PTR>(res) > 32;
+    }
+    const QString arg = QStringLiteral("/select,\"%1\"").arg(details.resolvedPath);
+    const HINSTANCE res = ShellExecuteW(
+        nullptr, L"open", L"explorer.exe",
+        reinterpret_cast<const wchar_t*>(arg.utf16()),
+        nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<INT_PTR>(res) > 32;
+#else
+    Q_UNUSED(target);
+    return false;
+#endif
+}
+
+bool AppLauncher::revealInExplorer(const QString& target)
+{
+    return openContainingFolder(target);
+}
+
+void AppLauncher::hideApp(const QString& target, const QString& name)
+{
+    const QString key = target.trimmed().toLower();
+    if (key.isEmpty())
+        return;
+    QString displayName = name.trimmed();
+    if (displayName.isEmpty()) {
+        const QString base = QFileInfo(target.trimmed()).completeBaseName();
+        displayName = base.isEmpty() ? target.trimmed() : base;
+    }
+    m_hiddenApps.insert(key, displayName);
+    saveHiddenApps();
+    emit hiddenAppsChanged();
+}
+
+void AppLauncher::unhideApp(const QString& target)
+{
+    const QString key = target.trimmed().toLower();
+    if (key.isEmpty() || !m_hiddenApps.contains(key))
+        return;
+    m_hiddenApps.remove(key);
+    saveHiddenApps();
+    emit hiddenAppsChanged();
+}
+
+void AppLauncher::clearHiddenApps()
+{
+    if (m_hiddenApps.isEmpty())
+        return;
+    m_hiddenApps.clear();
+    saveHiddenApps();
+    emit hiddenAppsChanged();
+}
+
+bool AppLauncher::isHidden(const QString& target) const
+{
+    const QString key = target.trimmed().toLower();
+    return !key.isEmpty() && m_hiddenApps.contains(key);
+}
+
+QVariantList AppLauncher::hiddenApps() const
+{
+    QVariantList out;
+    out.reserve(m_hiddenApps.size());
+    for (auto it = m_hiddenApps.constBegin(); it != m_hiddenApps.constEnd(); ++it) {
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), it.value().toString());
+        m.insert(QStringLiteral("target"), it.key());
+        out.append(m);
+    }
+    std::sort(out.begin(), out.end(), [](const QVariant& a, const QVariant& b) {
+        const QString na = a.toMap().value(QStringLiteral("name")).toString().toLower();
+        const QString nb = b.toMap().value(QStringLiteral("name")).toString().toLower();
+        if (na != nb)
+            return na < nb;
+        return a.toMap().value(QStringLiteral("target")).toString()
+             < b.toMap().value(QStringLiteral("target")).toString();
+    });
+    return out;
+}
+
+QVariantMap AppLauncher::inspectTarget(const QString& target) const
+{
+    QVariantMap caps;
+#ifdef Q_OS_WIN
+    const ResolvedTarget details = resolveTargetDetails(target);
+    const bool isLocal = !details.isUriOrShell && (details.inputExists || details.targetExists);
+    const bool isDir = details.isShortcut ? details.targetIsDir : details.inputIsDir;
+    const QString suffix = details.resolvedPath.isEmpty()
+        ? QString()
+        : QFileInfo(details.resolvedPath).suffix().toLower();
+    const bool canRunAsUser = !details.isUriOrShell && details.targetExists
+                              && !details.targetIsDir && suffix == QStringLiteral("exe");
+    const bool canElevate = !details.isUriOrShell && details.targetExists
+                            && !details.targetIsDir
+                            && (suffix == QStringLiteral("exe")
+                                || suffix == QStringLiteral("bat")
+                                || suffix == QStringLiteral("cmd")
+                                || suffix == QStringLiteral("msc")
+                                || suffix == QStringLiteral("msi"));
+    const bool canOpenContaining = !details.isUriOrShell && details.inputExists;
+    const bool canOpenTarget = !details.isUriOrShell && details.targetExists;
+
+    caps.insert(QStringLiteral("isLocal"), isLocal);
+    caps.insert(QStringLiteral("isShortcut"), details.isShortcut);
+    caps.insert(QStringLiteral("isDir"), isDir);
+    caps.insert(QStringLiteral("canRunAsUser"), canRunAsUser);
+    caps.insert(QStringLiteral("canElevate"), canElevate);
+    caps.insert(QStringLiteral("canOpenContaining"), canOpenContaining);
+    caps.insert(QStringLiteral("canOpenTarget"), canOpenTarget);
+#else
+    Q_UNUSED(target);
+    caps.insert(QStringLiteral("isLocal"), false);
+    caps.insert(QStringLiteral("isShortcut"), false);
+    caps.insert(QStringLiteral("isDir"), false);
+    caps.insert(QStringLiteral("canRunAsUser"), false);
+    caps.insert(QStringLiteral("canElevate"), false);
+    caps.insert(QStringLiteral("canOpenContaining"), false);
+    caps.insert(QStringLiteral("canOpenTarget"), false);
+#endif
+    return caps;
 }
 
 void AppLauncher::addPinnedApp(const QString& name, const QString& target,
@@ -349,7 +687,7 @@ void AppLauncher::refreshInstalledApps()
         QDirIterator it(root, QStringList() << QStringLiteral("*.lnk"),
                         QDir::Files, QDirIterator::Subdirectories);
         while (it.hasNext()) {
-            const QString filePath = it.next();
+            const QString filePath = QDir::toNativeSeparators(it.next());
             const QFileInfo fi(filePath);
             const QString base = fi.completeBaseName();
             const QString low = base.toLower();
@@ -419,7 +757,12 @@ QVariantList AppLauncher::searchApps(const QString& query) const
 {
     const QString q = query.trimmed().toLower();
     if (q.isEmpty()) {
-        QVariantList ranked = m_installedApps;
+        QVariantList ranked;
+        ranked.reserve(m_installedApps.size());
+        for (const QVariant& v : m_installedApps) {
+            if (!isHidden(v.toMap().value(QStringLiteral("target")).toString()))
+                ranked.append(v);
+        }
         std::stable_sort(ranked.begin(), ranked.end(), [this](const QVariant& a, const QVariant& b) {
             const QVariantMap ma = a.toMap();
             const QVariantMap mb = b.toMap();
@@ -441,6 +784,8 @@ QVariantList AppLauncher::searchApps(const QString& query) const
     QList<Scored> matches;
     for (const QVariant& v : m_installedApps) {
         QVariantMap m = v.toMap();
+        if (isHidden(m.value(QStringLiteral("target")).toString()))
+            continue;
         const int base = fuzzyMatchScore(m.value(QStringLiteral("name")).toString(), q);
         if (base <= 0)
             continue;

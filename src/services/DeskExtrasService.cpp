@@ -21,6 +21,7 @@
 #include <QUrlQuery>
 #include <QVariantMap>
 #include <QVector>
+#include <QWindow>
 
 #include <algorithm>
 #include <cmath>
@@ -1033,8 +1034,26 @@ void DropShelfService::addPaths(const QStringList& paths)
 void DropShelfService::pickFiles()
 {
 #ifdef Q_OS_WIN
+    HWND initialOwner = nullptr;
+    if (QWindow* fw = QGuiApplication::focusWindow()) {
+        HWND h = reinterpret_cast<HWND>(fw->winId());
+        if (h && IsWindow(h))
+            initialOwner = h;
+    }
+    if (!initialOwner) {
+        for (QWindow* w : QGuiApplication::topLevelWindows()) {
+            if (!w || !w->isVisible())
+                continue;
+            HWND h = reinterpret_cast<HWND>(w->winId());
+            if (h && IsWindow(h)) {
+                initialOwner = h;
+                break;
+            }
+        }
+    }
+
     QPointer<DropShelfService> guard(this);
-    std::thread([guard]() {
+    std::thread([guard, initialOwner]() {
         const HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         const bool didCoInit = SUCCEEDED(hr);
 
@@ -1046,17 +1065,29 @@ void DropShelfService::pickFiles()
 
         QStringList picked;
         if (pGetOpen) {
+            HWND ownerHwnd = (initialOwner && IsWindow(initialOwner)) ? initialOwner : nullptr;
+            HWND tempOwner = nullptr;
+            if (!ownerHwnd) {
+                tempOwner = CreateWindowExW(0, L"STATIC", L"SekaiDesk", WS_POPUP,
+                                            0, 0, 0, 0, nullptr, nullptr,
+                                            GetModuleHandleW(nullptr), nullptr);
+                ownerHwnd = tempOwner;
+            }
+
             QVector<wchar_t> buf(65536, 0);
             OPENFILENAMEW ofn{};
             ofn.lStructSize = sizeof(ofn);
-            ofn.hwndOwner = nullptr;
+            ofn.hwndOwner = ownerHwnd;
             ofn.lpstrFilter = L"All Files (*.*)\0*.*\0\0";
             ofn.lpstrFile = buf.data();
             ofn.nMaxFile = static_cast<DWORD>(buf.size());
             ofn.lpstrTitle = L"Add Files to Drop Shelf";
             ofn.Flags = OFN_ALLOWMULTISELECT | OFN_EXPLORER | OFN_FILEMUSTEXIST
                       | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
-            if (pGetOpen(&ofn)) {
+            const BOOL ok = pGetOpen(&ofn);
+            if (tempOwner)
+                DestroyWindow(tempOwner);
+            if (ok) {
                 const wchar_t* p = buf.data();
                 const QString first = QString::fromWCharArray(p);
                 p += first.size() + 1;

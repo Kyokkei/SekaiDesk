@@ -5,6 +5,7 @@ build/
 build-*/
 out/
 dist/
+package/
 *.o
 *.obj
 *.exe.bak

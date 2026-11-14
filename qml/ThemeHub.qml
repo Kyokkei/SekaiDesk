@@ -83,6 +83,12 @@ Item {
     ]
 
     property string bandId: ConfigStore.stringValue("theme.band", "vs")
+    property bool useCustomPalette: ConfigStore.boolValue("theme.useCustomPalette", false)
+    property string customAccentA: ConfigStore.stringValue("theme.customAccentA", "#04feee")
+    property string customAccentB: ConfigStore.stringValue("theme.customAccentB", "#00ffcb")
+    property string customBorder: ConfigStore.stringValue("theme.customBorder", "#555473")
+    property string customDeep: ConfigStore.stringValue("theme.customDeep", "#232235")
+
     readonly property var currentBand: {
         for (let i = 0; i < bands.length; ++i) {
             if (bands[i].id === bandId)
@@ -91,23 +97,141 @@ Item {
         return bands[0]
     }
 
-    readonly property color accentA: currentBand.A
-    readonly property color accentB: currentBand.B
-    readonly property color bandBorder: currentBand.border
-    readonly property color bandDeep: currentBand.deep
-    readonly property color hoverTint: currentBand.hoverTint
+    readonly property color accentA: useCustomPalette ? customAccentA : currentBand.A
+    readonly property color accentB: useCustomPalette ? customAccentB : currentBand.B
+    readonly property color bandBorder: useCustomPalette ? customBorder : currentBand.border
+    readonly property color bandDeep: useCustomPalette ? customDeep : currentBand.deep
+    readonly property color hoverTint: useCustomPalette ? "#E8F4FF" : currentBand.hoverTint
     readonly property color darkInk: "#1A1B2E"
-    readonly property string bandName: currentBand.name
-    readonly property string bandShort: currentBand.shortName
+    readonly property string bandName: useCustomPalette ? "Wallpaper Match" : currentBand.name
+    readonly property string bandShort: useCustomPalette ? "WALL" : currentBand.shortName
 
     function setBand(id) {
+        useCustomPalette = false
+        ConfigStore.set("theme.useCustomPalette", false)
         bandId = id
         ConfigStore.set("theme.band", id)
+    }
+
+    function applyWallpaperPalette(map) {
+        if (!map)
+            return
+        if (map.accentA) customAccentA = String(map.accentA)
+        if (map.accentB) customAccentB = String(map.accentB)
+        if (map.border) customBorder = String(map.border)
+        if (map.deep) customDeep = String(map.deep)
+        useCustomPalette = true
+        ConfigStore.set("theme.customAccentA", customAccentA)
+        ConfigStore.set("theme.customAccentB", customAccentB)
+        ConfigStore.set("theme.customBorder", customBorder)
+        ConfigStore.set("theme.customDeep", customDeep)
+        ConfigStore.set("theme.useCustomPalette", true)
+    }
+
+    Connections {
+        target: WallpaperService
+        function onCurrentWallpaperChanged() {
+            if (hub.useCustomPalette && WallpaperService.currentWallpaper !== "") {
+                const pal = WallpaperService.extractPalette(WallpaperService.currentWallpaper)
+                if (pal && pal.accentA)
+                    hub.applyWallpaperPalette(pal)
+            }
+        }
     }
 
     // Shell / UI toggles
     property bool screenRoundEnabled: ConfigStore.boolValue("ui.screenRound", true)
     property bool dockAutoHide: ConfigStore.boolValue("dock.autoHide", true)
+    property bool phoneMode: ConfigStore.boolValue("quickPanel.phoneMode", true)
+
+    // Notifications & OSD
+    property string notifyStyle: ConfigStore.stringValue("notifications.style", "peek")
+    property bool notifyQuietFullscreen: ConfigStore.boolValue("notifications.quietFullscreen", true)
+    property bool osdEnabled: ConfigStore.boolValue("ui.osdEnabled", true)
+
+    function setNotifyStyle(v) {
+        const s = (v === "popup" || v === "off") ? v : "peek"
+        notifyStyle = s
+        ConfigStore.set("notifications.style", s)
+    }
+    function setNotifyQuietFullscreen(v) {
+        notifyQuietFullscreen = !!v
+        ConfigStore.set("notifications.quietFullscreen", notifyQuietFullscreen)
+    }
+    function setOsdEnabled(v) {
+        osdEnabled = !!v
+        ConfigStore.set("ui.osdEnabled", osdEnabled)
+        SystemControl.setSuppressStockOsd(osdEnabled)
+    }
+
+    // Bar customization
+    property string barStyle: ConfigStore.stringValue("bar.style", "transparent")
+    property bool barAutoHide: ConfigStore.boolValue("bar.autoHide", false)
+    property bool barShowActiveWindow: ConfigStore.boolValue("bar.showActiveWindow", true)
+    property bool barShowMedia: ConfigStore.boolValue("bar.showMedia", true)
+    property bool barShowWeather: ConfigStore.boolValue("bar.showWeather", true)
+    property bool barShowStats: ConfigStore.boolValue("bar.showStats", true)
+    property bool barShowClock: ConfigStore.boolValue("bar.showClock", true)
+    property bool barShowTray: ConfigStore.boolValue("bar.showTray", true)
+
+    function setBarStyle(v) {
+        const s = (v === "float" || v === "straight" || v === "capsule" || v === "transparent") ? v : "transparent"
+        barStyle = s
+        ConfigStore.set("bar.style", s)
+    }
+    function setBarAutoHide(v) { barAutoHide = !!v; ConfigStore.set("bar.autoHide", barAutoHide) }
+    function setBarShowActiveWindow(v) { barShowActiveWindow = !!v; ConfigStore.set("bar.showActiveWindow", barShowActiveWindow) }
+    function setBarShowMedia(v) { barShowMedia = !!v; ConfigStore.set("bar.showMedia", barShowMedia) }
+    function setBarShowWeather(v) { barShowWeather = !!v; ConfigStore.set("bar.showWeather", barShowWeather) }
+    function setBarShowStats(v) { barShowStats = !!v; ConfigStore.set("bar.showStats", barShowStats) }
+    function setBarShowClock(v) { barShowClock = !!v; ConfigStore.set("bar.showClock", barShowClock) }
+    function setBarShowTray(v) { barShowTray = !!v; ConfigStore.set("bar.showTray", barShowTray) }
+
+    // Dock customization
+    property string dockStyle: ConfigStore.stringValue("dock.style", "capsule")
+    property int dockTileSize: Math.max(40, Math.min(64, ConfigStore.intValue("dock.tileSize", 48)))
+    property bool dockMagnify: ConfigStore.boolValue("dock.magnify", true)
+    property bool dockShowFinder: ConfigStore.boolValue("dock.showFinder", false)
+    property bool dockShowClipboard: ConfigStore.boolValue("dock.showClipboard", false)
+    property bool dockShowDropShelf: ConfigStore.boolValue("dock.showDropShelf", false)
+    property bool dockShowTrash: ConfigStore.boolValue("dock.showTrash", false)
+
+    Component.onCompleted: {
+        if (!ConfigStore.boolValue("dock.toolsMigratedV6", false)) {
+            setDockShowFinder(false)
+            setDockShowClipboard(false)
+            setDockShowDropShelf(false)
+            setDockShowTrash(false)
+            ConfigStore.set("dock.toolsMigratedV6", true)
+        }
+        if (!ConfigStore.boolValue("dock.autoHideMigratedV8", false)) {
+            setDockAutoHide(true)
+            ConfigStore.set("dock.autoHideMigratedV8", true)
+        }
+        SystemControl.setSuppressStockOsd(osdEnabled)
+    }
+
+    function setDockStyle(v) {
+        const s = (v === "float" || v === "capsule" || v === "transparent") ? v : "capsule"
+        dockStyle = s
+        ConfigStore.set("dock.style", s)
+    }
+    function setDockTileSize(v) {
+        const n = Number(v)
+        const sz = isNaN(n) ? 48 : Math.max(40, Math.min(64, Math.round(n)))
+        dockTileSize = sz
+        ConfigStore.set("dock.tileSize", sz)
+    }
+    function setDockMagnify(v) { dockMagnify = !!v; ConfigStore.set("dock.magnify", dockMagnify) }
+    function setDockShowFinder(v) { dockShowFinder = !!v; ConfigStore.set("dock.showFinder", dockShowFinder) }
+    function setDockShowClipboard(v) { dockShowClipboard = !!v; ConfigStore.set("dock.showClipboard", dockShowClipboard) }
+    function setDockShowDropShelf(v) { dockShowDropShelf = !!v; ConfigStore.set("dock.showDropShelf", dockShowDropShelf) }
+    function setDockShowTrash(v) { dockShowTrash = !!v; ConfigStore.set("dock.showTrash", dockShowTrash) }
+
+    // Edit Desktop mode state
+    property bool editMode: false
+    property bool widgetsLocked: ConfigStore.boolValue("widgets.locked", false)
+    property string editTab: "widgets"
 
     function setScreenRound(v) {
         screenRoundEnabled = !!v
@@ -119,9 +243,28 @@ Item {
         ConfigStore.set("dock.autoHide", dockAutoHide)
     }
 
+    function setPhoneMode(v) {
+        phoneMode = !!v
+        ConfigStore.set("quickPanel.phoneMode", phoneMode)
+    }
+
+    function setWidgetsLocked(v) {
+        widgetsLocked = !!v
+        ConfigStore.set("widgets.locked", widgetsLocked)
+    }
+
+    function setEditMode(v) {
+        editMode = !!v
+        if (editMode)
+            closeAllTools()
+    }
+
     // Modal & tool windows
     property bool settingsOpen: false
     property double settingsClosedAt: 0
+    property string settingsSection: ""
+    property bool wallpaperSelectorOpen: false
+    property double wallpaperSelectorClosedAt: 0
     property bool spotlightOpen: false
     property double spotlightClosedAt: 0
     property bool clipboardOpen: false
@@ -129,11 +272,137 @@ Item {
     property bool dropShelfOpen: false
     property double dropShelfClosedAt: 0
 
-    function closeAllTools() {
-        settingsOpen = false
+    function openSettings(section) {
         spotlightOpen = false
         clipboardOpen = false
         dropShelfOpen = false
+        wallpaperSelectorOpen = false
+        settingsSection = section || ""
+        settingsOpen = true
+    }
+
+    function closeAllTools() {
+        settingsOpen = false
+        wallpaperSelectorOpen = false
+        spotlightOpen = false
+        clipboardOpen = false
+        dropShelfOpen = false
+    }
+
+    function captureLookMap() {
+        return {
+            bandId: bandId,
+            useCustomPalette: useCustomPalette,
+            customAccentA: String(customAccentA),
+            customAccentB: String(customAccentB),
+            customBorder: String(customBorder),
+            customDeep: String(customDeep),
+            accentA: String(accentA),
+            accentB: String(accentB),
+            screenRoundEnabled: screenRoundEnabled,
+            dockAutoHide: dockAutoHide,
+            dockStyle: dockStyle,
+            dockTileSize: dockTileSize,
+            dockMagnify: dockMagnify,
+            dockShowFinder: dockShowFinder,
+            dockShowClipboard: dockShowClipboard,
+            dockShowDropShelf: dockShowDropShelf,
+            dockShowTrash: dockShowTrash,
+            barStyle: barStyle,
+            barAutoHide: barAutoHide,
+            barShowActiveWindow: barShowActiveWindow,
+            barShowMedia: barShowMedia,
+            barShowWeather: barShowWeather,
+            barShowStats: barShowStats,
+            barShowClock: barShowClock,
+            barShowTray: barShowTray,
+            phoneMode: phoneMode,
+            osdEnabled: osdEnabled,
+            notifyStyle: notifyStyle,
+            notifyQuietFullscreen: notifyQuietFullscreen,
+            clockStyle: clockStyle,
+            clockUse24h: clockUse24h,
+            clockSeconds: clockSeconds,
+            clockShowDate: clockShowDate,
+            weatherMinimal: weatherMinimal,
+            weatherView: weatherView,
+            weatherUnit: weatherUnit,
+            widgets: {
+                clock: wClockVisible,
+                weather: wWeatherVisible,
+                todo: wTodoVisible,
+                notes: wNotesVisible,
+                lyrics: wLyricsVisible,
+                profile: wProfileVisible,
+                calendar: wCalendarVisible
+            },
+            visualizer: {
+                enabled: VisualizerService.enabled,
+                style: VisualizerService.style,
+                sizeIndex: VisualizerService.sizeIndex,
+                colorMode: VisualizerService.colorMode
+            },
+            wallpaper: WallpaperService.currentWallpaper || ""
+        }
+    }
+
+    function applyLookMap(data) {
+        if (!data)
+            return
+        if (data.useCustomPalette) {
+            applyWallpaperPalette({
+                accentA: data.customAccentA || data.accentA || customAccentA,
+                accentB: data.customAccentB || data.accentB || customAccentB,
+                border: data.customBorder || customBorder,
+                deep: data.customDeep || customDeep
+            })
+        } else if (data.bandId) {
+            setBand(String(data.bandId))
+        }
+        if (data.screenRoundEnabled !== undefined) setScreenRound(data.screenRoundEnabled)
+        if (data.dockAutoHide !== undefined) setDockAutoHide(data.dockAutoHide)
+        if (data.dockStyle !== undefined) setDockStyle(data.dockStyle)
+        if (data.dockTileSize !== undefined) setDockTileSize(data.dockTileSize)
+        if (data.dockMagnify !== undefined) setDockMagnify(data.dockMagnify)
+        if (data.dockShowFinder !== undefined) setDockShowFinder(data.dockShowFinder)
+        if (data.dockShowClipboard !== undefined) setDockShowClipboard(data.dockShowClipboard)
+        if (data.dockShowDropShelf !== undefined) setDockShowDropShelf(data.dockShowDropShelf)
+        if (data.dockShowTrash !== undefined) setDockShowTrash(data.dockShowTrash)
+        if (data.barStyle !== undefined) setBarStyle(data.barStyle)
+        if (data.barAutoHide !== undefined) setBarAutoHide(data.barAutoHide)
+        if (data.barShowActiveWindow !== undefined) setBarShowActiveWindow(data.barShowActiveWindow)
+        if (data.barShowMedia !== undefined) setBarShowMedia(data.barShowMedia)
+        if (data.barShowWeather !== undefined) setBarShowWeather(data.barShowWeather)
+        if (data.barShowStats !== undefined) setBarShowStats(data.barShowStats)
+        if (data.barShowClock !== undefined) setBarShowClock(data.barShowClock)
+        if (data.barShowTray !== undefined) setBarShowTray(data.barShowTray)
+        if (data.phoneMode !== undefined) setPhoneMode(data.phoneMode)
+        if (data.osdEnabled !== undefined) setOsdEnabled(data.osdEnabled)
+        if (data.notifyStyle !== undefined) setNotifyStyle(data.notifyStyle)
+        if (data.notifyQuietFullscreen !== undefined) setNotifyQuietFullscreen(data.notifyQuietFullscreen)
+        if (data.clockStyle !== undefined) setClockStyle(data.clockStyle)
+        if (data.clockUse24h !== undefined) setClockUse24h(data.clockUse24h)
+        if (data.clockSeconds !== undefined) setClockSeconds(data.clockSeconds)
+        if (data.clockShowDate !== undefined) setClockShowDate(data.clockShowDate)
+        if (data.weatherMinimal !== undefined) setWeatherMinimal(data.weatherMinimal)
+        if (data.weatherView !== undefined) setWeatherView(data.weatherView)
+        if (data.weatherUnit !== undefined) setWeatherUnit(data.weatherUnit)
+        if (data.widgets) {
+            const keys = ["clock", "weather", "todo", "notes", "lyrics", "profile", "calendar"]
+            for (let i = 0; i < keys.length; ++i) {
+                const k = keys[i]
+                if (data.widgets[k] !== undefined)
+                    setWidgetVisible(k, !!data.widgets[k])
+            }
+        }
+        if (data.visualizer) {
+            if (data.visualizer.style !== undefined) VisualizerService.style = String(data.visualizer.style)
+            if (data.visualizer.sizeIndex !== undefined) VisualizerService.sizeIndex = Number(data.visualizer.sizeIndex)
+            if (data.visualizer.colorMode !== undefined) VisualizerService.colorMode = Number(data.visualizer.colorMode)
+            if (data.visualizer.enabled !== undefined) VisualizerService.enabled = !!data.visualizer.enabled
+        }
+        if (data.wallpaper && String(data.wallpaper) !== "")
+            WallpaperService.applyWallpaper(String(data.wallpaper))
     }
 
     // Desktop widgets visibility (persisted)
@@ -159,6 +428,8 @@ Item {
     }
     property bool clockUse24h: ConfigStore.boolValue("widgets.clock.use24h", false)
     readonly property bool clock24h: clockUse24h
+    property bool clockSeconds: ConfigStore.boolValue("widgets.clock.showSeconds", true)
+    property bool clockShowDate: ConfigStore.boolValue("widgets.clock.showDate", true)
 
     function setClockStyle(st) {
         let idx = 3
@@ -184,11 +455,30 @@ Item {
         ConfigStore.set("widgets.clock.use24h", clockUse24h)
     }
 
+    function setClock24h(v) {
+        setClockUse24h(v)
+    }
+
+    function setClockSeconds(v) {
+        clockSeconds = !!v
+        ConfigStore.set("widgets.clock.showSeconds", clockSeconds)
+    }
+
+    function setClockShowDate(v) {
+        clockShowDate = !!v
+        ConfigStore.set("widgets.clock.showDate", clockShowDate)
+    }
+
     // Weather widget preferences
     property bool weatherMinimal: ConfigStore.boolValue("widgets.weather.minimal", false)
+    readonly property string weatherStyle: weatherMinimal ? "compact" : "card"
     property string weatherView: {
         const v = ConfigStore.stringValue("widgets.weather.view", "hourly")
         return v === "days" ? "days" : "hourly"
+    }
+    property string weatherUnit: {
+        const u = ConfigStore.stringValue("widgets.weather.unit", "C").toUpperCase()
+        return u === "F" ? "F" : "C"
     }
 
     function setWeatherMinimal(v) {
@@ -196,9 +486,26 @@ Item {
         ConfigStore.set("widgets.weather.minimal", weatherMinimal)
     }
 
+    function setWeatherStyle(v) {
+        setWeatherMinimal(String(v || "").toLowerCase() === "compact")
+    }
+
     function setWeatherView(v) {
         weatherView = (v === "days") ? "days" : "hourly"
         ConfigStore.set("widgets.weather.view", weatherView)
+    }
+
+    function setWeatherUnit(v) {
+        const u = String(v || "C").toUpperCase() === "F" ? "F" : "C"
+        weatherUnit = u
+        ConfigStore.set("widgets.weather.unit", u)
+    }
+
+    function formatTemp(celsius) {
+        const c = Number(celsius)
+        if (isNaN(c))
+            return 0
+        return weatherUnit === "F" ? Math.round(c * 9.0 / 5.0 + 32.0) : Math.round(c)
     }
 
     // Todo widget compact toggle
@@ -223,6 +530,17 @@ Item {
     property int wLyricsY: Math.max(54, ConfigStore.intValue("widgets.lyrics.y", Math.max(400, screenH - 250)))
     property int wCalendarX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.calendar.x", 364)))
     property int wCalendarY: Math.max(54, ConfigStore.intValue("widgets.calendar.y", 56))
+
+    function widgetVisible(key) {
+        if (key === "clock") return wClockVisible
+        if (key === "weather") return wWeatherVisible
+        if (key === "todo") return wTodoVisible
+        if (key === "notes") return wNotesVisible
+        if (key === "lyrics") return wLyricsVisible
+        if (key === "profile") return wProfileVisible
+        if (key === "calendar") return wCalendarVisible
+        return false
+    }
 
     function setWidgetVisible(key, vis) {
         const v = !!vis
@@ -334,6 +652,8 @@ Item {
     property string profileStatus: ConfigStore.stringValue("widgets.profile.status", "Wonderhoy Desktop Shell")
     property string profileAvatarUrl: ConfigStore.stringValue("widgets.profile.avatar", "")
     property string profileBannerUrl: ConfigStore.stringValue("widgets.profile.banner", "")
+    property string quickPanelBannerUrl: ConfigStore.stringValue("quickPanel.banner", "")
+    property string quickPanelAvatarUrl: ConfigStore.stringValue("quickPanel.avatar", "")
 
     function saveProfile(name, status) {
         profileName = name.trim() !== "" ? name.trim() : "Yozora"
@@ -350,6 +670,16 @@ Item {
     function setProfileBanner(url) {
         profileBannerUrl = String(url || "")
         ConfigStore.set("widgets.profile.banner", profileBannerUrl)
+    }
+
+    function setQuickPanelBanner(url) {
+        quickPanelBannerUrl = String(url || "")
+        ConfigStore.set("quickPanel.banner", quickPanelBannerUrl)
+    }
+
+    function setQuickPanelAvatar(url) {
+        quickPanelAvatarUrl = String(url || "")
+        ConfigStore.set("quickPanel.avatar", quickPanelAvatarUrl)
     }
 
     // Calendar Events & Deadlines persisted in ConfigStore

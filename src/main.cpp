@@ -14,6 +14,16 @@
 #include <QQmlEngine>
 #include <QUrl>
 
+#ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <cstring>
+#include <cwctype>
+#include <string>
+#endif
+
 #include "compat/QsCore.h"
 #include "compat/QsIo.h"
 #include "compat/QsWindow.h"
@@ -29,14 +39,53 @@
 #include "services/WindowTracker.h"
 #include "services/ClipboardService.h"
 #include "services/DeskExtrasService.h"
+#include "services/NotificationService.h"
+#include "services/VisualizerService.h"
+#include "services/WallpaperService.h"
 
 int main(int argc, char* argv[])
 {
+#ifdef Q_OS_WIN
+    std::wstring instanceTag;
+    for (int i = 1; i < argc; ++i) {
+        if (!argv[i])
+            continue;
+        const char* arg = argv[i];
+        const char* rawVal = nullptr;
+        if (std::strcmp(arg, "--instance") == 0 && (i + 1) < argc && argv[i + 1]) {
+            rawVal = argv[++i];
+        } else if (std::strncmp(arg, "--instance=", 11) == 0) {
+            rawVal = arg + 11;
+        }
+        if (rawVal) {
+            instanceTag.clear();
+            for (const char* p = rawVal; *p != '\0' && instanceTag.size() < 48; ++p) {
+                const wchar_t wc = static_cast<unsigned char>(*p);
+                if (std::iswalnum(wc) || wc == L'_' || wc == L'-' || wc == L'.')
+                    instanceTag.push_back(wc);
+            }
+        }
+    }
+    const std::wstring mutexName = instanceTag.empty()
+        ? std::wstring(L"Local\\SekaiDesk_SingleInstance_v1")
+        : (std::wstring(L"Local\\SekaiDesk_SingleInstance_") + instanceTag);
+
+    HANDLE singleInstanceMutex = CreateMutexW(nullptr, FALSE, mutexName.c_str());
+    const DWORD mutexErr = GetLastError();
+    if (!singleInstanceMutex || mutexErr == ERROR_ALREADY_EXISTS || mutexErr == ERROR_ACCESS_DENIED) {
+        if (singleInstanceMutex)
+            CloseHandle(singleInstanceMutex);
+        qInfo("SekaiDesk: another instance is already running; exiting.");
+        return 0;
+    }
+#endif
+
     // SekaiDesk is a decorative shell: enable software fallback-friendly
     // defaults, keep the default RHI (D3D11 on Windows).
     QGuiApplication app(argc, argv);
     app.setOrganizationName(QStringLiteral("SekaiDesk"));
     app.setApplicationName(QStringLiteral("SekaiDesk"));
+    app.setApplicationDisplayName(QStringLiteral("SekaiDesk"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
     app.setQuitOnLastWindowClosed(false);
 
@@ -49,11 +98,27 @@ int main(int argc, char* argv[])
     static MediaService mediaService;
     static AudioService audioService;
     static SystemControlService systemControl;
+    systemControl.setSuppressStockOsd(
+        settings.boolValue(QStringLiteral("ui.osdEnabled"), true));
+    QObject::connect(&systemControl, &SystemControlService::volumeStepRequested,
+                     &audioService, [&audioService](int delta) {
+                         audioService.setMasterVolume(audioService.masterVolume() + delta);
+                     });
+    QObject::connect(&systemControl, &SystemControlService::volumeMuteToggleRequested,
+                     &audioService, &AudioService::toggleMasterMute);
+    QObject::connect(&audioService, &AudioService::osdRequested,
+                     &systemControl, [&systemControl](const QString& kind, int, bool) {
+                         if (kind == QLatin1String("volume"))
+                             systemControl.hideStockOsdIfActive();
+                     });
     static TrayService trayService;
     static ClipboardService clipboardService;
     static LyricsService lyricsService(&mediaService);
     static WeatherService weatherService(&settings);
     static DropShelfService dropShelfService;
+    static NotificationService notificationService;
+    static VisualizerService visualizerService(&settings, &mediaService);
+    static WallpaperService wallpaperService(&settings);
 
     // --- Quickshell compat registrations -----------------------------------
     // Unversioned imports (`import Quickshell`) resolve to the highest
@@ -100,6 +165,12 @@ int main(int argc, char* argv[])
                                  "WeatherService", &weatherService);
     qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
                                  "DropShelfService", &dropShelfService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "NotificationService", &notificationService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "VisualizerService", &visualizerService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "WallpaperService", &wallpaperService);
     qmlRegisterType<DwmThumbnailItem>("SekaiDesk", 1, 0,
                                       "DwmThumbnail");
 
@@ -130,8 +201,15 @@ int main(int argc, char* argv[])
     engine.load(QUrl(QStringLiteral("qrc:/qml/Shell.qml")));
     if (engine.rootObjects().isEmpty()) {
         qCritical("SekaiDesk: failed to load Shell.qml");
+#ifdef Q_OS_WIN
+        CloseHandle(singleInstanceMutex);
+#endif
         return 1;
     }
 
-    return app.exec();
+    const int exitCode = app.exec();
+#ifdef Q_OS_WIN
+    CloseHandle(singleInstanceMutex);
+#endif
+    return exitCode;
 }

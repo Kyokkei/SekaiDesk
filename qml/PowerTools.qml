@@ -51,6 +51,19 @@ Item {
         property int selectedIdx: 0
         property var unifiedItems: []
         property double openedAt: 0
+        property bool actionMenuOpen: false
+        property int actionMenuIdx: 0
+        property int actionMenuRowIndex: 0
+        property var actionMenuItem: null
+        property var actionMenuCaps: ({})
+        readonly property int actionMenuTopY: 61 + Math.max(0, actionMenuRowIndex) * 48 + 12
+        readonly property var actionMenuModel: [
+            { label: "Run As Different User", hotkey: "Alt+1" },
+            { label: "Run As Administrator", hotkey: "Alt+2" },
+            { label: "Open containing folder", hotkey: "Alt+3" },
+            { label: "Open target folder", hotkey: "Alt+4" },
+            { label: "Hide", hotkey: "Alt+5" }
+        ]
 
         width: cardW + shadow
         height: spotCard.height + shadow
@@ -58,8 +71,89 @@ Item {
         y: Math.max(54, Math.round(themeHub.screenH * 0.16))
 
         function closeSpotlight() {
+            actionMenuOpen = false
+            actionMenuItem = null
             themeHub.spotlightClosedAt = Date.now()
             themeHub.spotlightOpen = false
+        }
+
+        function hideKeyFor(item) {
+            if (!item)
+                return ""
+            if (item.target && item.target !== "")
+                return item.target
+            return (item.kind || "item") + ":" + (item.act || item.widgetKey || item.bandId || item.name || "")
+        }
+
+        function isActionEnabled(idx, caps, item) {
+            if (!item || item.kind === "unhide")
+                return false
+            if (idx === 4)
+                return true
+            const c = caps || ({})
+            if (idx === 0) return !!c.canRunAsUser
+            if (idx === 1) return !!c.canElevate
+            if (idx === 2) return !!c.canOpenContaining
+            if (idx === 3) return !!c.canOpenTarget
+            return false
+        }
+
+        function openActionMenu(idx) {
+            if (idx < 0 || idx >= unifiedItems.length)
+                return
+            const item = unifiedItems[idx]
+            if (!item || item.kind === "unhide" || item.kind === "math")
+                return
+            selectedIdx = idx
+            actionMenuRowIndex = idx
+            actionMenuItem = item
+            actionMenuCaps = item.target ? AppLauncher.inspectTarget(item.target) : ({
+                isLocal: false, isShortcut: false, isDir: false,
+                canRunAsUser: false, canElevate: false,
+                canOpenContaining: false, canOpenTarget: false
+            })
+            let firstEnabled = 4
+            for (let i = 0; i < 5; ++i) {
+                if (isActionEnabled(i, actionMenuCaps, item)) {
+                    firstEnabled = i
+                    break
+                }
+            }
+            actionMenuIdx = firstEnabled
+            actionMenuOpen = true
+        }
+
+        function executeContextAction(actionIdx, explicitItem) {
+            const item = explicitItem || actionMenuItem || ((selectedIdx >= 0 && selectedIdx < unifiedItems.length) ? unifiedItems[selectedIdx] : null)
+            if (!item || item.kind === "unhide")
+                return
+            const caps = (item === actionMenuItem && actionMenuOpen)
+                ? actionMenuCaps
+                : (item.target ? AppLauncher.inspectTarget(item.target) : ({}))
+            if (!isActionEnabled(actionIdx, caps, item))
+                return
+            if (actionIdx === 0) {
+                if (item.kind === "app") AppLauncher.recordUsage(item.target)
+                AppLauncher.runAsDifferentUser(item.target, item.args || "")
+                closeSpotlight()
+            } else if (actionIdx === 1) {
+                if (item.kind === "app") AppLauncher.recordUsage(item.target)
+                AppLauncher.runElevated(item.target, item.args || "")
+                closeSpotlight()
+            } else if (actionIdx === 2) {
+                AppLauncher.openContainingFolder(item.target)
+                closeSpotlight()
+            } else if (actionIdx === 3) {
+                AppLauncher.openTargetFolder(item.target)
+                closeSpotlight()
+            } else if (actionIdx === 4) {
+                const hk = hideKeyFor(item)
+                if (hk !== "")
+                    AppLauncher.hideApp(hk, item.name || "")
+                actionMenuOpen = false
+                actionMenuItem = null
+                refreshResults()
+            }
         }
 
         function evalMath(raw) {
@@ -108,7 +202,11 @@ Item {
             { name: "Sleep Computer", sub: "Sys • Suspend Windows to sleep", keys: "sleep suspend", badge: "SYS", act: "sleep" },
             { name: "Screenshot (Snip)", sub: "Sys • Open Windows Snipping overlay", keys: "screenshot snip capture", badge: "SYS", act: "screenshot" },
             { name: "Empty Recycle Bin", sub: "Sys • Clear all deleted files in Trash", keys: "empty recycle bin trash", badge: "SYS", act: "emptybin" },
-            { name: "SekaiDesk Settings / Hub", sub: "Shell • Open Control Hub & Widget switches", keys: "settings control hub config", badge: "SHELL", act: "settings" },
+            { name: "SekaiDesk Settings / Hub", sub: "Shell • Open Landscape Phone Settings Hub", keys: "settings control hub config", badge: "SHELL", act: "settings" },
+            { name: "Wallpaper Selector", sub: "Shell • Browse wallpapers & sync accent palette", keys: "wallpaper background theme gallery selector", badge: "SHELL", act: "wallpapers" },
+            { name: "Audio Visualizer", sub: "Widget • Toggle desktop audio visualizer overlay", keys: "visualizer audio spectrum music wave", badge: "WIDGET", act: "visualizer" },
+            { name: "Test Notification Peek", sub: "Shell • Preview live phone notification peek", keys: "test notification peek alert toast", badge: "SHELL", act: "testnotif" },
+            { name: "Edit Desktop", sub: "Shell • Arrange desktop widgets, bar, dock, themes & presets", keys: "edit desktop widgets layout lock tray", badge: "SHELL", act: "editdesktop" },
             { name: "Clipboard History", sub: "Tool • View & paste copied items (Ctrl+Alt+V)", keys: "clipboard history paste", badge: "TOOL", act: "clipboard" },
             { name: "Drop Shelf", sub: "Tool • Stage files dragged from Explorer", keys: "drop shelf tray files", badge: "TOOL", act: "dropshelf" },
             { name: "Task Manager", sub: "Win • Inspect processes & CPU/RAM", keys: "taskmgr task manager processes", badge: "WIN", target: "taskmgr.exe" },
@@ -179,13 +277,15 @@ Item {
                 const paths = AppLauncher.listPathSuggestions(q)
                 for (let i = 0; i < paths.length && out.length < 9; ++i) {
                     const p = paths[i]
+                    const pTarget = p.target || p.path || ""
+                    const pIsDir = (p.category === "Folder") || !!p.isDir
                     out.push({
                         kind: "path",
                         name: p.name,
-                        sub: p.path,
-                        badge: p.isDir ? "DIR" : "FILE",
-                        target: p.path,
-                        completeText: p.path + (p.isDir && !p.path.endsWith("\\") ? "\\" : "")
+                        sub: pTarget,
+                        badge: pIsDir ? "DIR" : "FILE",
+                        target: pTarget,
+                        completeText: pTarget + (pIsDir && !pTarget.endsWith("\\") ? "\\" : "")
                     })
                 }
             }
@@ -277,7 +377,8 @@ Item {
                 const tq = qLower.replace(/^theme\s*/, "").trim()
                 for (let b = 0; b < themeHub.bands.length; ++b) {
                     const band = themeHub.bands[b]
-                    if (tq === "" || band.name.toLowerCase().includes(tq) || band.id.includes(tq) || band.shortName.toLowerCase().includes(tq)) {
+                    if (!AppLauncher.isHidden("theme:" + band.id)
+                        && (tq === "" || band.name.toLowerCase().includes(tq) || band.id.includes(tq) || band.shortName.toLowerCase().includes(tq))) {
                         out.push({
                             kind: "theme",
                             name: "Theme: " + band.name,
@@ -290,13 +391,37 @@ Item {
                 }
             }
 
+            // 5b. Unhide hidden items (`unhide ...`)
+            const isUnhideQuery = (qLower === "unhide" || qLower.startsWith("unhide "))
+            if (isUnhideQuery) {
+                const uq = qLower.replace(/^unhide\s*/, "").trim()
+                const hiddenList = AppLauncher.hiddenApps || []
+                for (let h = 0; h < hiddenList.length && out.length < 9; ++h) {
+                    const hi = hiddenList[h]
+                    const hName = hi.name || hi.target || ""
+                    const hTarget = hi.target || ""
+                    if (uq === "" || hName.toLowerCase().includes(uq) || hTarget.toLowerCase().includes(uq)) {
+                        out.push({
+                            kind: "unhide",
+                            name: "Unhide: " + hName,
+                            sub: hTarget,
+                            badge: "UNHIDE",
+                            target: hTarget
+                        })
+                    }
+                }
+            }
+
             // 6. Scored Merge: System/Power/Widgets + Fuzzy Apps
-            if (!isPath && !q.startsWith(">")) {
+            if (!isPath && !q.startsWith(">") && !isUnhideQuery) {
                 const ranked = []
 
                 if (qLower !== "") {
                     for (let s = 0; s < systemCatalog.length; ++s) {
                         const sc = systemCatalog[s]
+                        const hideKey = sc.target || ((sc.widgetKey ? "widget" : (sc.act ? "sys" : "win")) + ":" + (sc.act || sc.widgetKey || sc.name))
+                        if (AppLauncher.isHidden(hideKey))
+                            continue
                         const scScore = scoreCatalogItem(sc, qLower)
                         if (scScore > 0) {
                             ranked.push({
@@ -353,7 +478,7 @@ Item {
             }
 
             // 7. Fallback Google Search ONLY last when user typed text
-            if (q !== "" && !isPath && !q.startsWith(">") && !/^(g|gg|yt|gh|wiki|tr)\s+/i.test(q) && out.length < 9) {
+            if (q !== "" && !isPath && !q.startsWith(">") && !isUnhideQuery && !/^(g|gg|yt|gh|wiki|tr)\s+/i.test(q) && out.length < 9) {
                 out.push({
                     kind: "url",
                     name: "Search Google for \"" + q + "\"",
@@ -374,6 +499,11 @@ Item {
             const isCtrl = (mods & Qt.ControlModifier) !== 0
             const isShift = (mods & Qt.ShiftModifier) !== 0
 
+            if (item.kind === "unhide") {
+                AppLauncher.unhideApp(item.target)
+                refreshResults()
+                return
+            }
             if (item.kind === "math") {
                 ClipboardService.copyText(item.value)
                 closeSpotlight()
@@ -408,6 +538,10 @@ Item {
                 else if (item.act === "screenshot") WindowTracker.takeScreenshot()
                 else if (item.act === "emptybin") TrashService.emptyTrash()
                 else if (item.act === "settings") themeHub.settingsOpen = true
+                else if (item.act === "wallpapers") themeHub.wallpaperSelectorOpen = true
+                else if (item.act === "visualizer") VisualizerService.enabled = !VisualizerService.enabled
+                else if (item.act === "testnotif") NotificationService.emitTestNotification()
+                else if (item.act === "editdesktop") themeHub.setEditMode(true)
                 else if (item.act === "clipboard") themeHub.clipboardOpen = true
                 else if (item.act === "dropshelf") themeHub.dropShelfOpen = true
                 return
@@ -456,11 +590,16 @@ Item {
         onVisibleChanged: {
             if (visible) {
                 openedAt = Date.now()
+                actionMenuOpen = false
+                actionMenuItem = null
                 query = ""
                 spotInput.text = ""
                 refreshResults()
                 focusActivate()
                 spotFocusTimer.restart()
+            } else {
+                actionMenuOpen = false
+                actionMenuItem = null
             }
         }
 
@@ -499,7 +638,10 @@ Item {
             x: 0
             y: 0
             width: spotlightWin.cardW
-            height: spotCol.implicitHeight + 20
+            height: Math.max(spotCol.implicitHeight + 20,
+                             spotlightWin.actionMenuOpen
+                                 ? (spotlightWin.actionMenuTopY + actionMenuCard.height + 14)
+                                 : 0)
             radius: 16
             color: "#FFFFFF"
             border.width: 2.5
@@ -546,11 +688,45 @@ Item {
                             font.weight: Font.Medium
                             color: themeHub.darkInk
                             onTextChanged: {
+                                spotlightWin.actionMenuOpen = false
+                                spotlightWin.actionMenuItem = null
                                 spotlightWin.query = text
                                 spotlightWin.refreshResults()
                             }
                             Keys.onPressed: event => {
                                 const total = spotlightWin.unifiedItems.length
+                                if ((event.modifiers & Qt.AltModifier) && event.key >= Qt.Key_1 && event.key <= Qt.Key_5) {
+                                    const actIdx = event.key - Qt.Key_1
+                                    spotlightWin.executeContextAction(actIdx, spotlightWin.actionMenuOpen ? spotlightWin.actionMenuItem : null)
+                                    event.accepted = true
+                                    return
+                                }
+                                if (((event.modifiers & Qt.ControlModifier) && event.key === Qt.Key_O)
+                                    || ((event.modifiers & Qt.ShiftModifier) && event.key === Qt.Key_Right)
+                                    || event.key === Qt.Key_Menu) {
+                                    if (spotlightWin.actionMenuOpen)
+                                        spotlightWin.actionMenuOpen = false
+                                    else
+                                        spotlightWin.openActionMenu(spotlightWin.selectedIdx)
+                                    event.accepted = true
+                                    return
+                                }
+                                if (spotlightWin.actionMenuOpen) {
+                                    if (event.key === Qt.Key_Escape || event.key === Qt.Key_Left) {
+                                        spotlightWin.actionMenuOpen = false
+                                        event.accepted = true
+                                    } else if (event.key === Qt.Key_Down) {
+                                        spotlightWin.actionMenuIdx = (spotlightWin.actionMenuIdx + 1) % 5
+                                        event.accepted = true
+                                    } else if (event.key === Qt.Key_Up) {
+                                        spotlightWin.actionMenuIdx = (spotlightWin.actionMenuIdx + 4) % 5
+                                        event.accepted = true
+                                    } else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                                        spotlightWin.executeContextAction(spotlightWin.actionMenuIdx, spotlightWin.actionMenuItem)
+                                        event.accepted = true
+                                    }
+                                    return
+                                }
                                 if (event.key === Qt.Key_Escape) {
                                     spotlightWin.closeSpotlight()
                                     event.accepted = true
@@ -630,9 +806,15 @@ Item {
                                 height: 24
                                 sourceSize.width: 48
                                 sourceSize.height: 48
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                                cache: true
+                                mipmap: true
                                 smooth: true
-                                visible: modelData.kind === "app"
-                                source: modelData.kind === "app" ? ("image://winicon/" + encodeURIComponent(modelData.target)) : ""
+                                visible: modelData.kind === "app" && status === Image.Ready
+                                source: (modelData.kind === "app" && modelData.target)
+                                    ? ("image://winicon/" + encodeURIComponent(modelData.target))
+                                    : ""
                             }
 
                             Rectangle {
@@ -643,7 +825,7 @@ Item {
                                 width: 24
                                 height: 24
                                 radius: 7
-                                visible: modelData.kind !== "app"
+                                visible: modelData.kind !== "app" || spotRowIcon.status !== Image.Ready
                                 color: modelData.badge === "POWER"
                                        ? (isSel ? "#FFFFFF" : "#FEE2E2")
                                        : (isSel ? "#FFFFFF" : themeHub.bandDeep)
@@ -651,12 +833,15 @@ Item {
                                 border.color: themeHub.darkInk
                                 Text {
                                     anchors.centerIn: parent
-                                    text: modelData.badge === "POWER" ? "⏻"
+                                    text: modelData.kind === "app"
+                                        ? (modelData.name || "A").trim().charAt(0).toUpperCase()
+                                        : modelData.badge === "POWER" ? "⏻"
                                         : modelData.kind === "math" ? "="
                                         : modelData.kind === "path" ? (modelData.badge === "DIR" ? "D" : "F")
                                         : modelData.kind === "shell" ? ">"
                                         : modelData.kind === "url" ? "W"
                                         : modelData.kind === "theme" ? "T"
+                                        : modelData.kind === "unhide" ? "+"
                                         : "S"
                                     font.family: "Consolas"
                                     font.pixelSize: 12
@@ -669,7 +854,7 @@ Item {
 
                             Column {
                                 anchors.left: spotRowIcon.right
-                                anchors.right: spotCatPill.left
+                                anchors.right: rowActionBtn.visible ? rowActionBtn.left : spotCatPill.left
                                 anchors.verticalCenter: parent.verticalCenter
                                 anchors.leftMargin: 10
                                 anchors.rightMargin: 8
@@ -681,7 +866,7 @@ Item {
                                     text: modelData.name || ""
                                     font.family: "Segoe UI"
                                     font.pixelSize: 13
-                                    font.weight: isSel ? Font.Bold : Font.Medium
+                                    font.weight: isSel ? Font.Bold : Font.DemiBold
                                     color: themeHub.darkInk
                                 }
                                 Text {
@@ -720,9 +905,54 @@ Item {
                                 id: resMa
                                 anchors.fill: parent
                                 hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton
                                 cursorShape: Qt.PointingHandCursor
                                 onEntered: spotlightWin.selectedIdx = index
-                                onClicked: mouse => spotlightWin.executeItem(modelData, mouse.modifiers)
+                                onClicked: mouse => {
+                                    if (mouse.button === Qt.RightButton) {
+                                        spotlightWin.openActionMenu(index)
+                                        return
+                                    }
+                                    if (spotlightWin.actionMenuOpen) {
+                                        spotlightWin.actionMenuOpen = false
+                                        return
+                                    }
+                                    spotlightWin.executeItem(modelData, mouse.modifiers)
+                                }
+                            }
+
+                            Rectangle {
+                                id: rowActionBtn
+                                visible: (isSel || resMa.containsMouse) && modelData.kind !== "unhide" && modelData.kind !== "math"
+                                anchors.right: spotCatPill.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 22
+                                height: 20
+                                radius: 6
+                                color: rowActionMa.containsMouse ? themeHub.accentB : "#FFFFFF"
+                                border.width: 1
+                                border.color: themeHub.darkInk
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "⋯"
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 12
+                                    font.weight: Font.Bold
+                                    color: themeHub.darkInk
+                                }
+                                MouseArea {
+                                    id: rowActionMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: {
+                                        if (spotlightWin.actionMenuOpen && spotlightWin.actionMenuRowIndex === index)
+                                            spotlightWin.actionMenuOpen = false
+                                        else
+                                            spotlightWin.openActionMenu(index)
+                                    }
+                                }
                             }
                         }
                     }
@@ -733,13 +963,138 @@ Item {
                     width: parent.width
                     spacing: 10
                     Text {
-                        text: "Enter: Run   •   Ctrl+Enter: Reveal Folder   •   Shift+Enter: Admin   •   Tab: Complete"
+                        text: "Enter: Run  •  Right-Click / Ctrl+O: Actions  •  Alt+1..5: Context  •  Tab: Complete"
                         font.family: "Consolas"
                         font.pixelSize: 10
                         color: "#64748B"
                         elide: Text.ElideRight
                         width: parent.width
                         horizontalAlignment: Text.AlignHCenter
+                    }
+                }
+            }
+
+            // Flow Launcher-style 5-Option Context Action Menu (docked inside spotCard)
+            Item {
+                id: actionMenuWrap
+                visible: spotlightWin.actionMenuOpen
+                z: 50
+                x: spotlightWin.cardW - 12 - actionMenuCard.width
+                y: spotlightWin.actionMenuTopY
+                width: actionMenuCard.width + 3
+                height: actionMenuCard.height + 3
+
+                Rectangle {
+                    x: 3
+                    y: 3
+                    width: actionMenuCard.width
+                    height: actionMenuCard.height
+                    radius: 12
+                    color: themeHub.darkInk
+                }
+
+                Rectangle {
+                    id: actionMenuCard
+                    x: 0
+                    y: 0
+                    width: 276
+                    height: actionMenuCol.implicitHeight + 12
+                    radius: 12
+                    color: "#FFFFFF"
+                    border.width: 2
+                    border.color: themeHub.darkInk
+
+                    Column {
+                        id: actionMenuCol
+                        x: 6
+                        y: 6
+                        width: parent.width - 12
+                        spacing: 2
+
+                        Repeater {
+                            model: spotlightWin.actionMenuModel
+                            delegate: Rectangle {
+                                required property var modelData
+                                required property int index
+
+                                readonly property bool rowEnabled: spotlightWin.isActionEnabled(index, spotlightWin.actionMenuCaps, spotlightWin.actionMenuItem)
+                                readonly property bool isRowSel: spotlightWin.actionMenuIdx === index
+
+                                width: parent.width
+                                height: 32
+                                radius: 8
+                                color: !rowEnabled
+                                    ? "#F8FAFC"
+                                    : (isRowSel ? themeHub.accentA : (actMa.containsMouse ? themeHub.hoverTint : "#FFFFFF"))
+                                border.width: (isRowSel && rowEnabled) ? 2 : 0
+                                border.color: themeHub.darkInk
+                                opacity: rowEnabled ? 1.0 : 0.42
+
+                                Row {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    spacing: 8
+
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 20
+                                        height: 20
+                                        radius: 6
+                                        color: isRowSel && rowEnabled ? "#FFFFFF" : (index === 4 ? "#FEE2E2" : "#EEF2FF")
+                                        border.width: 1
+                                        border.color: themeHub.darkInk
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: index === 0 ? "U" : index === 1 ? "A" : index === 2 ? "C" : index === 3 ? "T" : "H"
+                                            font.family: "Consolas"
+                                            font.pixelSize: 11
+                                            font.weight: Font.Bold
+                                            color: index === 4 ? "#DC2626" : themeHub.darkInk
+                                        }
+                                    }
+
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width - 78
+                                        elide: Text.ElideRight
+                                        text: modelData.label
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 12
+                                        font.weight: isRowSel && rowEnabled ? Font.Bold : Font.DemiBold
+                                        color: index === 4 && rowEnabled && !isRowSel ? "#B91C1C" : themeHub.darkInk
+                                    }
+
+                                    Rectangle {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: 42
+                                        height: 18
+                                        radius: 5
+                                        color: isRowSel && rowEnabled ? "#FFFFFF" : "#F1F5F9"
+                                        border.width: 1
+                                        border.color: themeHub.darkInk
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: modelData.hotkey
+                                            font.family: "Consolas"
+                                            font.pixelSize: 9
+                                            font.weight: Font.Bold
+                                            color: themeHub.darkInk
+                                        }
+                                    }
+                                }
+
+                                MouseArea {
+                                    id: actMa
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    enabled: rowEnabled
+                                    cursorShape: rowEnabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onEntered: spotlightWin.actionMenuIdx = index
+                                    onClicked: spotlightWin.executeContextAction(index, spotlightWin.actionMenuItem)
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -47,6 +47,30 @@ QString friendlyAppName(const QString& exePath, const QString& displayName, DWOR
     }
     return pid == 0 ? QStringLiteral("System Sounds") : QStringLiteral("App %1").arg(pid);
 }
+
+template <typename Fn>
+bool withDefaultEndpointVolume(EDataFlow flow, Fn&& fn)
+{
+    IMMDeviceEnumerator* pEnum = nullptr;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
+                                __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&pEnum))) || !pEnum) {
+        return false;
+    }
+    bool ok = false;
+    IMMDevice* pDev = nullptr;
+    if (SUCCEEDED(pEnum->GetDefaultAudioEndpoint(flow, eConsole, &pDev)) && pDev) {
+        IAudioEndpointVolume* pVol = nullptr;
+        if (SUCCEEDED(pDev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                                     reinterpret_cast<void**>(&pVol))) && pVol) {
+            fn(pVol);
+            ok = true;
+            pVol->Release();
+        }
+        pDev->Release();
+    }
+    pEnum->Release();
+    return ok;
+}
 #endif
 } // namespace
 
@@ -54,8 +78,10 @@ AudioService::AudioService(QObject* parent)
     : QObject(parent)
 {
 #ifdef Q_OS_WIN
+    m_startupTimer.start();
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     readMasterState(false);
+    readMicState(false);
     refreshOutputDevices();
     m_initialized = true;
     m_pollTimer.setInterval(200);
@@ -69,46 +95,70 @@ AudioService::~AudioService() = default;
 void AudioService::pollMaster()
 {
     readMasterState(true);
+    readMicState(true);
 }
 
 void AudioService::readMasterState(bool emitOsdIfExternal)
 {
 #ifdef Q_OS_WIN
-    IMMDeviceEnumerator* pEnum = nullptr;
-    HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                  __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&pEnum));
-    if (FAILED(hr) || !pEnum)
-        return;
-
-    IMMDevice* pDev = nullptr;
-    hr = pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDev);
-    if (SUCCEEDED(hr) && pDev) {
-        IAudioEndpointVolume* pVol = nullptr;
-        hr = pDev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
-                            reinterpret_cast<void**>(&pVol));
-        if (SUCCEEDED(hr) && pVol) {
-            float scalar = 0.0f;
-            BOOL muted = FALSE;
-            pVol->GetMasterVolumeLevelScalar(&scalar);
-            pVol->GetMute(&muted);
-            const int newVol = qBound(0, qRound(scalar * 100.0f), 100);
-            const bool newMute = (muted != FALSE);
-            if (!m_initialized || newVol != m_masterVolume || newMute != m_masterMuted) {
-                const bool changed = m_initialized && (newVol != m_masterVolume || newMute != m_masterMuted);
-                m_masterVolume = newVol;
-                m_masterMuted = newMute;
-                emit masterChanged();
-                if (changed && emitOsdIfExternal) {
-                    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-                    if (now - m_lastSelfChangeMs > 350)
-                        emit volumeOsdRequested(m_masterVolume, m_masterMuted);
+    withDefaultEndpointVolume(eRender, [&](IAudioEndpointVolume* pVol) {
+        float scalar = 0.0f;
+        BOOL muted = FALSE;
+        pVol->GetMasterVolumeLevelScalar(&scalar);
+        pVol->GetMute(&muted);
+        const int newVol = qBound(0, qRound(scalar * 100.0f), 100);
+        const bool newMute = (muted != FALSE);
+        if (!m_initialized || newVol != m_masterVolume || newMute != m_masterMuted) {
+            const bool changed = m_initialized && (newVol != m_masterVolume || newMute != m_masterMuted);
+            m_masterVolume = newVol;
+            m_masterMuted = newMute;
+            emit masterChanged();
+            if (changed && emitOsdIfExternal) {
+                const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                if (now - m_lastSelfChangeMs > 350) {
+                    emit volumeOsdRequested(m_masterVolume, m_masterMuted);
+                    if (!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 600)
+                        emit osdRequested(QStringLiteral("volume"), m_masterVolume, m_masterMuted);
                 }
             }
-            pVol->Release();
         }
-        pDev->Release();
+    });
+#else
+    Q_UNUSED(emitOsdIfExternal);
+#endif
+}
+
+void AudioService::readMicState(bool emitOsdIfExternal)
+{
+#ifdef Q_OS_WIN
+    bool nextSupported = false;
+    int nextVol = 0;
+    bool nextMute = false;
+    withDefaultEndpointVolume(eCapture, [&](IAudioEndpointVolume* pVol) {
+        float scalar = 0.0f;
+        BOOL muted = FALSE;
+        if (SUCCEEDED(pVol->GetMasterVolumeLevelScalar(&scalar))
+            && SUCCEEDED(pVol->GetMute(&muted))) {
+            nextSupported = true;
+            nextVol = qBound(0, qRound(scalar * 100.0f), 100);
+            nextMute = (muted != FALSE);
+        }
+    });
+    if (!m_initialized || nextSupported != m_micSupported
+        || nextVol != m_micVolume || nextMute != m_micMuted) {
+        const bool changed = m_initialized && m_micSupported && nextSupported
+                             && (nextVol != m_micVolume || nextMute != m_micMuted);
+        m_micSupported = nextSupported;
+        m_micVolume = nextVol;
+        m_micMuted = nextMute;
+        emit micChanged();
+        if (changed && emitOsdIfExternal
+            && (!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 600)) {
+            const qint64 now = QDateTime::currentMSecsSinceEpoch();
+            if (now - m_lastMicSelfChangeMs > 350)
+                emit osdRequested(QStringLiteral("mic"), m_micVolume, m_micMuted);
+        }
     }
-    pEnum->Release();
 #else
     Q_UNUSED(emitOsdIfExternal);
 #endif
@@ -118,26 +168,18 @@ void AudioService::setMasterVolume(int volume)
 {
 #ifdef Q_OS_WIN
     const int clamped = qBound(0, volume, 100);
-    IMMDeviceEnumerator* pEnum = nullptr;
-    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&pEnum))) || !pEnum)
-        return;
-    IMMDevice* pDev = nullptr;
-    if (SUCCEEDED(pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDev)) && pDev) {
-        IAudioEndpointVolume* pVol = nullptr;
-        if (SUCCEEDED(pDev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
-                                     reinterpret_cast<void**>(&pVol))) && pVol) {
+    if (!withDefaultEndpointVolume(eRender, [&](IAudioEndpointVolume* pVol) {
             pVol->SetMasterVolumeLevelScalar(static_cast<float>(clamped) / 100.0f, nullptr);
-            pVol->Release();
-        }
-        pDev->Release();
+        })) {
+        return;
     }
-    pEnum->Release();
     m_lastSelfChangeMs = QDateTime::currentMSecsSinceEpoch();
     if (m_masterVolume != clamped) {
         m_masterVolume = clamped;
         emit masterChanged();
     }
+    if (!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 600)
+        emit osdRequested(QStringLiteral("volume"), m_masterVolume, m_masterMuted);
 #else
     Q_UNUSED(volume);
 #endif
@@ -146,27 +188,61 @@ void AudioService::setMasterVolume(int volume)
 void AudioService::toggleMasterMute()
 {
 #ifdef Q_OS_WIN
-    IMMDeviceEnumerator* pEnum = nullptr;
-    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
-                                __uuidof(IMMDeviceEnumerator), reinterpret_cast<void**>(&pEnum))) || !pEnum)
-        return;
-    IMMDevice* pDev = nullptr;
-    if (SUCCEEDED(pEnum->GetDefaultAudioEndpoint(eRender, eConsole, &pDev)) && pDev) {
-        IAudioEndpointVolume* pVol = nullptr;
-        if (SUCCEEDED(pDev->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
-                                     reinterpret_cast<void**>(&pVol))) && pVol) {
-            BOOL cur = FALSE;
-            pVol->GetMute(&cur);
-            const BOOL next = cur ? FALSE : TRUE;
-            pVol->SetMute(next, nullptr);
-            m_lastSelfChangeMs = QDateTime::currentMSecsSinceEpoch();
-            m_masterMuted = (next != FALSE);
-            emit masterChanged();
-            pVol->Release();
+    withDefaultEndpointVolume(eRender, [&](IAudioEndpointVolume* pVol) {
+        BOOL cur = FALSE;
+        pVol->GetMute(&cur);
+        const BOOL next = cur ? FALSE : TRUE;
+        pVol->SetMute(next, nullptr);
+        m_lastSelfChangeMs = QDateTime::currentMSecsSinceEpoch();
+        m_masterMuted = (next != FALSE);
+        emit masterChanged();
+        if (!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 600)
+            emit osdRequested(QStringLiteral("volume"), m_masterVolume, m_masterMuted);
+    });
+#endif
+}
+
+void AudioService::setMicVolume(int volume)
+{
+#ifdef Q_OS_WIN
+    const int clamped = qBound(0, volume, 100);
+    const bool ok = withDefaultEndpointVolume(eCapture, [&](IAudioEndpointVolume* pVol) {
+        pVol->SetMasterVolumeLevelScalar(static_cast<float>(clamped) / 100.0f, nullptr);
+    });
+    if (ok) {
+        m_lastMicSelfChangeMs = QDateTime::currentMSecsSinceEpoch();
+        if (!m_micSupported || m_micVolume != clamped) {
+            m_micSupported = true;
+            m_micVolume = clamped;
+            emit micChanged();
         }
-        pDev->Release();
+        if (!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 600)
+            emit osdRequested(QStringLiteral("mic"), m_micVolume, m_micMuted);
     }
-    pEnum->Release();
+#else
+    Q_UNUSED(volume);
+#endif
+}
+
+void AudioService::toggleMicMute()
+{
+#ifdef Q_OS_WIN
+    bool nextMute = m_micMuted;
+    const bool ok = withDefaultEndpointVolume(eCapture, [&](IAudioEndpointVolume* pVol) {
+        BOOL cur = FALSE;
+        pVol->GetMute(&cur);
+        const BOOL next = cur ? FALSE : TRUE;
+        pVol->SetMute(next, nullptr);
+        nextMute = (next != FALSE);
+    });
+    if (ok) {
+        m_lastMicSelfChangeMs = QDateTime::currentMSecsSinceEpoch();
+        m_micSupported = true;
+        m_micMuted = nextMute;
+        emit micChanged();
+        if (!m_startupTimer.isValid() || m_startupTimer.elapsed() >= 600)
+            emit osdRequested(QStringLiteral("mic"), m_micVolume, m_micMuted);
+    }
 #endif
 }
 

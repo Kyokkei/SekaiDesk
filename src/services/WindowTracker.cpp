@@ -1,6 +1,8 @@
 #include "WindowTracker.h"
 
 #include <QFileInfo>
+#include <QGuiApplication>
+#include <QScreen>
 
 #ifdef Q_OS_WIN
 #include <windows.h>
@@ -258,18 +260,32 @@ void WindowTracker::updateSystemStats()
             return (static_cast<quint64>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
         };
         const quint64 idle = toU64(idleFt);
-        const quint64 kernel = toU64(kernelFt);
-        const quint64 user = toU64(userFt);
-        if (m_prevKernelTime != 0 || m_prevUserTime != 0) {
-            const quint64 idleDiff = idle - m_prevIdleTime;
-            const quint64 totalDiff = (kernel - m_prevKernelTime) + (user - m_prevUserTime);
-            if (totalDiff > 0 && idleDiff <= totalDiff) {
-                nextCpu = static_cast<int>(((totalDiff - idleDiff) * 100ULL) / totalDiff);
+        const quint64 total = toU64(kernelFt) + toU64(userFt);
+        m_cpuSamples.append(CpuSample{ idle, total });
+        if (m_cpuSamples.size() > 7)
+            m_cpuSamples.removeFirst();
+
+        if (m_cpuSamples.size() >= 2) {
+            const CpuSample& oldest = m_cpuSamples.first();
+            const CpuSample& newest = m_cpuSamples.last();
+            if (newest.total > oldest.total && newest.idle >= oldest.idle) {
+                const quint64 totalDiff = newest.total - oldest.total;
+                const quint64 idleDiff = newest.idle - oldest.idle;
+                if (idleDiff <= totalDiff) {
+                    const double rawWindowPct =
+                        (static_cast<double>(totalDiff - idleDiff) * 100.0) / static_cast<double>(totalDiff);
+                    if (m_cpuEma < 0.0) {
+                        m_cpuEma = rawWindowPct;
+                        nextCpu = qBound(0, qRound(m_cpuEma), 100);
+                    } else {
+                        m_cpuEma = 0.25 * rawWindowPct + 0.75 * m_cpuEma;
+                        if ((m_cpuTick % 2) == 0)
+                            nextCpu = qBound(0, qRound(m_cpuEma), 100);
+                    }
+                }
             }
         }
-        m_prevIdleTime = idle;
-        m_prevKernelTime = kernel;
-        m_prevUserTime = user;
+        ++m_cpuTick;
     }
 
     int nextRam = m_ramUsage;
@@ -473,16 +489,40 @@ void WindowTracker::pollEdgeAndOverlap()
     if (!GetMonitorInfoW(mon, &mi))
         return;
 
+    using FnGetDpiForMonitor = HRESULT(WINAPI*)(HMONITOR, int, UINT*, UINT*);
+    static FnGetDpiForMonitor fnGetDpiForMonitor = []() -> FnGetDpiForMonitor {
+        if (HMODULE mod = LoadLibraryW(L"shcore.dll"))
+            return reinterpret_cast<FnGetDpiForMonitor>(GetProcAddress(mod, "GetDpiForMonitor"));
+        return nullptr;
+    }();
+    double dpr = 1.0;
+    bool gotDpi = false;
+    if (fnGetDpiForMonitor) {
+        UINT dpiX = 96, dpiY = 96;
+        if (SUCCEEDED(fnGetDpiForMonitor(mon, 0 /*MDT_EFFECTIVE_DPI*/, &dpiX, &dpiY)) && dpiX > 0) {
+            dpr = qMax(1.0, static_cast<double>(dpiX) / 96.0);
+            gotDpi = true;
+        }
+    }
+    if (!gotDpi) {
+        if (QScreen* scr = QGuiApplication::primaryScreen())
+            dpr = qMax(1.0, scr->devicePixelRatio());
+    }
+
     POINT pt{};
     bool nextBottomEdge = m_bottomEdgeHovered;
     bool nextTopEdge = m_topEdgeHovered;
     if (GetCursorPos(&pt)) {
         const bool inX = (pt.x >= mi.rcMonitor.left && pt.x <= mi.rcMonitor.right);
-        const int botTriggerY = m_bottomEdgeHovered ? (mi.rcMonitor.bottom - 96) : (mi.rcMonitor.bottom - 4);
-        nextBottomEdge = inX && (pt.y >= botTriggerY);
-        const int topTriggerY = m_topEdgeHovered ? (mi.rcMonitor.top + 56) : (mi.rcMonitor.top + 3);
-        const bool avoidWindowControls = !m_topEdgeHovered && (pt.x >= mi.rcMonitor.right - 150);
-        nextTopEdge = inX && !avoidWindowControls && (pt.y <= topTriggerY);
+        const int botTriggerY = m_bottomEdgeHovered
+            ? (mi.rcMonitor.bottom - qRound(96 * dpr))
+            : (mi.rcMonitor.bottom - qMax(2, qRound(4 * dpr)));
+        nextBottomEdge = inX && (pt.y >= botTriggerY) && (pt.y <= mi.rcMonitor.bottom);
+        const int topTriggerY = m_topEdgeHovered
+            ? (mi.rcMonitor.top + qRound(56 * dpr))
+            : (mi.rcMonitor.top + qMax(2, qRound(3 * dpr)));
+        const bool avoidWindowControls = !m_topEdgeHovered && (pt.x >= mi.rcMonitor.right - qRound(150 * dpr));
+        nextTopEdge = inX && !avoidWindowControls && (pt.y >= mi.rcMonitor.top) && (pt.y <= topTriggerY);
     }
     if (nextBottomEdge != m_bottomEdgeHovered) {
         m_bottomEdgeHovered = nextBottomEdge;
@@ -493,41 +533,90 @@ void WindowTracker::pollEdgeAndOverlap()
         emit topEdgeHoveredChanged();
     }
 
-    bool nextDockOverlap = m_dockOverlap;
-    bool nextTopOverlap = m_topOverlap;
-    const HWND fg = GetForegroundWindow();
-    if (!fg || !IsWindowVisible(fg) || IsIconic(fg)) {
-        nextDockOverlap = false;
-        nextTopOverlap = false;
-    } else {
-        DWORD fgPid = 0;
-        GetWindowThreadProcessId(fg, &fgPid);
-        if (fgPid != GetCurrentProcessId()) {
-            wchar_t cls[64] = {};
-            GetClassNameW(fg, cls, 64);
-            const QString clsName = QString::fromWCharArray(cls);
-            if (clsName == QStringLiteral("Progman")
-                || clsName == QStringLiteral("WorkerW")
-                || clsName == QStringLiteral("Shell_TrayWnd")
-                || clsName == QStringLiteral("Shell_SecondaryTrayWnd")) {
-                nextDockOverlap = false;
-                nextTopOverlap = false;
-            } else {
-                RECT rc{};
-                if (FAILED(DwmGetWindowAttribute(fg, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc))))
-                    GetWindowRect(fg, &rc);
-                const bool inScreenX = (rc.right > mi.rcMonitor.left) && (rc.left < mi.rcMonitor.right);
-                nextDockOverlap = inScreenX && (rc.bottom >= mi.rcMonitor.bottom - 86);
-                nextTopOverlap = inScreenX && (rc.top <= mi.rcMonitor.top + 52);
+    struct OverlapCtx {
+        DWORD selfPid = 0;
+        HMONITOR mon = nullptr;
+        RECT rcMon{};
+        int dockBandPx = 92;
+        int topBandPx = 52;
+        bool dockOverlap = false;
+        bool topOverlap = false;
+    } ctx;
+    ctx.selfPid = GetCurrentProcessId();
+    ctx.mon = mon;
+    ctx.rcMon = mi.rcMonitor;
+    ctx.dockBandPx = qRound(92 * dpr);
+    ctx.topBandPx = qRound(52 * dpr);
+
+    EnumWindows([](HWND h, LPARAM lParam) -> BOOL {
+        auto* c = reinterpret_cast<OverlapCtx*>(lParam);
+        if (!IsWindowVisible(h) || IsIconic(h))
+            return TRUE;
+
+        DWORD pid = 0;
+        GetWindowThreadProcessId(h, &pid);
+        if (pid == 0 || pid == c->selfPid)
+            return TRUE;
+
+        const LONG_PTR ex = GetWindowLongPtrW(h, GWL_EXSTYLE);
+        if ((ex & WS_EX_TOOLWINDOW) != 0 && (ex & WS_EX_APPWINDOW) == 0)
+            return TRUE;
+
+        if (GetWindow(h, GW_OWNER) != nullptr && (ex & WS_EX_APPWINDOW) == 0)
+            return TRUE;
+
+        BOOL cloaked = FALSE;
+        if (SUCCEEDED(DwmGetWindowAttribute(h, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked)
+            return TRUE;
+
+        wchar_t cls[64] = {};
+        if (GetClassNameW(h, cls, 64) > 0) {
+            if (wcscmp(cls, L"Progman") == 0
+                || wcscmp(cls, L"WorkerW") == 0
+                || wcscmp(cls, L"Shell_TrayWnd") == 0
+                || wcscmp(cls, L"Shell_SecondaryTrayWnd") == 0
+                || wcscmp(cls, L"Windows.UI.Core.CoreWindow") == 0
+                || wcscmp(cls, L"SHELLDLL_DefView") == 0
+                || wcscmp(cls, L"NotifyIconOverflowWindow") == 0
+                || wcscmp(cls, L"TaskListThumbnailWnd") == 0
+                || wcscmp(cls, L"MultitaskingViewFrame") == 0) {
+                return TRUE;
             }
         }
-    }
-    if (nextDockOverlap != m_dockOverlap) {
-        m_dockOverlap = nextDockOverlap;
+
+        const bool zoomed = (IsZoomed(h) != FALSE);
+        if (GetWindowTextLengthW(h) <= 0 && !zoomed)
+            return TRUE;
+
+        if (MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST) != c->mon)
+            return TRUE;
+
+        RECT rc{};
+        if (FAILED(DwmGetWindowAttribute(h, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc)))) {
+            if (!GetWindowRect(h, &rc))
+                return TRUE;
+        }
+        if ((rc.right - rc.left) <= 0 || (rc.bottom - rc.top) <= 0)
+            return TRUE;
+
+        const bool inScreenX = (rc.right > c->rcMon.left) && (rc.left < c->rcMon.right);
+        if (!inScreenX)
+            return TRUE;
+
+        if (zoomed || (rc.top < c->rcMon.bottom && rc.bottom >= c->rcMon.bottom - c->dockBandPx))
+            c->dockOverlap = true;
+        if (zoomed || (rc.bottom > c->rcMon.top && rc.top <= c->rcMon.top + c->topBandPx))
+            c->topOverlap = true;
+
+        return (c->dockOverlap && c->topOverlap) ? FALSE : TRUE;
+    }, reinterpret_cast<LPARAM>(&ctx));
+
+    if (ctx.dockOverlap != m_dockOverlap) {
+        m_dockOverlap = ctx.dockOverlap;
         emit dockOverlapChanged();
     }
-    if (nextTopOverlap != m_topOverlap) {
-        m_topOverlap = nextTopOverlap;
+    if (ctx.topOverlap != m_topOverlap) {
+        m_topOverlap = ctx.topOverlap;
         emit topOverlapChanged();
     }
 #endif

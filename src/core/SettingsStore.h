@@ -35,11 +35,22 @@ public:
     Q_INVOKABLE int intValue(const QString& dottedPath, int fallback = 0) const;
     Q_INVOKABLE QString stringValue(const QString& dottedPath, const QString& fallback = {}) const;
 
+    // Look Presets persistence (%APPDATA%/SekaiDesk/presets/*.json).
+    Q_INVOKABLE QVariantList listPresets() const;
+    Q_INVOKABLE bool savePreset(const QString& name, const QVariantMap& data, bool favorite = false);
+    Q_INVOKABLE QVariantMap loadPreset(const QString& name) const;
+    Q_INVOKABLE bool deletePreset(const QString& name);
+    Q_INVOKABLE bool renamePreset(const QString& oldName, const QString& newName);
+    Q_INVOKABLE bool togglePresetFavorite(const QString& name);
+
 signals:
     void settingChanged(const QString& key, const QVariant& value);
+    void presetsChanged();
 
 private:
     QString resolveFilePath() const;
+    QString presetsDirPath() const;
+    QString presetFilePath(const QString& name) const;
     bool saveToDisk();
 
     QString m_filePath;

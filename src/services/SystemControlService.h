@@ -3,6 +3,7 @@
 // (dxva2.dll), Windows Dark/Light theme toggle, and Power/Settings actions.
 
 #include <QAbstractNativeEventFilter>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QTimer>
 #include <QVariantList>
@@ -22,6 +23,10 @@ class SystemControlService : public QObject, public QAbstractNativeEventFilter {
     Q_PROPERTY(bool bluetoothSupported READ bluetoothSupported NOTIFY bluetoothChanged)
     Q_PROPERTY(bool bluetoothEnabled READ bluetoothEnabled NOTIFY bluetoothChanged)
     Q_PROPERTY(QVariantList bluetoothDevices READ bluetoothDevices NOTIFY bluetoothChanged)
+    Q_PROPERTY(qreal downloadBps READ downloadBps NOTIFY netSpeedChanged)
+    Q_PROPERTY(qreal uploadBps READ uploadBps NOTIFY netSpeedChanged)
+    Q_PROPERTY(bool keepAwake READ keepAwake NOTIFY keepAwakeChanged)
+    Q_PROPERTY(bool suppressStockOsd READ suppressStockOsd WRITE setSuppressStockOsd NOTIFY suppressStockOsdChanged)
 
 public:
     explicit SystemControlService(QObject* parent = nullptr);
@@ -40,6 +45,10 @@ public:
     bool bluetoothSupported() const { return m_bluetoothSupported; }
     bool bluetoothEnabled() const { return m_bluetoothEnabled; }
     QVariantList bluetoothDevices() const { return m_bluetoothDevices; }
+    qreal downloadBps() const { return m_downloadBps; }
+    qreal uploadBps() const { return m_uploadBps; }
+    bool keepAwake() const { return m_keepAwake; }
+    bool suppressStockOsd() const { return m_suppressStockOsd; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void refreshWifi();
@@ -47,6 +56,8 @@ public:
     Q_INVOKABLE void connectWifi(const QString& ssid);
     Q_INVOKABLE void refreshBluetooth();
     Q_INVOKABLE void toggleBluetooth();
+    Q_INVOKABLE void setNetSpeedActive(bool active);
+    Q_INVOKABLE void toggleKeepAwake();
     Q_INVOKABLE void setBrightness(int percent);
     Q_INVOKABLE void setMonitorBrightness(int index, int percent);
     Q_INVOKABLE void setDisplayMode(const QString& mode);
@@ -59,6 +70,8 @@ public:
     Q_INVOKABLE void hibernatePc();
     Q_INVOKABLE void signOut();
     Q_INVOKABLE QString pickImageFile(const QString& title = QStringLiteral("Select Image"));
+    Q_INVOKABLE void setSuppressStockOsd(bool on);
+    Q_INVOKABLE void hideStockOsdIfActive();
 
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
 
@@ -66,15 +79,25 @@ signals:
     void stateChanged();
     void wifiChanged();
     void bluetoothChanged();
+    void netSpeedChanged();
+    void keepAwakeChanged();
+    void suppressStockOsdChanged();
     void quickPanelToggleRequested();
     void spotlightToggleRequested();
     void clipboardToggleRequested();
+    void brightnessOsdRequested(int percent);
+    void darkModeOsdRequested(bool darkMode);
+    void volumeStepRequested(int delta);
+    void volumeMuteToggleRequested();
 
 private:
     void readBrightness();
     void readDarkMode();
     void readNetwork();
+    void sampleNetSpeed();
     void registerHotkeys();
+    void triggerQuickPanelToggle();
+    void applyStockOsdSuppression(bool on);
 
     bool m_brightnessSupported = false;
     int m_brightness = 100;
@@ -89,10 +112,24 @@ private:
     bool m_bluetoothSupported = false;
     bool m_bluetoothEnabled = false;
     QVariantList m_bluetoothDevices;
+    qreal m_downloadBps = 0.0;
+    qreal m_uploadBps = 0.0;
+    bool m_netSpeedActive = false;
+    bool m_hasNetBaseline = false;
+    quint64 m_prevRxBytes = 0;
+    quint64 m_prevTxBytes = 0;
+    QTimer m_netSpeedTimer;
+    QElapsedTimer m_netElapsed;
+    bool m_keepAwake = false;
     bool m_hotkeyRegistered = false;
     bool m_spotlightHotkeyRegistered = false;
     bool m_clipboardHotkeyRegistered = false;
     void* m_kbdHook = nullptr;
     void* m_hotkeyMsgHwnd = nullptr;
     QTimer m_hotkeyRetryTimer;
+    QElapsedTimer m_quickPanelToggleTimer;
+    QElapsedTimer m_startupTimer;
+    bool m_brightnessInitialized = false;
+    qint64 m_lastSelfBrightnessMs = 0;
+    bool m_suppressStockOsd = false;
 };

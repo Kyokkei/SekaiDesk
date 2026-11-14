@@ -162,6 +162,10 @@ public:
     void setAcceptFileDrops(bool on);
     Q_INVOKABLE void raiseOnDesktop();
     Q_INVOKABLE void focusActivate();
+    Q_INVOKABLE void beginNativeDrag(int minLogicalX, int minLogicalY, int maxLogicalX, int maxLogicalY);
+    Q_INVOKABLE void stepNativeDrag();
+    Q_INVOKABLE void endNativeDrag();
+    bool isInNativeDrag() const { return m_inNativeDrag; }
 
     int exclusiveZone() const { return m_exclusiveZone; }
     void setExclusiveZone(int zone) {
@@ -255,6 +259,15 @@ private:
     bool m_desktopLayer = false;
     bool m_desktopAllowFocus = false;
     bool m_acceptFileDrops = false;
+    bool m_inNativeDrag = false;
+    int m_dragStartCursorPxX = 0;
+    int m_dragStartCursorPxY = 0;
+    int m_dragStartWinPxX = 0;
+    int m_dragStartWinPxY = 0;
+    int m_dragMinPxX = 0;
+    int m_dragMinPxY = 0;
+    int m_dragMaxPxX = 0;
+    int m_dragMaxPxY = 0;
     void* m_desktopHwnd = nullptr;
     QTimer m_fsGuardTimer;
     QMetaObject::Connection m_screenGeoConn;
