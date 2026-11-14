@@ -114,7 +114,7 @@ Intercepts volume keys to replace the default Windows 10 volume box with a Pop-C
 1. Download **`SekaiDesk-win64.zip`** from the [latest GitHub Release](https://github.com/Kyokkei/SekaiDesk/releases/latest).
 2. Extract the archive to any folder (e.g., `D:\Apps\SekaiDesk\`) and launch **`SekaiDesk.exe`**.
 
-First launch starts automatically with **Peek Phone** notifications, **Capsule Bottom Dock**, and **Transparent Top Bar**, and writes your settings to `config/sekaidesk.json`.
+First launch starts automatically with **Peek Phone** notifications, **Capsule Bottom Dock**, and **Transparent Top Bar**, and writes your settings to `%APPDATA%\SekaiDesk\sekaidesk.json`.
 
 <details>
 <summary>CLI flags &amp; multi-instance testing</summary>
@@ -131,10 +131,18 @@ git clone https://github.com/Kyokkei/SekaiDesk.git SekaiDesk
 cd SekaiDesk
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
+
+# Deploy Qt 6 runtime DLLs & QML modules for standalone execution
+New-Item -ItemType Directory -Force installer/stage | Out-Null
+Copy-Item build/SekaiDesk.exe installer/stage/
+windeployqt --release --qmldir qml installer/stage/SekaiDesk.exe
+
+# Optional: build Windows installer (requires NSIS / makensis)
+makensis installer/SekaiDesk.nsi
 ```
 
 > [!TIP]
-> Ensure your Qt 6.8 (`Quick`, `Svg`, `QuickControls2`, `ShaderEffect`) installation and `windeployqt` are on `PATH` when packaging a standalone folder.
+> Ensure your Qt 6.8+ (`Core`, `Gui`, `Qml`, `Quick`, `Network`, plus QML runtime modules `Svg`, `QuickControls2`, `ShaderEffect`) bin folder and `windeployqt` are on `PATH`. Also include MinGW runtime DLLs (`libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) if distributing outside your toolchain environment.
 
 <img src="assets/divider.svg" alt="" width="100%">
 

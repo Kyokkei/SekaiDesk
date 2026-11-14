@@ -1,0 +1,45 @@
+name: Bug Report
+description: Report a bug, crash, multi-monitor issue, or Windows 11 quirk
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting! Filling in your Windows build and `startup.log` makes it much faster to reproduce.
+  - type: dropdown
+    id: os_version
+    attributes:
+      label: Windows Version
+      options:
+        - Windows 10 (64-bit)
+        - Windows 11 (64-bit)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: SekaiDesk Version
+      description: Installer / ZIP release tag or commit hash.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: input
+    id: monitors
+    attributes:
+      label: Monitor & DPI Setup
+      description: e.g. Single 1080p 100%, Dual 1440p 125% + 1080p 100%
+      placeholder: Single 1080p @ 100%
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Clear description of the bug and steps to reproduce it.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Startup Log (optional)
+      description: Paste relevant lines from `%LOCALAPPDATA%\SekaiDesk\startup.log` if available.
+      render: text

@@ -229,16 +229,12 @@ int main(int argc, char* argv[])
     engine.addImportPath(QCoreApplication::applicationDirPath()
                          + QStringLiteral("/qml"));
 
-    // The vendored shell root: lets later phases import SekaiPop modules
-    // directly (module "services", "modules.*" style) if ever needed.
+    // Optional external QML override directory (SEKAIDESK_SHELL_DIR).
     const QString shellDir = QsGlobal::resolveShellDir();
     if (!shellDir.isEmpty()) {
         engine.addImportPath(shellDir);
         engine.rootContext()->setContextProperty(
             QStringLiteral("shellDir"), shellDir);
-    } else {
-        qWarning("SekaiDesk: vendored SekaiPop shell dir not found; "
-                 "qs.* imports will fail");
     }
 
     // --restore: emergency work-area / taskbar rescue (implemented Phase 1).

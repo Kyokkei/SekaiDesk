@@ -37,9 +37,7 @@ QString SettingsStore::resolveFilePath() const
             + QStringLiteral("/sekaidesk.json");
         const QStringList candidates = {
             nested,
-            appDir.absoluteFilePath(QStringLiteral("config/sekaidesk.json")),
-            QStringLiteral("D:/coding/SekaiDesk/dist/SekaiDesk/config/sekaidesk.json"),
-            QStringLiteral("D:/coding/SekaiDesk/package/SekaiDesk/config/sekaidesk.json")
+            appDir.absoluteFilePath(QStringLiteral("config/sekaidesk.json"))
         };
         QJsonObject merged;
         for (const QString& cand : candidates) {

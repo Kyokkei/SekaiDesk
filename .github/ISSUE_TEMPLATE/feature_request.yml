@@ -1,0 +1,17 @@
+name: Feature Request
+description: Suggest an enhancement, widget idea, or customization option
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Idea Summary
+      description: What would you like SekaiDesk to support or improve?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Use Case / Visual Reference (optional)
+      description: Explain how it fits into the Pop-Comic shell or Windows workflow.

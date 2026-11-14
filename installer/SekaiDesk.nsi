@@ -19,8 +19,8 @@ ShowUninstDetails show
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
-!define MUI_ICON "SekaiDesk.ico"
-!define MUI_UNICON "SekaiDesk.ico"
+!define MUI_ICON "..\src\SekaiDesk.ico"
+!define MUI_UNICON "..\src\SekaiDesk.ico"
 !define MUI_ABORTWARNING
 
 !insertmacro MUI_PAGE_WELCOME
