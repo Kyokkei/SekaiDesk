@@ -16,9 +16,21 @@ QsGlobal::QsGlobal(QObject* parent)
     : QObject(parent)
 {
     m_shellDir = resolveShellDir();
-    connect(qGuiApp, &QGuiApplication::screenAdded, this, &QsGlobal::screensChanged);
+    for (QScreen* s : QGuiApplication::screens())
+        watchScreen(s);
+    connect(qGuiApp, &QGuiApplication::screenAdded, this, [this](QScreen* s) {
+        watchScreen(s);
+        emit screensChanged();
+    });
     connect(qGuiApp, &QGuiApplication::screenRemoved, this, &QsGlobal::screensChanged);
     connect(qGuiApp, &QGuiApplication::primaryScreenChanged, this, &QsGlobal::screensChanged);
+}
+
+void QsGlobal::watchScreen(QScreen* scr)
+{
+    if (!scr)
+        return;
+    connect(scr, &QScreen::geometryChanged, this, &QsGlobal::screensChanged, Qt::UniqueConnection);
 }
 
 QsGlobal* QsGlobal::instance()
@@ -30,6 +42,20 @@ QsGlobal* QsGlobal::instance()
 QList<QScreen*> QsGlobal::screens() const
 {
     return QGuiApplication::screens();
+}
+
+QRect QsGlobal::virtualGeometry() const
+{
+    const QList<QScreen*> all = QGuiApplication::screens();
+    QRect united;
+    for (const QScreen* s : all) {
+        if (!s)
+            continue;
+        const QRect g = s->geometry();
+        if (!g.isEmpty())
+            united = united.isNull() ? g : united.united(g);
+    }
+    return united.isNull() ? QRect(0, 0, 1920, 1080) : united;
 }
 
 QVariantMap QsGlobal::env() const

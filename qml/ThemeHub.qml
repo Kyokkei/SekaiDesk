@@ -1,13 +1,21 @@
 import QtQuick
+import Quickshell
 import SekaiDesk
 
 Item {
     id: hub
     visible: false
 
-    // Reference screen dimensions passed from Shell.qml
+    // Reference primary screen dimensions passed from Shell.qml
     property int screenW: 1920
     property int screenH: 1080
+
+    // Unified virtual desktop bounds spanning all connected monitors
+    readonly property rect virtualRect: Quickshell.virtualGeometry
+    readonly property int virtMinX: virtualRect.width > 0 ? Math.round(virtualRect.x) : 0
+    readonly property int virtMinY: virtualRect.height > 0 ? Math.round(virtualRect.y) : 0
+    readonly property int virtMaxX: virtualRect.width > 0 ? Math.round(virtualRect.x + virtualRect.width) : screenW
+    readonly property int virtMaxY: virtualRect.height > 0 ? Math.round(virtualRect.y + virtualRect.height) : screenH
 
     readonly property var bands: [
         {
@@ -393,6 +401,17 @@ Item {
                 profile: wProfileVisible,
                 calendar: wCalendarVisible
             },
+            widgetSizes: {
+                clockScale: wClockScale,
+                weatherScale: wWeatherScale,
+                profileScale: wProfileScale,
+                calendarScale: wCalendarScale,
+                lyricsScale: wLyricsScale,
+                todoW: wTodoW,
+                todoH: wTodoH,
+                notesW: wNotesW,
+                notesH: wNotesH
+            },
             visualizer: {
                 enabled: VisualizerService.enabled,
                 style: VisualizerService.style,
@@ -455,6 +474,17 @@ Item {
                 if (data.widgets[k] !== undefined)
                     setWidgetVisible(k, !!data.widgets[k])
             }
+        }
+        if (data.widgetSizes) {
+            if (data.widgetSizes.clockScale !== undefined) saveWidgetScale("clock", data.widgetSizes.clockScale)
+            if (data.widgetSizes.weatherScale !== undefined) saveWidgetScale("weather", data.widgetSizes.weatherScale)
+            if (data.widgetSizes.profileScale !== undefined) saveWidgetScale("profile", data.widgetSizes.profileScale)
+            if (data.widgetSizes.calendarScale !== undefined) saveWidgetScale("calendar", data.widgetSizes.calendarScale)
+            if (data.widgetSizes.lyricsScale !== undefined) saveWidgetScale("lyrics", data.widgetSizes.lyricsScale)
+            if (data.widgetSizes.todoW !== undefined && data.widgetSizes.todoH !== undefined)
+                saveWidgetSize("todo", data.widgetSizes.todoW, data.widgetSizes.todoH)
+            if (data.widgetSizes.notesW !== undefined && data.widgetSizes.notesH !== undefined)
+                saveWidgetSize("notes", data.widgetSizes.notesW, data.widgetSizes.notesH)
         }
         if (data.visualizer) {
             if (data.visualizer.style !== undefined) VisualizerService.style = String(data.visualizer.style)
@@ -569,28 +599,130 @@ Item {
         return weatherUnit === "F" ? Math.round(c * 9.0 / 5.0 + 32.0) : Math.round(c)
     }
 
+    function configReal(key, fallback) {
+        const v = Number(ConfigStore.get(key, fallback))
+        return (isNaN(v) || v <= 0) ? fallback : v
+    }
+
     // Todo widget compact toggle
     property bool todoSmall: ConfigStore.boolValue("widgets.todo.small", false)
     function setTodoSmall(v) {
         todoSmall = !!v
         ConfigStore.set("widgets.todo.small", todoSmall)
+        const h = todoSmall ? 268 : 340
+        wTodoH = h
+        ConfigStore.set("widgets.todo.height", h)
     }
 
-    // Desktop widgets coordinates (clamped so nothing spawns trapped under TopBar)
-    property int wClockX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.clock.x", Math.max(320, screenW - 350))))
-    property int wClockY: Math.max(54, ConfigStore.intValue("widgets.clock.y", 64))
-    property int wWeatherX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.weather.x", 28)))
-    property int wWeatherY: Math.max(54, ConfigStore.intValue("widgets.weather.y", 346))
-    property int wProfileX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.profile.x", 28)))
-    property int wProfileY: Math.max(54, ConfigStore.intValue("widgets.profile.y", 56))
-    property int wTodoX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.todo.x", Math.max(320, screenW - 350))))
-    property int wTodoY: Math.max(54, ConfigStore.intValue("widgets.todo.y", 356))
-    property int wNotesX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.notes.x", Math.max(320, screenW - 350))))
-    property int wNotesY: Math.max(54, ConfigStore.intValue("widgets.notes.y", 644))
-    property int wLyricsX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.lyrics.x", Math.max(240, Math.round((screenW - 600) * 0.5)))))
-    property int wLyricsY: Math.max(54, ConfigStore.intValue("widgets.lyrics.y", Math.max(400, screenH - 250)))
-    property int wCalendarX: Math.max(12, Math.min(screenW - 140, ConfigStore.intValue("widgets.calendar.x", 364)))
-    property int wCalendarY: Math.max(54, ConfigStore.intValue("widgets.calendar.y", 56))
+    // Per-widget resize state (uniform scale 0.65..1.65 + free W/H for Todo & Notes)
+    property real wClockScale: Math.max(0.65, Math.min(1.65, configReal("widgets.clock.scale", 1.0)))
+    property real wWeatherScale: Math.max(0.65, Math.min(1.65, configReal("widgets.weather.scale", 1.0)))
+    property real wProfileScale: Math.max(0.65, Math.min(1.65, configReal("widgets.profile.scale", 1.0)))
+    property real wCalendarScale: Math.max(0.65, Math.min(1.65, configReal("widgets.calendar.scale", 1.0)))
+    property real wLyricsScale: Math.max(0.65, Math.min(1.65, configReal("widgets.lyrics.scale", 1.0)))
+    property real wTodoScale: Math.max(0.65, Math.min(1.65, configReal("widgets.todo.scale", 1.0)))
+    property real wNotesScale: Math.max(0.65, Math.min(1.65, configReal("widgets.notes.scale", 1.0)))
+
+    property int wTodoW: Math.max(240, Math.min(580, ConfigStore.intValue("widgets.todo.width", 320)))
+    property int wTodoH: Math.max(190, Math.min(680, ConfigStore.intValue("widgets.todo.height", todoSmall ? 268 : 340)))
+    property int wNotesW: Math.max(210, Math.min(680, ConfigStore.intValue("widgets.notes.width", 288)))
+    property int wNotesH: Math.max(170, Math.min(620, ConfigStore.intValue("widgets.notes.height", 248)))
+
+    function widgetScale(key) {
+        if (key === "clock") return wClockScale
+        if (key === "weather") return wWeatherScale
+        if (key === "profile") return wProfileScale
+        if (key === "calendar") return wCalendarScale
+        if (key === "lyrics") return wLyricsScale
+        if (key === "todo") return wTodoScale
+        if (key === "notes") return wNotesScale
+        return 1.0
+    }
+
+    function saveWidgetScale(key, sc) {
+        const s = Math.max(0.65, Math.min(1.65, Math.round(Number(sc) * 100) / 100))
+        ConfigStore.set("widgets." + key + ".scale", s)
+        if (key === "clock") wClockScale = s
+        else if (key === "weather") wWeatherScale = s
+        else if (key === "profile") wProfileScale = s
+        else if (key === "calendar") wCalendarScale = s
+        else if (key === "lyrics") wLyricsScale = s
+        else if (key === "todo") wTodoScale = s
+        else if (key === "notes") wNotesScale = s
+    }
+
+    function saveWidgetSize(key, w, h) {
+        if (key === "todo") {
+            const cw = Math.max(240, Math.min(580, Math.round(w)))
+            const ch = Math.max(190, Math.min(680, Math.round(h)))
+            wTodoW = cw
+            wTodoH = ch
+            ConfigStore.set("widgets.todo.width", cw)
+            ConfigStore.set("widgets.todo.height", ch)
+        } else if (key === "notes") {
+            const cw = Math.max(210, Math.min(680, Math.round(w)))
+            const ch = Math.max(170, Math.min(620, Math.round(h)))
+            wNotesW = cw
+            wNotesH = ch
+            ConfigStore.set("widgets.notes.width", cw)
+            ConfigStore.set("widgets.notes.height", ch)
+        }
+    }
+
+    function resetWidgetSize(key) {
+        saveWidgetScale(key, 1.0)
+        if (key === "todo") {
+            todoSmall = false
+            ConfigStore.set("widgets.todo.small", false)
+            saveWidgetSize("todo", 320, 340)
+        } else if (key === "notes") {
+            saveWidgetSize("notes", 288, 248)
+        }
+    }
+
+    function widgetMinYAt(cx, rawY) {
+        const onPrimaryScreen = (cx >= 0 && cx < screenW && rawY >= 0 && rawY < screenH)
+        return (onPrimaryScreen && barEdge === "top" && !barAutoHide) ? 52 : (virtMinY + 8)
+    }
+
+    function clampWidgetX(nx, marginRight) {
+        const mr = (marginRight !== undefined) ? marginRight : 100
+        const minX = virtMinX + 8
+        const maxX = Math.max(minX, virtMaxX - mr)
+        return Math.max(minX, Math.min(maxX, Math.round(nx)))
+    }
+
+    function clampWidgetY(cx, ny, marginBottom) {
+        const mb = (marginBottom !== undefined) ? marginBottom : 80
+        const ry = Math.round(ny)
+        const minY = widgetMinYAt(cx, ry)
+        const maxY = Math.max(minY, virtMaxY - mb)
+        return Math.max(minY, Math.min(maxY, ry))
+    }
+
+    function initWidgetX(key, fallbackX) {
+        return clampWidgetX(ConfigStore.intValue("widgets." + key + ".x", fallbackX), 140)
+    }
+
+    function initWidgetY(key, fallbackY, resolvedX) {
+        return clampWidgetY(resolvedX, ConfigStore.intValue("widgets." + key + ".y", fallbackY), 80)
+    }
+
+    // Desktop widgets coordinates (multi-monitor virtual desktop bounds; TopBar margin only on primary)
+    property int wClockX: initWidgetX("clock", Math.max(320, screenW - 350))
+    property int wClockY: initWidgetY("clock", 64, wClockX)
+    property int wWeatherX: initWidgetX("weather", 28)
+    property int wWeatherY: initWidgetY("weather", 346, wWeatherX)
+    property int wProfileX: initWidgetX("profile", 28)
+    property int wProfileY: initWidgetY("profile", 56, wProfileX)
+    property int wTodoX: initWidgetX("todo", Math.max(320, screenW - 350))
+    property int wTodoY: initWidgetY("todo", 356, wTodoX)
+    property int wNotesX: initWidgetX("notes", Math.max(320, screenW - 350))
+    property int wNotesY: initWidgetY("notes", 644, wNotesX)
+    property int wLyricsX: initWidgetX("lyrics", Math.max(240, Math.round((screenW - 600) * 0.5)))
+    property int wLyricsY: initWidgetY("lyrics", Math.max(400, screenH - 250), wLyricsX)
+    property int wCalendarX: initWidgetX("calendar", 364)
+    property int wCalendarY: initWidgetY("calendar", 56, wCalendarX)
 
     function widgetVisible(key) {
         if (key === "clock") return wClockVisible
@@ -616,8 +748,8 @@ Item {
     }
 
     function saveWidgetPos(key, nx, ny) {
-        const cx = Math.max(8, Math.min(screenW - 100, Math.round(nx)))
-        const cy = Math.max(52, Math.min(screenH - 80, Math.round(ny)))
+        const cx = clampWidgetX(nx, 100)
+        const cy = clampWidgetY(cx, ny, 80)
         ConfigStore.set("widgets." + key + ".x", cx)
         ConfigStore.set("widgets." + key + ".y", cy)
         if (key === "clock") { wClockX = cx; wClockY = cy }

@@ -36,16 +36,16 @@
 Slide up the portrait phone with <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd> (or click the right status pill) for Ethernet/Wi-Fi &amp; Bluetooth toggles, Keep Awake, microphone/speaker sliders, display brightness control, active SMTC media card, and notification feed. Incoming notifications also peek from the bottom-right corner.
 </td>
 <td width="50%" valign="top">
-<img src="assets/shot-settings-phone.png" alt="Landscape Phone Settings showing 02 General with 7 Unit Band Palettes, Wallpaper Match, and Clock & Weather settings" width="100%">
+<img src="assets/shot-settings-phone.png" alt="Landscape Settings Hub showing 01 Quick, 02 General, 03 Bar, 04 Desktop, 05 Hotkeys & System, and 06 About cards" width="100%">
 <br><b>Settings: flip the phone sideways</b><br>
-Rotates the Quick Panel into landscape with six structured pages: <b>01 Quick</b>, <b>02 General</b> (Unit palettes, Wallpaper Match &amp; Clock/Weather), <b>03 Bar</b>, <b>04 Desktop</b>, <b>05 Hotkeys &amp; System</b>, and <b>06 About</b>.
+Rotates the Quick Panel into a landscape Settings Hub with quick band dots and six structured cards: <b>01 Quick</b>, <b>02 General</b> (Unit palettes, Wallpaper Match &amp; Clock/Weather), <b>03 Bar</b>, <b>04 Desktop</b>, <b>05 Hotkeys &amp; System</b>, and <b>06 About</b>.
 </td>
 </tr>
 <tr>
 <td colspan="2" valign="top">
-<img src="assets/shot-edit-desktop.png" alt="Edit Desktop dock bar with Widgets, Bar, Dock, Views, Themes, and Presets tabs" width="100%">
-<br><b>Edit Desktop: scrapbook-style layout &amp; preset bar</b><br>
-Toggle <b>Edit</b> from the Top Bar to customize Widgets, Bar styles (<i>Float, Straight, Transparent, Capsule</i>), Dock layout, Views, Unit Themes, and saved layout Presets on the fly.
+<img src="assets/shot-edit-desktop.png" alt="Edit Desktop mode with interactive resize handles on Calendar, Profile, To-Do, Weather, Visualizer, Notes, Lyrics, and Clock" width="100%">
+<br><b>Edit Desktop: drag, resize &amp; customize everything live</b><br>
+Toggle <b>Edit</b> from the Top Bar to freely drag widgets across monitors, resize them with live corner &amp; edge handles, and customize Bar styles (<i>Float, Straight, Transparent, Capsule</i>), Dock rounding, Views, Unit Themes, and Presets on the fly.
 </td>
 </tr>
 </table>
@@ -69,8 +69,8 @@ Switch instantly between <i>Virtual Singer</i>, <i>Leo/need</i>, <i>MORE MORE JU
 </tr>
 <tr>
 <td valign="top">
-<b>7 Interactive Desktop Widgets</b><br>
-Draggable, configurable widgets: <b>Clock</b> (Keys, Tower, Sticker, Stack styles), <b>Weather</b> (Open-Meteo °C/°F), <b>Calendar</b>, <b>Profile Card</b>, <b>To-Do</b>, <b>Notes</b>, and real-time synced <b>Lyrics</b> (LRCLIB + Windows SMTC).
+<b>Interactive Multi-Monitor Desktop Widgets</b><br>
+Draggable &amp; resizable widgets across multiple displays: <b>Clock</b> (Keys, Tower, Sticker, Stack styles), <b>Weather</b> (Open-Meteo °C/°F), <b>Calendar</b>, <b>Profile Card</b>, <b>To-Do</b>, <b>Notes</b>, and real-time synced <b>Lyrics</b> (LRCLIB + Windows SMTC).
 </td>
 <td valign="top">
 <b>Smart Top Bar &amp; Capsule Dock</b><br>
@@ -104,11 +104,15 @@ Intercepts volume keys to replace the default Windows 10 volume box with a Pop-C
 
 <h2 id="installation"><img src="assets/tag-installation.svg" alt="Installation" height="72"></h2>
 
-### Option 1 — Portable Build (Recommended)
+### Option 1 — Windows Installer (Recommended)
 
-1. Download **`SekaiDesk-win64.zip`** from the latest release (or find the packaged build under `package/`).
-2. Extract the archive to any folder (e.g., `D:\Apps\SekaiDesk\`).
-3. Run **`SekaiDesk.exe`**.
+1. Download **`SekaiDesk-Setup.exe`** from the [latest GitHub Release](https://github.com/Kyokkei/SekaiDesk/releases/latest).
+2. Run the installer — it installs cleanly per-user to `%LocalAppData%\Programs\SekaiDesk` (no admin prompt required) with Desktop &amp; Start Menu shortcuts and an uninstaller.
+
+### Option 2 — Portable ZIP Build
+
+1. Download **`SekaiDesk-win64.zip`** from the [latest GitHub Release](https://github.com/Kyokkei/SekaiDesk/releases/latest).
+2. Extract the archive to any folder (e.g., `D:\Apps\SekaiDesk\`) and launch **`SekaiDesk.exe`**.
 
 First launch starts automatically with **Peek Phone** notifications, **Capsule Bottom Dock**, and **Transparent Top Bar**, and writes your settings to `config/sekaidesk.json`.
 
@@ -120,10 +124,10 @@ First launch starts automatically with **Peek Phone** notifications, **Capsule B
 
 </details>
 
-### Option 2 — Build from Source
+### Option 3 — Build from Source
 
 ```powershell
-git clone <your-repo-url> SekaiDesk
+git clone https://github.com/Kyokkei/SekaiDesk.git SekaiDesk
 cd SekaiDesk
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j

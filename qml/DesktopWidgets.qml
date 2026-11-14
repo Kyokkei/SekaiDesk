@@ -33,19 +33,38 @@ Item {
         property int targetX: 0
         property int targetY: 0
         property bool allowFocus: false
-        property int shadowOffset: 10
+        property bool freeResize: false
+        property int minCardWidth: 220
+        property int minCardHeight: 160
+        property int maxCardWidth: 680
+        property int maxCardHeight: 680
+        property int defaultCardWidth: 320
+        property int defaultCardHeight: 248
         property bool nativeDragging: false
+        property bool resizingNow: false
+        property real liveScale: 1.0
+        property int liveW: cardWidth
+        property int liveH: cardHeight
+        readonly property real savedScale: widgetsRoot.themeHub.widgetScale(widgetKey)
+        readonly property real effectiveScale: freeResize ? 1.0 : (resizingNow ? liveScale : savedScale)
+        readonly property int displayCardW: freeResize ? (resizingNow ? liveW : cardWidth) : Math.max(40, Math.round(cardWidth * effectiveScale))
+        readonly property int displayCardH: freeResize ? (resizingNow ? liveH : cardHeight) : Math.max(40, Math.round(cardHeight * effectiveScale))
+        readonly property bool hasCustomSize: freeResize
+            ? (cardWidth !== defaultCardWidth || cardHeight !== defaultCardHeight)
+            : (Math.abs(effectiveScale - 1.0) > 0.015)
+        property int padOffset: 7
+        property int shadowOffset: Math.max(16, Math.round(6 * effectiveScale) + padOffset + 5)
         default property alias content: innerContainer.data
 
         color: "transparent"
         clickThrough: false
         desktopLayer: true
         desktopAllowFocus: allowFocus
-        width: cardWidth + shadowOffset
-        height: cardHeight + shadowOffset
+        width: displayCardW + shadowOffset
+        height: displayCardH + shadowOffset
 
-        onTargetXChanged: if (!nativeDragging) x = targetX
-        onTargetYChanged: if (!nativeDragging) y = targetY
+        onTargetXChanged: if (!nativeDragging && !resizingNow) x = targetX
+        onTargetYChanged: if (!nativeDragging && !resizingNow) y = targetY
         Component.onCompleted: {
             x = targetX
             y = targetY
@@ -53,21 +72,25 @@ Item {
 
         Item {
             id: innerContainer
-            x: 4
-            y: 4
-            width: wShell.cardWidth
-            height: wShell.cardHeight
+            x: wShell.padOffset
+            y: wShell.padOffset
+            width: wShell.freeResize ? wShell.displayCardW : wShell.cardWidth
+            height: wShell.freeResize ? wShell.displayCardH : wShell.cardHeight
+            scale: wShell.effectiveScale
+            transformOrigin: Item.TopLeft
         }
 
-        // Authentic SekaiPop Edit Desktop Chrome (dashed outline + corner diamonds + drag shield + remove badge)
+        // Authentic SekaiPop+ Edit Desktop Chrome (dashed outline + 4 live resize diamonds + edge strips + reset chip)
         Item {
             id: editChrome
             x: innerContainer.x
             y: innerContainer.y
-            width: innerContainer.width
-            height: innerContainer.height
+            width: wShell.displayCardW
+            height: wShell.displayCardH
             visible: widgetsRoot.themeHub.editMode
             z: 90
+
+            property bool resizeHot: false
 
             onVisibleChanged: {
                 if (visible)
@@ -80,9 +103,11 @@ Item {
                 y: -3
                 width: parent.width + 6
                 height: parent.height + 6
-                property color accentCol: widgetsRoot.themeHub.accentA
+                property color accentCol: (wShell.resizingNow || editChrome.resizeHot)
+                    ? widgetsRoot.themeHub.accentB
+                    : widgetsRoot.themeHub.accentA
                 property color inkCol: widgetsRoot.themeHub.darkInk
-                property bool hovered: editShieldMa.containsMouse || editShieldMa.pressed
+                property bool hovered: editShieldMa.containsMouse || editShieldMa.pressed || editChrome.resizeHot || wShell.resizingNow
                 onAccentColChanged: requestPaint()
                 onHoveredChanged: requestPaint()
                 onWidthChanged: requestPaint()
@@ -123,30 +148,249 @@ Item {
                 }
             }
 
-            // 4 corner diamond handles
+            // Free-resize edge grips (Right & Bottom edges for Todo / Notes)
+            MouseArea {
+                visible: wShell.freeResize
+                x: editChrome.width - 5
+                y: 14
+                width: 10
+                height: Math.max(12, editChrome.height - 28)
+                hoverEnabled: true
+                preventStealing: true
+                cursorShape: Qt.SizeHorCursor
+                z: 93
+                property real startGx: 0
+                property int startW: 0
+                onContainsMouseChanged: editChrome.resizeHot = containsMouse || pressed
+                onPressed: mouse => {
+                    const gp = mapToGlobal(mouse.x, mouse.y)
+                    startGx = gp.x
+                    startW = wShell.displayCardW
+                    wShell.liveW = startW
+                    wShell.liveH = wShell.displayCardH
+                    wShell.resizingNow = true
+                    editChrome.resizeHot = true
+                }
+                onPositionChanged: mouse => {
+                    if (!pressed || !wShell.resizingNow)
+                        return
+                    const gp = mapToGlobal(mouse.x, mouse.y)
+                    const maxWByScreen = Math.max(wShell.minCardWidth, Math.round(widgetsRoot.themeHub.virtMaxX - 8 - wShell.shadowOffset - wShell.x))
+                    wShell.liveW = Math.max(wShell.minCardWidth, Math.min(Math.min(wShell.maxCardWidth, maxWByScreen), Math.round(startW + (gp.x - startGx))))
+                }
+                function finishEdgeW() {
+                    if (!wShell.resizingNow)
+                        return
+                    widgetsRoot.themeHub.saveWidgetSize(wShell.widgetKey, wShell.liveW, wShell.liveH)
+                    wShell.resizingNow = false
+                    editChrome.resizeHot = containsMouse
+                }
+                onReleased: finishEdgeW()
+                onCanceled: finishEdgeW()
+                onDoubleClicked: widgetsRoot.themeHub.resetWidgetSize(wShell.widgetKey)
+            }
+
+            MouseArea {
+                visible: wShell.freeResize
+                x: 14
+                y: editChrome.height - 5
+                width: Math.max(12, editChrome.width - 28)
+                height: 10
+                hoverEnabled: true
+                preventStealing: true
+                cursorShape: Qt.SizeVerCursor
+                z: 93
+                property real startGy: 0
+                property int startH: 0
+                onContainsMouseChanged: editChrome.resizeHot = containsMouse || pressed
+                onPressed: mouse => {
+                    const gp = mapToGlobal(mouse.x, mouse.y)
+                    startGy = gp.y
+                    startH = wShell.displayCardH
+                    wShell.liveW = wShell.displayCardW
+                    wShell.liveH = startH
+                    wShell.resizingNow = true
+                    editChrome.resizeHot = true
+                }
+                onPositionChanged: mouse => {
+                    if (!pressed || !wShell.resizingNow)
+                        return
+                    const gp = mapToGlobal(mouse.x, mouse.y)
+                    const maxHByScreen = Math.max(wShell.minCardHeight, Math.round(widgetsRoot.themeHub.virtMaxY - 8 - wShell.shadowOffset - wShell.y))
+                    wShell.liveH = Math.max(wShell.minCardHeight, Math.min(Math.min(wShell.maxCardHeight, maxHByScreen), Math.round(startH + (gp.y - startGy))))
+                }
+                function finishEdgeH() {
+                    if (!wShell.resizingNow)
+                        return
+                    widgetsRoot.themeHub.saveWidgetSize(wShell.widgetKey, wShell.liveW, wShell.liveH)
+                    wShell.resizingNow = false
+                    editChrome.resizeHot = containsMouse
+                }
+                onReleased: finishEdgeH()
+                onCanceled: finishEdgeH()
+                onDoubleClicked: widgetsRoot.themeHub.resetWidgetSize(wShell.widgetKey)
+            }
+
+            // 4 interactive corner resize diamonds (Uniform scale for complex widgets, free W/H for Notes & Todo)
             Repeater {
                 model: [
-                    { cx: -2, cy: -2 },
-                    { cx: 1, cy: -2 },
-                    { cx: -2, cy: 1 },
-                    { cx: 1, cy: 1 }
+                    { east: false, south: false },
+                    { east: true,  south: false },
+                    { east: false, south: true  },
+                    { east: true,  south: true  }
                 ]
-                delegate: Rectangle {
+                delegate: Item {
+                    id: cornerGrip
                     required property var modelData
-                    readonly property real targetCx: modelData.cx < 0 ? 0 : editChrome.width
-                    readonly property real targetCy: modelData.cy < 0 ? 0 : editChrome.height
-                    x: Math.round(targetCx - width * 0.5)
-                    y: Math.round(targetCy - height * 0.5)
-                    width: editShieldMa.containsMouse ? 12 : 9
-                    height: width
-                    rotation: 45
-                    radius: 2
-                    color: editShieldMa.containsMouse ? widgetsRoot.themeHub.accentB : widgetsRoot.themeHub.accentA
-                    border.color: widgetsRoot.themeHub.darkInk
-                    border.width: 2
-                    antialiasing: true
-                    z: 92
-                    Behavior on width { NumberAnimation { duration: 130; easing.type: Easing.OutBack } }
+                    readonly property bool east: modelData.east
+                    readonly property bool south: modelData.south
+                    readonly property bool active: cornerMa.containsMouse || cornerMa.pressed
+
+                    width: 24
+                    height: 24
+                    x: Math.round((east ? editChrome.width : 0) - width * 0.5)
+                    y: Math.round((south ? editChrome.height : 0) - height * 0.5)
+                    z: 96
+
+                    Rectangle {
+                        anchors.centerIn: parent
+                        width: cornerGrip.active ? 15 : (editShieldMa.containsMouse ? 13 : 11)
+                        height: width
+                        rotation: 45
+                        radius: 2
+                        color: cornerGrip.active
+                            ? widgetsRoot.themeHub.accentB
+                            : (editShieldMa.containsMouse ? widgetsRoot.themeHub.accentB : widgetsRoot.themeHub.accentA)
+                        border.color: widgetsRoot.themeHub.darkInk
+                        border.width: 2
+                        antialiasing: true
+                        Behavior on width { NumberAnimation { duration: 120; easing.type: Easing.OutBack } }
+                    }
+
+                    MouseArea {
+                        id: cornerMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        preventStealing: true
+                        cursorShape: cornerGrip.east === cornerGrip.south ? Qt.SizeFDiagCursor : Qt.SizeBDiagCursor
+
+                        property real startGlobalX: 0
+                        property real startGlobalY: 0
+                        property real startWinX: 0
+                        property real startWinY: 0
+                        property int startDispW: 0
+                        property int startDispH: 0
+                        property real startRight: 0
+                        property real startBottom: 0
+                        property real startScale: 1.0
+                        property int startBaseW: 0
+                        property int startBaseH: 0
+
+                        onContainsMouseChanged: editChrome.resizeHot = containsMouse || pressed
+
+                        onPressed: mouse => {
+                            const gp = mapToGlobal(mouse.x, mouse.y)
+                            startGlobalX = gp.x
+                            startGlobalY = gp.y
+                            startWinX = wShell.x
+                            startWinY = wShell.y
+                            startDispW = wShell.displayCardW
+                            startDispH = wShell.displayCardH
+                            startRight = wShell.x + wShell.displayCardW
+                            startBottom = wShell.y + wShell.displayCardH
+                            startScale = wShell.effectiveScale
+                            startBaseW = wShell.cardWidth
+                            startBaseH = wShell.cardHeight
+                            if (wShell.freeResize) {
+                                wShell.liveW = startDispW
+                                wShell.liveH = startDispH
+                            } else {
+                                wShell.liveScale = startScale
+                            }
+                            wShell.resizingNow = true
+                            editChrome.resizeHot = true
+                        }
+
+                        onPositionChanged: mouse => {
+                            if (!pressed || !wShell.resizingNow)
+                                return
+                            const gp = mapToGlobal(mouse.x, mouse.y)
+                            const dx = gp.x - startGlobalX
+                            const dy = gp.y - startGlobalY
+                            const hub = widgetsRoot.themeHub
+                            const minXBound = hub.virtMinX + 8
+                            const minYBound = hub.widgetMinYAt(wShell.x, wShell.y)
+                            const maxXBound = Math.max(minXBound + 200, hub.virtMaxX - 8 - wShell.shadowOffset)
+                            const maxYBound = Math.max(minYBound + 200, hub.virtMaxY - 8 - wShell.shadowOffset)
+
+                            if (wShell.freeResize) {
+                                const rawW = cornerGrip.east ? (startDispW + dx) : (startDispW - dx)
+                                const rawH = cornerGrip.south ? (startDispH + dy) : (startDispH - dy)
+                                let nextW = Math.max(wShell.minCardWidth, Math.min(wShell.maxCardWidth, Math.round(rawW)))
+                                let nextH = Math.max(wShell.minCardHeight, Math.min(wShell.maxCardHeight, Math.round(rawH)))
+                                if (mouse.modifiers & Qt.ShiftModifier) {
+                                    const ratio = startDispW / Math.max(1, startDispH)
+                                    if (Math.abs(dx) >= Math.abs(dy))
+                                        nextH = Math.max(wShell.minCardHeight, Math.min(wShell.maxCardHeight, Math.round(nextW / ratio)))
+                                    else
+                                        nextW = Math.max(wShell.minCardWidth, Math.min(wShell.maxCardWidth, Math.round(nextH * ratio)))
+                                }
+                                let nextX = cornerGrip.east ? startWinX : (startRight - nextW)
+                                let nextY = cornerGrip.south ? startWinY : (startBottom - nextH)
+                                if (!cornerGrip.east && nextX < minXBound) {
+                                    nextX = minXBound
+                                    nextW = Math.max(wShell.minCardWidth, Math.round(startRight - minXBound))
+                                }
+                                if (cornerGrip.east && nextX + nextW > maxXBound)
+                                    nextW = Math.max(wShell.minCardWidth, Math.round(maxXBound - nextX))
+                                if (!cornerGrip.south && nextY < minYBound) {
+                                    nextY = minYBound
+                                    nextH = Math.max(wShell.minCardHeight, Math.round(startBottom - minYBound))
+                                }
+                                if (cornerGrip.south && nextY + nextH > maxYBound)
+                                    nextH = Math.max(wShell.minCardHeight, Math.round(maxYBound - nextY))
+                                wShell.x = Math.round(nextX)
+                                wShell.y = Math.round(nextY)
+                                wShell.liveW = nextW
+                                wShell.liveH = nextH
+                            } else {
+                                const sx = (cornerGrip.east ? dx : -dx) / Math.max(1, startDispW)
+                                const sy = (cornerGrip.south ? dy : -dy) / Math.max(1, startDispH)
+                                const delta = Math.abs(sx) >= Math.abs(sy) ? sx : sy
+                                let nextSc = Math.max(0.65, Math.min(1.65, startScale * (1.0 + delta)))
+                                if (!cornerGrip.east)
+                                    nextSc = Math.min(nextSc, (startRight - minXBound) / Math.max(1, startBaseW))
+                                else
+                                    nextSc = Math.min(nextSc, (maxXBound - startWinX) / Math.max(1, startBaseW))
+                                if (!cornerGrip.south)
+                                    nextSc = Math.min(nextSc, (startBottom - minYBound) / Math.max(1, startBaseH))
+                                else
+                                    nextSc = Math.min(nextSc, (maxYBound - startWinY) / Math.max(1, startBaseH))
+                                nextSc = Math.max(0.65, Math.min(1.65, nextSc))
+                                const nextW = Math.round(startBaseW * nextSc)
+                                const nextH = Math.round(startBaseH * nextSc)
+                                wShell.liveScale = nextSc
+                                wShell.x = cornerGrip.east ? startWinX : Math.max(minXBound, Math.round(startRight - nextW))
+                                wShell.y = cornerGrip.south ? startWinY : Math.max(minYBound, Math.round(startBottom - nextH))
+                            }
+                        }
+
+                        function finishCorner() {
+                            if (!wShell.resizingNow)
+                                return
+                            if (wShell.freeResize)
+                                widgetsRoot.themeHub.saveWidgetSize(wShell.widgetKey, wShell.liveW, wShell.liveH)
+                            else
+                                widgetsRoot.themeHub.saveWidgetScale(wShell.widgetKey, wShell.liveScale)
+                            widgetsRoot.themeHub.saveWidgetPos(wShell.widgetKey, wShell.x, wShell.y)
+                            wShell.resizingNow = false
+                            editChrome.resizeHot = containsMouse
+                        }
+
+                        onReleased: finishCorner()
+                        onCanceled: finishCorner()
+                        onDoubleClicked: widgetsRoot.themeHub.resetWidgetSize(wShell.widgetKey)
+                    }
                 }
             }
 
@@ -155,6 +399,7 @@ Item {
                 id: editShieldMa
                 anchors.fill: parent
                 hoverEnabled: true
+                preventStealing: true
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 cursorShape: wShell.nativeDragging ? Qt.ClosedHandCursor : Qt.OpenHandCursor
                 z: 91
@@ -164,10 +409,11 @@ Item {
                         widgetsRoot.themeHub.setWidgetVisible(wShell.widgetKey, false)
                         return
                     }
-                    const maxW = Math.max(100, widgetsRoot.themeHub.screenW - 80)
-                    const maxH = Math.max(100, widgetsRoot.themeHub.screenH - 60)
+                    const hub = widgetsRoot.themeHub
+                    const maxW = Math.max(hub.virtMinX + 100, hub.virtMaxX - 80)
+                    const maxH = Math.max(hub.virtMinY + 100, hub.virtMaxY - 60)
                     wShell.nativeDragging = true
-                    wShell.beginNativeDrag(8, 52, maxW, maxH)
+                    wShell.beginNativeDrag(hub.virtMinX + 8, hub.virtMinY + 8, maxW, maxH)
                 }
                 onPositionChanged: {
                     if (wShell.nativeDragging)
@@ -188,32 +434,70 @@ Item {
                 }
             }
 
-            // Top-left Edit mode badge
+            // Top-left Edit mode badge (displays live % scale or WxH dimensions)
             Rectangle {
-                x: 8
+                x: 16
                 y: -3
                 width: editTagTxt.implicitWidth + 14
                 height: 20
                 radius: 10
-                color: editShieldMa.containsMouse ? widgetsRoot.themeHub.accentB : widgetsRoot.themeHub.darkInk
+                color: (wShell.resizingNow || editChrome.resizeHot || editShieldMa.containsMouse)
+                    ? widgetsRoot.themeHub.accentB
+                    : widgetsRoot.themeHub.darkInk
                 border.color: widgetsRoot.themeHub.darkInk
                 border.width: 2
                 z: 94
                 Text {
                     id: editTagTxt
                     anchors.centerIn: parent
-                    text: editShieldMa.containsMouse
-                        ? (wShell.widgetKey.toUpperCase() + " · DRAG")
-                        : wShell.widgetKey.toUpperCase()
+                    text: {
+                        const base = wShell.widgetKey.toUpperCase()
+                        if (wShell.resizingNow || wShell.hasCustomSize) {
+                            if (wShell.freeResize)
+                                return base + " · " + wShell.displayCardW + "×" + wShell.displayCardH
+                            return base + " · " + Math.round(wShell.effectiveScale * 100) + "%"
+                        }
+                        return editShieldMa.containsMouse ? (base + " · DRAG") : base
+                    }
                     font.pixelSize: 9
                     font.weight: Font.Black
-                    color: editShieldMa.containsMouse ? widgetsRoot.themeHub.darkInk : "#FFFFFF"
+                    color: (wShell.resizingNow || editChrome.resizeHot || editShieldMa.containsMouse)
+                        ? widgetsRoot.themeHub.darkInk
+                        : "#FFFFFF"
+                }
+            }
+
+            // Optional 1:1 Size Reset button (appears when widget has custom size)
+            Rectangle {
+                visible: wShell.hasCustomSize && !wShell.resizingNow
+                x: editChrome.width - 66
+                y: -3
+                width: 22
+                height: 22
+                radius: 11
+                color: editResetMa.containsMouse ? widgetsRoot.themeHub.accentB : "#FFFFFF"
+                border.color: widgetsRoot.themeHub.darkInk
+                border.width: 2
+                z: 95
+                Text {
+                    anchors.centerIn: parent
+                    text: "↺"
+                    font.pixelSize: 12
+                    font.weight: Font.Black
+                    color: widgetsRoot.themeHub.darkInk
+                }
+                MouseArea {
+                    id: editResetMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: widgetsRoot.themeHub.resetWidgetSize(wShell.widgetKey)
                 }
             }
 
             // Top-right Remove button (×)
             Rectangle {
-                x: editChrome.width - width - 4
+                x: editChrome.width - width - 16
                 y: -3
                 width: 22
                 height: 22
@@ -247,6 +531,7 @@ Item {
         anchors.fill: parent
         z: -1
         hoverEnabled: true
+        preventStealing: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         cursorShape: (hubRef && hubRef.widgetsLocked && !hubRef.editMode)
             ? Qt.ArrowCursor
@@ -262,11 +547,13 @@ Item {
             }
             if (hubRef && hubRef.widgetsLocked && !hubRef.editMode)
                 return
-            const maxW = hubRef ? Math.max(100, hubRef.screenW - 80) : 1840
-            const maxH = hubRef ? Math.max(100, hubRef.screenH - 60) : 1020
+            const minX = hubRef ? (hubRef.virtMinX + 8) : 8
+            const minY = hubRef ? (hubRef.virtMinY + 8) : 52
+            const maxW = hubRef ? Math.max(minX + 100, hubRef.virtMaxX - 80) : 1840
+            const maxH = hubRef ? Math.max(minY + 100, hubRef.virtMaxY - 60) : 1020
             dragging = true
             shellWin.nativeDragging = true
-            shellWin.beginNativeDrag(8, 52, maxW, maxH)
+            shellWin.beginNativeDrag(minX, minY, maxW, maxH)
         }
         onPositionChanged: {
             if (!dragging)
@@ -3686,8 +3973,15 @@ Item {
         id: todoWin
         widgetKey: "todo"
         allowFocus: true
-        cardWidth: 320
-        cardHeight: themeHub.todoSmall ? 268 : 340
+        freeResize: true
+        minCardWidth: 240
+        minCardHeight: 190
+        maxCardWidth: 580
+        maxCardHeight: 680
+        defaultCardWidth: 320
+        defaultCardHeight: 340
+        cardWidth: themeHub.wTodoW
+        cardHeight: themeHub.wTodoH
         targetX: themeHub.wTodoX
         targetY: themeHub.wTodoY
         visible: themeHub.wTodoVisible && !widgetsRoot.fullscreenActive
@@ -3949,8 +4243,15 @@ Item {
         id: notesWin
         widgetKey: "notes"
         allowFocus: true
-        cardWidth: 288
-        cardHeight: 248
+        freeResize: true
+        minCardWidth: 230
+        minCardHeight: 170
+        maxCardWidth: 680
+        maxCardHeight: 620
+        defaultCardWidth: 288
+        defaultCardHeight: 248
+        cardWidth: themeHub.wNotesW
+        cardHeight: themeHub.wNotesH
         targetX: themeHub.wNotesX
         targetY: themeHub.wNotesY
         visible: themeHub.wNotesVisible && !widgetsRoot.fullscreenActive
@@ -3994,90 +4295,101 @@ Item {
                 anchors.topMargin: 48
                 anchors.leftMargin: 14
                 anchors.rightMargin: 14
+                anchors.bottomMargin: 10
+                clip: true
                 spacing: 22
                 opacity: 0.08
                 Repeater {
-                    model: 8
+                    model: Math.max(8, Math.floor((parent.height + 12) / 23))
                     Rectangle { width: parent.width; height: 1; color: themeHub.darkInk }
                 }
             }
 
             // Header bar with tint swatches + Clear confirm + Close
-            Row {
+            Item {
                 id: noteHdr
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.margins: 10
                 height: 28
-                spacing: 6
-
-                Text {
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "NOTE"
-                    font.pixelSize: 12
-                    font.weight: Font.Black
-                    color: themeHub.darkInk
-                }
 
                 Row {
+                    anchors.left: parent.left
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 4
-                    opacity: notesWin.hovered ? 1.0 : 0.65
-                    Repeater {
-                        model: [
-                            { k: "butter",   c: "#FFE66D" },
-                            { k: "mint",     c: "#7CE8B5" },
-                            { k: "pink",     c: "#FF92C2" },
-                            { k: "sky",      c: "#7DD3FC" },
-                            { k: "lavender", c: "#C4B5FD" }
-                        ]
-                        Rectangle {
-                            required property var modelData
-                            width: 14; height: 14; radius: 7
-                            color: modelData.c
-                            border.color: themeHub.darkInk
-                            border.width: themeHub.noteTint === modelData.k ? 2 : 1
-                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setNoteTint(modelData.k) }
-                        }
-                    }
-                }
+                    spacing: 6
 
-                Item { width: Math.max(4, parent.width - 216); height: 1 }
-
-                Rectangle {
-                    anchors.verticalCenter: parent.verticalCenter
-                    width: notesWin.confirmClear ? 46 : 36
-                    height: 22; radius: 8
-                    color: notesWin.confirmClear ? "#FF5E7E" : "#88FFFFFF"
-                    border.color: themeHub.darkInk; border.width: 1
                     Text {
-                        anchors.centerIn: parent
-                        text: notesWin.confirmClear ? "Sure?" : "Clear"
-                        font.pixelSize: 9; font.weight: Font.Black
-                        color: notesWin.confirmClear ? "#FFFFFF" : themeHub.darkInk
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: "NOTE"
+                        font.pixelSize: 12
+                        font.weight: Font.Black
+                        color: themeHub.darkInk
                     }
-                    MouseArea {
-                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                        onClicked: {
-                            if (!notesWin.confirmClear) {
-                                notesWin.confirmClear = true
-                                clearResetTimer.restart()
-                            } else {
-                                noteEdit.text = ""
-                                themeHub.saveNoteText("")
-                                notesWin.confirmClear = false
+
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 4
+                        opacity: notesWin.hovered ? 1.0 : 0.65
+                        Repeater {
+                            model: [
+                                { k: "butter",   c: "#FFE66D" },
+                                { k: "mint",     c: "#7CE8B5" },
+                                { k: "pink",     c: "#FF92C2" },
+                                { k: "sky",      c: "#7DD3FC" },
+                                { k: "lavender", c: "#C4B5FD" }
+                            ]
+                            Rectangle {
+                                required property var modelData
+                                width: 14; height: 14; radius: 7
+                                color: modelData.c
+                                border.color: themeHub.darkInk
+                                border.width: themeHub.noteTint === modelData.k ? 2 : 1
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setNoteTint(modelData.k) }
                             }
                         }
                     }
                 }
 
-                Rectangle {
+                Row {
+                    anchors.right: parent.right
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 22; height: 22; radius: 11
-                    color: "#FFFFFF"; border.color: themeHub.darkInk; border.width: 2
-                    Text { anchors.centerIn: parent; text: "×"; font.pixelSize: 12; font.weight: Font.Black; color: themeHub.darkInk }
-                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setWidgetVisible("notes", false) }
+                    spacing: 6
+
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: notesWin.confirmClear ? 46 : 36
+                        height: 22; radius: 8
+                        color: notesWin.confirmClear ? "#FF5E7E" : "#88FFFFFF"
+                        border.color: themeHub.darkInk; border.width: 1
+                        Text {
+                            anchors.centerIn: parent
+                            text: notesWin.confirmClear ? "Sure?" : "Clear"
+                            font.pixelSize: 9; font.weight: Font.Black
+                            color: notesWin.confirmClear ? "#FFFFFF" : themeHub.darkInk
+                        }
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!notesWin.confirmClear) {
+                                    notesWin.confirmClear = true
+                                    clearResetTimer.restart()
+                                } else {
+                                    noteEdit.text = ""
+                                    themeHub.saveNoteText("")
+                                    notesWin.confirmClear = false
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 22; height: 22; radius: 11
+                        color: "#FFFFFF"; border.color: themeHub.darkInk; border.width: 2
+                        Text { anchors.centerIn: parent; text: "×"; font.pixelSize: 12; font.weight: Font.Black; color: themeHub.darkInk }
+                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setWidgetVisible("notes", false) }
+                    }
                 }
             }
 

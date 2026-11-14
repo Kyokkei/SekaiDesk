@@ -7871,7 +7871,7 @@ PanelWindow {
                                                     anchors.rightMargin: 22
                                                     spacing: 20
 
-                                                    // Interactive rotating SekaiDesk emblem (click for combo bounce!)
+                                                    // Interactive clickable Wonderhoy sticker emblem (click for combo bounce!)
                                                     Item {
                                                         width: 96; height: 96
                                                         anchors.verticalCenter: parent.verticalCenter
@@ -7887,23 +7887,17 @@ PanelWindow {
                                                             color: "#FFFDF7"
                                                             border.width: 3.5; border.color: "#1A1B2E"
                                                             rotation: (aboutSubpage.comboCount % 2 === 0) ? -4 : 4
-                                                            scale: abtEmblemMa.pressed ? 0.91 : (abtEmblemMa.containsMouse ? 1.06 : 1.0)
+                                                            scale: abtEmblemMa.pressed ? 0.88 : (abtEmblemMa.containsMouse ? 1.08 : 1.0)
                                                             Behavior on rotation { NumberAnimation { duration: 180; easing.type: Easing.OutBack } }
                                                             Behavior on scale { NumberAnimation { duration: 140; easing.type: Easing.OutBack } }
 
-                                                            Rectangle {
-                                                                anchors.centerIn: parent
-                                                                width: 62; height: 62; radius: 18
-                                                                color: "#1A1B2E"
-                                                                Text {
-                                                                    anchors.centerIn: parent
-                                                                    text: "✦"
-                                                                    font.pixelSize: 38
-                                                                    font.weight: Font.Black
-                                                                    color: themeHub.accentA
-                                                                    rotation: aboutSubpage.comboCount * 45
-                                                                    Behavior on rotation { NumberAnimation { duration: 280; easing.type: Easing.OutBack } }
-                                                                }
+                                                            Image {
+                                                                anchors.fill: parent
+                                                                anchors.margins: 4
+                                                                source: "qrc:/qml/icons/wonderhoy.png"
+                                                                fillMode: Image.PreserveAspectFit
+                                                                smooth: true
+                                                                mipmap: true
                                                             }
                                                             MouseArea {
                                                                 id: abtEmblemMa

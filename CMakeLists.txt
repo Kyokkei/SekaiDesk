@@ -103,6 +103,7 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/play-dark.svg
         qml/icons/play-light.svg
         qml/icons/refresh-light.svg
+        qml/icons/sekai-app-icon.png
         qml/icons/settings-dark.svg
         qml/icons/settings-light.svg
         qml/icons/skip-next-dark.svg
@@ -123,6 +124,7 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/wifi-dark.svg
         qml/icons/wifi-light.svg
         qml/icons/wind-dark.svg
+        qml/icons/wonderhoy.png
 )
 
 target_link_libraries(SekaiDesk PRIVATE

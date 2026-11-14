@@ -6,6 +6,7 @@
 #include <QObject>
 #include <QPointer>
 #include <QQmlComponent>
+#include <QRect>
 #include <QScreen>
 #include <QTimer>
 #include <QVariant>
@@ -21,6 +22,7 @@ class QGuiApplication;
 class QsGlobal : public QObject {
     Q_OBJECT
     Q_PROPERTY(QList<QScreen*> screens READ screens NOTIFY screensChanged)
+    Q_PROPERTY(QRect virtualGeometry READ virtualGeometry NOTIFY screensChanged)
     Q_PROPERTY(QString shellDir READ shellDir CONSTANT)
     Q_PROPERTY(QVariantMap env READ env CONSTANT)
 
@@ -28,6 +30,7 @@ public:
     static QsGlobal* instance();
 
     QList<QScreen*> screens() const;
+    QRect virtualGeometry() const;
     QString shellDir() const { return m_shellDir; }
     QVariantMap env() const;
 
@@ -38,6 +41,7 @@ signals:
 
 private:
     explicit QsGlobal(QObject* parent = nullptr);
+    void watchScreen(QScreen* scr);
     QString m_shellDir;
 };
 

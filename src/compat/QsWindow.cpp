@@ -1467,16 +1467,6 @@ void PanelWindow::beginNativeDrag(int minLogicalX, int minLogicalY, int maxLogic
         return;
 
     const qreal dpr = (devicePixelRatio() > 0.0) ? devicePixelRatio() : 1.0;
-    QScreen* scr = screen();
-    if (!scr)
-        scr = QGuiApplication::primaryScreen();
-    const QPoint origin = scr ? scr->geometry().topLeft() : QPoint(0, 0);
-
-    int minPxX = qRound((origin.x() + minLogicalX) * dpr);
-    int minPxY = qRound((origin.y() + minLogicalY) * dpr);
-    int maxPxX = qRound((origin.x() + maxLogicalX) * dpr);
-    int maxPxY = qRound((origin.y() + maxLogicalY) * dpr);
-
     const int virtLeft = GetSystemMetrics(SM_XVIRTUALSCREEN);
     const int virtTop = GetSystemMetrics(SM_YVIRTUALSCREEN);
     const int virtRight = virtLeft + GetSystemMetrics(SM_CXVIRTUALSCREEN);
@@ -1484,14 +1474,39 @@ void PanelWindow::beginNativeDrag(int minLogicalX, int minLogicalY, int maxLogic
     const int winW = qMax(1, static_cast<int>(rc.right - rc.left));
     const int winH = qMax(1, static_cast<int>(rc.bottom - rc.top));
 
+    int minPxX = 0;
+    int minPxY = 0;
+    int maxPxX = 0;
+    int maxPxY = 0;
+
     if (virtRight > virtLeft && virtBottom > virtTop) {
-        minPxX = qBound(virtLeft, minPxX, qMax(virtLeft, virtRight - 40));
-        minPxY = qBound(virtTop, minPxY, qMax(virtTop, virtBottom - 40));
-        maxPxX = qBound(minPxX, maxPxX, qMax(minPxX, virtRight - qMin(winW, 80)));
-        maxPxY = qBound(minPxY, maxPxY, qMax(minPxY, virtBottom - qMin(winH, 60)));
+        const int padPx = qMax(4, qRound(8 * dpr));
+        const int minVisW = qMin(winW, qMax(80, qRound(100 * dpr)));
+        const int minVisH = qMin(winH, qMax(60, qRound(80 * dpr)));
+        minPxX = virtLeft + padPx;
+        minPxY = virtTop + padPx;
+        maxPxX = qMax(minPxX, virtRight - minVisW);
+        maxPxY = qMax(minPxY, virtBottom - minVisH);
+
+        // Apply caller's logical bounds only when a single monitor is active; on multi-monitor
+        // setups widgets can cross freely across monitors regardless of primary screen size.
+        if (QGuiApplication::screens().size() <= 1) {
+            const QScreen* pri = QGuiApplication::primaryScreen();
+            const qreal priDpr = (pri && pri->devicePixelRatio() > 0.0) ? pri->devicePixelRatio() : dpr;
+            const int reqMinX = qRound(minLogicalX * priDpr);
+            const int reqMinY = qRound(minLogicalY * priDpr);
+            const int reqMaxX = qRound(maxLogicalX * priDpr);
+            const int reqMaxY = qRound(maxLogicalY * priDpr);
+            minPxX = qBound(virtLeft, reqMinX, maxPxX);
+            minPxY = qBound(virtTop, reqMinY, maxPxY);
+            maxPxX = qBound(minPxX, reqMaxX, maxPxX);
+            maxPxY = qBound(minPxY, reqMaxY, maxPxY);
+        }
     } else {
-        maxPxX = qMax(minPxX, maxPxX);
-        maxPxY = qMax(minPxY, maxPxY);
+        minPxX = qRound(minLogicalX * dpr);
+        minPxY = qRound(minLogicalY * dpr);
+        maxPxX = qMax(minPxX, qRound(maxLogicalX * dpr));
+        maxPxY = qMax(minPxY, qRound(maxLogicalY * dpr));
     }
 
     m_dragStartCursorPxX = pt.x;

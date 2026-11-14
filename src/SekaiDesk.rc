@@ -4,6 +4,7 @@
 #define VS_VERSION_INFO 1
 #endif
 
+1 ICON "SekaiDesk.ico"
 1 24 "SekaiDesk.manifest"
 
 VS_VERSION_INFO VERSIONINFO

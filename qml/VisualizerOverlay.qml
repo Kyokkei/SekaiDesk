@@ -35,12 +35,16 @@ PanelWindow {
     readonly property int defaultX: 28
     readonly property int defaultY: Math.max(48, themeHub.screenH - height - (themeHub.screenW < 1280 ? 148 : 38))
     readonly property int clampedX: {
-        const raw = VisualizerService.posX >= 0 ? Math.round(VisualizerService.posX) : defaultX
-        return Math.max(8, Math.min(Math.max(8, themeHub.screenW - width - 8), raw))
+        const unset = (VisualizerService.posX === -1 && VisualizerService.posY === -1)
+        const raw = unset ? defaultX : Math.round(VisualizerService.posX)
+        const minX = themeHub.virtMinX + 8
+        return Math.max(minX, Math.min(Math.max(minX, themeHub.virtMaxX - width - 8), raw))
     }
     readonly property int clampedY: {
-        const raw = VisualizerService.posY >= 0 ? Math.round(VisualizerService.posY) : defaultY
-        return Math.max(44, Math.min(Math.max(44, themeHub.screenH - height - 8), raw))
+        const unset = (VisualizerService.posX === -1 && VisualizerService.posY === -1)
+        const raw = unset ? defaultY : Math.round(VisualizerService.posY)
+        const minY = themeHub.widgetMinYAt(clampedX, raw)
+        return Math.max(minY, Math.min(Math.max(minY, themeHub.virtMaxY - height - 8), raw))
     }
 
     property bool nativeDragging: false
@@ -186,10 +190,12 @@ PanelWindow {
     }
 
     function startDrag() {
-        const maxW = Math.max(100, themeHub.screenW - 80)
-        const maxH = Math.max(100, themeHub.screenH - 60)
+        const minX = themeHub.virtMinX + 8
+        const minY = themeHub.virtMinY + 8
+        const maxW = Math.max(minX + 100, themeHub.virtMaxX - 80)
+        const maxH = Math.max(minY + 100, themeHub.virtMaxY - 60)
         nativeDragging = true
-        beginNativeDrag(8, 44, maxW, maxH)
+        beginNativeDrag(minX, minY, maxW, maxH)
     }
 
     function finishDrag() {

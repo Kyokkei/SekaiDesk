@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QFile>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QMutex>
 #include <QMutexLocker>
 #include <QQmlApplicationEngine>
@@ -118,6 +119,7 @@ int main(int argc, char* argv[])
     app.setApplicationName(QStringLiteral("SekaiDesk"));
     app.setApplicationDisplayName(QStringLiteral("SekaiDesk"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
+    app.setWindowIcon(QIcon(QStringLiteral(":/qml/icons/sekai-app-icon.png")));
     app.setQuitOnLastWindowClosed(false);
 
     {

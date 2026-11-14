@@ -6,6 +6,10 @@ build-*/
 out/
 dist/
 package/
+release/
+installer/stage/
+installer/*.exe
+installer/SekaiDesk.ico
 *.o
 *.obj
 *.exe.bak
@@ -51,6 +55,10 @@ prototype test (failed - no use i think)/
 # Upstream SekaiPop git history backup (removed from SekaiPop/ to vendor it)
 .upstream-backup/
 
-# Local secrets / personal config
-config/sekaidesk.json
-config/restore.json
+# Local secrets / personal config / internal dev notes
+config/
+.AI/
+.workbuddy-ai/
+docs/
+research/
+sekaidesk_system_blueprint(newest plan).md
