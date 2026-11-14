@@ -54,6 +54,8 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/alt-arrow-up-light.svg
         qml/icons/arrow-down-dark.svg
         qml/icons/arrow-up-dark.svg
+        qml/icons/bell-dark.svg
+        qml/icons/bell-light.svg
         qml/icons/bt-dark.svg
         qml/icons/bt-light.svg
         qml/icons/calendar-light.svg
@@ -76,11 +78,15 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/folder-with-files-light.svg
         qml/icons/handsig-yozora.png
         qml/icons/headphones-round-dark.svg
+        qml/icons/inbox-archive-dark.svg
+        qml/icons/inbox-archive-light.svg
         qml/icons/magnifer-dark.svg
         qml/icons/magnifer-light.svg
         qml/icons/map-point-teal.svg
         qml/icons/moon-dark.svg
+        qml/icons/moon-light.svg
         qml/icons/music-note-dark.svg
+        qml/icons/music-note-light.svg
         qml/icons/music-note-teal.svg
         qml/icons/network-dark.svg
         qml/icons/network-light.svg
@@ -88,15 +94,25 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/palette-dark.svg
         qml/icons/palette-light.svg
         qml/icons/pause-dark.svg
+        qml/icons/pause-light.svg
+        qml/icons/pen-dark.svg
+        qml/icons/pen-light.svg
         qml/icons/pin-dark.svg
+        qml/icons/pin-outline-dark.svg
+        qml/icons/pin-outline-light.svg
         qml/icons/play-dark.svg
+        qml/icons/play-light.svg
         qml/icons/refresh-light.svg
         qml/icons/settings-dark.svg
         qml/icons/settings-light.svg
         qml/icons/skip-next-dark.svg
+        qml/icons/skip-next-light.svg
         qml/icons/skip-previous-dark.svg
+        qml/icons/skip-previous-light.svg
         qml/icons/sun-dark.svg
+        qml/icons/sun-light.svg
         qml/icons/trash-bin-trash-dark.svg
+        qml/icons/trash-bin-trash-light.svg
         qml/icons/trash-bin-trash-red.svg
         qml/icons/user-rounded-dark.svg
         qml/icons/volume-cross-dark.svg

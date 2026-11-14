@@ -102,7 +102,34 @@ Item {
     readonly property color bandBorder: useCustomPalette ? customBorder : currentBand.border
     readonly property color bandDeep: useCustomPalette ? customDeep : currentBand.deep
     readonly property color hoverTint: useCustomPalette ? "#E8F4FF" : currentBand.hoverTint
+    function _clamp01(v) {
+        return Math.max(0.0, Math.min(1.0, Number(v) || 0.0))
+    }
+
+    function _barTint(c, mul, add, alpha, minR, minG, minB) {
+        if (!c)
+            return Qt.rgba(minR, minG, minB, alpha)
+        const r = Number(c.r)
+        const g = Number(c.g)
+        const b = Number(c.b)
+        if (!isFinite(r) || !isFinite(g) || !isFinite(b))
+            return Qt.rgba(minR, minG, minB, alpha)
+        return Qt.rgba(
+            Math.max(minR, _clamp01(r * mul + add)),
+            Math.max(minG, _clamp01(g * mul + add)),
+            Math.max(minB, _clamp01(b * mul + add)),
+            alpha
+        )
+    }
+
     readonly property color darkInk: "#1A1B2E"
+    readonly property color barBodyColor: _barTint(bandDeep, 0.72, 0.0, 0.94, 0.06, 0.07, 0.11)
+    readonly property color barRimColor: _barTint(bandBorder, 1.28, 0.07, 0.96, 0.16, 0.18, 0.28)
+    readonly property color barShadeColor: Qt.rgba(0.04, 0.05, 0.10, 0.88)
+    readonly property color barChipColor: _barTint(bandBorder, 0.95, 0.08, 0.64, 0.14, 0.16, 0.25)
+    readonly property color barChipHover: _barTint(bandBorder, 1.20, 0.14, 0.82, 0.20, 0.22, 0.34)
+    readonly property color barInkColor: "#EAEFF8"
+    readonly property color barMutedInk: "#A6B4CC"
     readonly property string bandName: useCustomPalette ? "Wallpaper Match" : currentBand.name
     readonly property string bandShort: useCustomPalette ? "WALL" : currentBand.shortName
 
@@ -165,6 +192,8 @@ Item {
     }
 
     // Bar customization
+    property string barEdge: ConfigStore.stringValue("bar.edge", "top")
+    readonly property bool barVertical: barEdge === "left" || barEdge === "right"
     property string barStyle: ConfigStore.stringValue("bar.style", "transparent")
     property bool barAutoHide: ConfigStore.boolValue("bar.autoHide", false)
     property bool barShowActiveWindow: ConfigStore.boolValue("bar.showActiveWindow", true)
@@ -173,7 +202,15 @@ Item {
     property bool barShowStats: ConfigStore.boolValue("bar.showStats", true)
     property bool barShowClock: ConfigStore.boolValue("bar.showClock", true)
     property bool barShowTray: ConfigStore.boolValue("bar.showTray", true)
+    readonly property int barStripThickness: barVertical
+        ? ((barStyle === "float" || barStyle === "capsule") ? 50 : 44)
+        : ((barStyle === "float" || barStyle === "capsule") ? 36 : 30)
 
+    function setBarEdge(v) {
+        const s = (v === "bottom" || v === "left" || v === "right") ? v : "top"
+        barEdge = s
+        ConfigStore.set("bar.edge", s)
+    }
     function setBarStyle(v) {
         const s = (v === "float" || v === "straight" || v === "capsule" || v === "transparent") ? v : "transparent"
         barStyle = s
@@ -188,13 +225,23 @@ Item {
     function setBarShowTray(v) { barShowTray = !!v; ConfigStore.set("bar.showTray", barShowTray) }
 
     // Dock customization
+    property string dockEdge: ConfigStore.stringValue("dock.edge", "bottom")
+    readonly property bool dockVertical: dockEdge === "left" || dockEdge === "right"
     property string dockStyle: ConfigStore.stringValue("dock.style", "capsule")
+    property string dockIconShape: ConfigStore.stringValue("dock.iconShape", "auto")
     property int dockTileSize: Math.max(40, Math.min(64, ConfigStore.intValue("dock.tileSize", 48)))
     property bool dockMagnify: ConfigStore.boolValue("dock.magnify", true)
     property bool dockShowFinder: ConfigStore.boolValue("dock.showFinder", false)
     property bool dockShowClipboard: ConfigStore.boolValue("dock.showClipboard", false)
     property bool dockShowDropShelf: ConfigStore.boolValue("dock.showDropShelf", false)
     property bool dockShowTrash: ConfigStore.boolValue("dock.showTrash", false)
+    property bool dockShowMedia: ConfigStore.boolValue("dock.showMedia", true)
+
+    function setDockEdge(v) {
+        const s = (v === "top" || v === "left" || v === "right") ? v : "bottom"
+        dockEdge = s
+        ConfigStore.set("dock.edge", s)
+    }
 
     Component.onCompleted: {
         if (!ConfigStore.boolValue("dock.toolsMigratedV6", false)) {
@@ -216,6 +263,11 @@ Item {
         dockStyle = s
         ConfigStore.set("dock.style", s)
     }
+    function setDockIconShape(v) {
+        const s = (v === "circle" || v === "square") ? v : "auto"
+        dockIconShape = s
+        ConfigStore.set("dock.iconShape", s)
+    }
     function setDockTileSize(v) {
         const n = Number(v)
         const sz = isNaN(n) ? 48 : Math.max(40, Math.min(64, Math.round(n)))
@@ -227,6 +279,7 @@ Item {
     function setDockShowClipboard(v) { dockShowClipboard = !!v; ConfigStore.set("dock.showClipboard", dockShowClipboard) }
     function setDockShowDropShelf(v) { dockShowDropShelf = !!v; ConfigStore.set("dock.showDropShelf", dockShowDropShelf) }
     function setDockShowTrash(v) { dockShowTrash = !!v; ConfigStore.set("dock.showTrash", dockShowTrash) }
+    function setDockShowMedia(v) { dockShowMedia = !!v; ConfigStore.set("dock.showMedia", dockShowMedia) }
 
     // Edit Desktop mode state
     property bool editMode: false
@@ -300,14 +353,18 @@ Item {
             accentA: String(accentA),
             accentB: String(accentB),
             screenRoundEnabled: screenRoundEnabled,
+            dockEdge: dockEdge,
             dockAutoHide: dockAutoHide,
             dockStyle: dockStyle,
+            dockIconShape: dockIconShape,
             dockTileSize: dockTileSize,
             dockMagnify: dockMagnify,
             dockShowFinder: dockShowFinder,
             dockShowClipboard: dockShowClipboard,
             dockShowDropShelf: dockShowDropShelf,
             dockShowTrash: dockShowTrash,
+            dockShowMedia: dockShowMedia,
+            barEdge: barEdge,
             barStyle: barStyle,
             barAutoHide: barAutoHide,
             barShowActiveWindow: barShowActiveWindow,
@@ -360,14 +417,18 @@ Item {
             setBand(String(data.bandId))
         }
         if (data.screenRoundEnabled !== undefined) setScreenRound(data.screenRoundEnabled)
+        if (data.dockEdge !== undefined) setDockEdge(data.dockEdge)
         if (data.dockAutoHide !== undefined) setDockAutoHide(data.dockAutoHide)
         if (data.dockStyle !== undefined) setDockStyle(data.dockStyle)
+        if (data.dockIconShape !== undefined) setDockIconShape(data.dockIconShape)
         if (data.dockTileSize !== undefined) setDockTileSize(data.dockTileSize)
         if (data.dockMagnify !== undefined) setDockMagnify(data.dockMagnify)
         if (data.dockShowFinder !== undefined) setDockShowFinder(data.dockShowFinder)
         if (data.dockShowClipboard !== undefined) setDockShowClipboard(data.dockShowClipboard)
         if (data.dockShowDropShelf !== undefined) setDockShowDropShelf(data.dockShowDropShelf)
         if (data.dockShowTrash !== undefined) setDockShowTrash(data.dockShowTrash)
+        if (data.dockShowMedia !== undefined) setDockShowMedia(data.dockShowMedia)
+        if (data.barEdge !== undefined) setBarEdge(data.barEdge)
         if (data.barStyle !== undefined) setBarStyle(data.barStyle)
         if (data.barAutoHide !== undefined) setBarAutoHide(data.barAutoHide)
         if (data.barShowActiveWindow !== undefined) setBarShowActiveWindow(data.barShowActiveWindow)

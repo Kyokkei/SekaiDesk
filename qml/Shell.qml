@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import QtQuick.Window
 import Quickshell
 import SekaiDesk
@@ -16,20 +17,38 @@ PanelWindow {
     id: dockWindow
     visible: true
 
+    readonly property string edge: themeHub.dockEdge
+    readonly property bool isVertical: themeHub.dockVertical
+    readonly property bool isTop: edge === "top"
+    readonly property bool isBottom: edge === "bottom"
+    readonly property bool isLeft: edge === "left"
+    readonly property bool isRight: edge === "right"
+    readonly property bool isCapsule: themeHub.dockStyle === "capsule"
+    readonly property bool isTransparent: themeHub.dockStyle === "transparent"
+    readonly property bool circleIcons: themeHub.dockIconShape === "circle"
+        || (themeHub.dockIconShape === "auto" && isCapsule)
+
     readonly property int baseTileSize: themeHub.dockTileSize
     readonly property int maxTileSize: themeHub.dockMagnify ? Math.round(themeHub.dockTileSize * 1.65) : themeHub.dockTileSize
-    readonly property int baseIconSize: Math.round(baseTileSize * 0.7)
+    readonly property int baseIconSize: Math.round(baseTileSize * 0.72)
     readonly property int maxIconSize: Math.round(maxTileSize * 0.78)
-    readonly property int tileGap: 8
-    readonly property int pillPadX: 14
-    readonly property int pillPadY: 10
-    readonly property int shadowOffset: 4
+    readonly property int tileGap: isCapsule ? 7 : 8
+    readonly property int pillMainPad: isCapsule ? 12 : 14
+    readonly property int pillCrossPad: isCapsule ? 9 : 10
+    readonly property int maxPillCross: baseTileSize + pillCrossPad * 2
+    readonly property int mediaTileExtent: isVertical ? baseTileSize : Math.max(248, Math.round(baseTileSize * 5.4))
+    readonly property int dividerExtent: 4
+    readonly property int shadowOffset: isTransparent ? 0 : (isCapsule ? 3 : 4)
     readonly property int headroom: Math.max(14, maxTileSize - baseTileSize + 14)
-    readonly property int hoverPadX: 96
+    readonly property int hoverPadMain: 96
+    readonly property int baseMargin: 10
+    readonly property int sameEdgeBarClearance: (themeHub.barEdge === dockWindow.edge && !themeHub.barAutoHide && !topBarWindow.fullscreenActive)
+        ? (themeHub.barStripThickness + 6)
+        : 0
 
     readonly property real waveRadius: 128.0
     property bool dockHovered: pillHover.hovered
-    property real pointerX: 0
+    property real pointerAxis: 0
     property real waveStrength: (dockHovered && dragFromSlot < 0) ? 1.0 : 0.0
 
     Item {
@@ -39,17 +58,27 @@ PanelWindow {
 
     ThemeHub {
         id: themeHub
-        screenW: screenMetrics.Screen.width > 0 ? screenMetrics.Screen.width : (topBarWindow.width > 0 ? topBarWindow.width : 1920)
+        screenW: screenMetrics.Screen.width > 0 ? screenMetrics.Screen.width : 1920
         screenH: screenMetrics.Screen.height > 0 ? screenMetrics.Screen.height : 1080
     }
 
-    // Phase 3: Dock Auto-Hide / Dodge Active Window (plus unconditional fullscreen hide)
+    // Phase 3: Dock Auto-Hide / Dodge Active Window across all 4 edges (plus unconditional fullscreen hide)
     property bool dockAutoHideEnabled: themeHub.dockAutoHide
+    readonly property bool dockEdgeOverlap: isTop ? WindowTracker.topOverlap
+        : (isLeft ? WindowTracker.leftOverlap
+            : (isRight ? WindowTracker.rightOverlap : WindowTracker.dockOverlap))
+    readonly property bool dockEdgeHovered: isTop ? WindowTracker.topEdgeHovered
+        : (isLeft ? WindowTracker.leftEdgeHovered
+            : (isRight ? WindowTracker.rightEdgeHovered : WindowTracker.bottomEdgeHovered))
+    readonly property bool barHoverWakesDock: themeHub.barEdge === dockWindow.edge
+        && !themeHub.barAutoHide
+        && topBarHover.hovered
     readonly property bool dockShouldHide: topBarWindow.fullscreenActive
         || (dockAutoHideEnabled
-            && WindowTracker.dockOverlap
-            && !WindowTracker.bottomEdgeHovered
+            && dockEdgeOverlap
+            && !dockEdgeHovered
             && !dockHovered
+            && !barHoverWakesDock
             && dragFromSlot < 0
             && !ctxOpen
             && activePreviewTarget === ""
@@ -58,12 +87,15 @@ PanelWindow {
     Behavior on hideProgress {
         NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
     }
-    readonly property real hideOffsetY: hideProgress * (baseTileSize + pillPadY * 2 + shadowOffset + 20)
+    readonly property real hideTravel: maxPillCross + baseMargin + sameEdgeBarClearance + shadowOffset + 16
+    readonly property real hideOffsetX: isLeft ? (-hideProgress * hideTravel) : (isRight ? (hideProgress * hideTravel) : 0)
+    readonly property real hideOffsetY: isTop ? (-hideProgress * hideTravel) : (isBottom ? (hideProgress * hideTravel) : 0)
 
     // Preview state for Phase 1c
     property string hoveredAppTarget: ""
     property string hoveredAppName: ""
-    property real hoveredIconCenterX: 0
+    property real hoveredIconGlobalX: 0
+    property real hoveredIconGlobalY: 0
     property string activePreviewTarget: ""
     property string activePreviewName: ""
     property var activePreviewWindows: []
@@ -78,20 +110,33 @@ PanelWindow {
     property bool ctxRunning: false
     property bool ctxIsSeparator: false
     property int ctxPinnedIndex: -1
-    property real ctxCenterX: 0
+    property real ctxGlobalX: 0
+    property real ctxGlobalY: 0
 
-    // Phase 2b: Smooth unified drag-to-reorder across the entire app row
+    // Phase 2b: Smooth unified drag-to-reorder across the app row/column
     property int dragFromSlot: -1
     property int dragHoverSlot: -1
-    property real dragLiveX: 0
-    property real dragGrabOffsetX: 24
-    property real dragItemWidth: 48
+    property real dragLivePos: 0
+    property real dragGrabOffset: 24
+    property real dragItemSize: 48
     property var frozenDockItems: null
+
+    function appStartSlot() {
+        const list = dockItems
+        for (let i = 0; i < list.length; ++i) {
+            if (list[i].kind === "app")
+                return i
+        }
+        return -1
+    }
 
     function appSlotCount() {
         const list = dockItems
+        const start = appStartSlot()
+        if (start < 0)
+            return 0
         let count = 0
-        for (let i = 0; i < list.length; ++i) {
+        for (let i = start; i < list.length; ++i) {
             if (list[i].kind === "app")
                 count++
             else
@@ -100,18 +145,20 @@ PanelWindow {
         return count
     }
 
-    function updateDragHover(curCenterRowX) {
+    function updateDragHover(curCenterRowPos) {
         const list = dockItems
         if (dragFromSlot < 0)
             return
         let bestIdx = dragFromSlot
         let bestDist = 1e9
-        const step = baseTileSize + tileGap
         for (let i = 0; i < list.length; ++i) {
             if (list[i].kind !== "app")
-                break
-            const cx = i * step + baseTileSize * 0.5
-            const d = Math.abs(curCenterRowX - cx)
+                continue
+            const offset = (layoutData.offsets && layoutData.offsets[i] !== undefined)
+                ? layoutData.offsets[i]
+                : (i * (baseTileSize + tileGap))
+            const cx = offset + baseTileSize * 0.5
+            const d = Math.abs(curCenterRowPos - cx)
             if (d < bestDist) {
                 bestDist = d
                 bestIdx = i
@@ -127,21 +174,29 @@ PanelWindow {
         frozenDockItems = null
         dragFromSlot = -1
         dragHoverSlot = -1
-        dragLiveX = 0
+        dragLivePos = 0
         if (from >= 0 && to >= 0 && from !== to) {
+            let firstApp = -1
             const apps = []
             for (let i = 0; i < list.length; ++i) {
                 const it = list[i]
-                if (it.kind !== "app")
-                    break
-                apps.push({
-                    name: it.name || "App",
-                    target: it.target || "",
-                    args: it.args || "",
-                    pinned: !!it.pinned
-                })
+                if (it.kind === "app") {
+                    if (firstApp < 0)
+                        firstApp = i
+                    apps.push({
+                        name: it.name || "App",
+                        target: it.target || "",
+                        args: it.args || "",
+                        pinned: !!it.pinned
+                    })
+                }
             }
-            AppLauncher.reorderDock(apps, from, to)
+            if (firstApp >= 0) {
+                const relFrom = from - firstApp
+                const relTo = to - firstApp
+                if (relFrom >= 0 && relFrom < apps.length && relTo >= 0 && relTo < apps.length && relFrom !== relTo)
+                    AppLauncher.reorderDock(apps, relFrom, relTo)
+            }
         }
     }
 
@@ -149,17 +204,29 @@ PanelWindow {
         NumberAnimation { duration: 130; easing.type: Easing.OutCubic }
     }
 
-    // Combined list: pinned apps + (divider + unpinned running apps) + quit key
+    // SekaiPop order: [Tools] | [Pinned & Running Apps] | [Pin Toggle] | [Media Player]
     readonly property var dockItems: {
         const pinned = AppLauncher.pinnedApps || []
         const running = WindowTracker.runningApps || []
         const items = []
         const seenExe = {}
 
+        if (themeHub.dockShowFinder)
+            items.push({ kind: "finder", name: "Spotlight" })
+        if (themeHub.dockShowClipboard)
+            items.push({ kind: "clipboard", name: "Clipboard" })
+        if (themeHub.dockShowDropShelf)
+            items.push({ kind: "dropshelf", name: "Drop Shelf" })
+        if (themeHub.dockShowTrash)
+            items.push({ kind: "trash", name: "Trash" })
+
+        const hasTools = items.length > 0
+
         function normKey(p) {
             return String(p || "").trim().replace(/\//g, "\\").toLowerCase()
         }
 
+        const appItems = []
         for (let i = 0; i < pinned.length; ++i) {
             const p = pinned[i]
             if (p.kind === "separator")
@@ -168,7 +235,7 @@ PanelWindow {
             if (k !== "")
                 seenExe[k] = true
             const st = WindowTracker.stateForTarget(p.target || "")
-            items.push({
+            appItems.push({
                 kind: "app",
                 name: p.name || "",
                 target: p.target || "",
@@ -182,12 +249,11 @@ PanelWindow {
             })
         }
 
-        const extra = []
         for (let j = 0; j < running.length; ++j) {
             const r = running[j]
             const rk = normKey(r.target)
             if (!seenExe[rk]) {
-                extra.push({
+                appItems.push({
                     kind: "app",
                     name: r.name || "",
                     target: r.target || "",
@@ -201,93 +267,100 @@ PanelWindow {
             }
         }
 
-        for (let k = 0; k < extra.length; ++k)
-            items.push(extra[k])
-
-        const hasTools = themeHub.dockShowFinder || themeHub.dockShowClipboard || themeHub.dockShowDropShelf || themeHub.dockShowTrash
-        if (hasTools && items.length > 0)
+        if (hasTools && appItems.length > 0)
             items.push({ kind: "divider" })
-        if (themeHub.dockShowFinder)
-            items.push({ kind: "finder", name: "Spotlight" })
-        if (themeHub.dockShowClipboard)
-            items.push({ kind: "clipboard", name: "Clipboard" })
-        if (themeHub.dockShowDropShelf)
-            items.push({ kind: "dropshelf", name: "Drop Shelf" })
-        if (themeHub.dockShowTrash)
-            items.push({ kind: "trash", name: "Trash" })
+
+        for (let a = 0; a < appItems.length; ++a)
+            items.push(appItems[a])
+
+        if (themeHub.dockShowMedia && MediaService.hasSession) {
+            if (items.length > 0)
+                items.push({ kind: "divider" })
+            items.push({ kind: "media", name: "Media" })
+        }
 
         return items
     }
 
     function isDockKeycapKind(k) {
-        return k === "app" || k === "trash" || k === "finder" || k === "clipboard" || k === "dropshelf"
+        return k === "app" || k === "trash" || k === "finder" || k === "clipboard" || k === "dropshelf" || (k === "media" && dockWindow.isVertical)
     }
 
-    readonly property real idleTotalWidth: {
+    readonly property real idleTotalExtent: {
         const list = dockItems
         const n = list.length
-        let bx = 0
+        let bpos = 0
         for (let i = 0; i < n; ++i) {
             const it = list[i]
             const bw = isDockKeycapKind(it.kind)
                 ? baseTileSize
-                : (it.kind === "media" ? 124 : 8)
-            bx += bw + (i < n - 1 ? tileGap : 0)
+                : (it.kind === "media" ? mediaTileExtent : dividerExtent)
+            bpos += bw + (i < n - 1 ? tileGap : 0)
         }
-        return Math.max(1, bx)
+        return Math.max(1, bpos)
     }
 
-    // One-pass Cosine Magnification layout solver
+    // One-pass Cosine Magnification layout solver (shared main axis for Horizontal & Vertical)
     readonly property var layoutData: {
         const list = dockItems
         const n = list.length
         const baseCenters = []
-        let bx = 0
+        let bpos = 0
         for (let i = 0; i < n; ++i) {
             const it = list[i]
             const bw = isDockKeycapKind(it.kind)
                 ? baseTileSize
-                : (it.kind === "media" ? 124 : 8)
-            baseCenters.push(bx + bw * 0.5)
-            bx += bw + (i < n - 1 ? tileGap : 0)
+                : (it.kind === "media" ? mediaTileExtent : dividerExtent)
+            baseCenters.push(bpos + bw * 0.5)
+            bpos += bw + (i < n - 1 ? tileGap : 0)
         }
 
-        const widths = []
-        const xs = []
+        const sizes = []
+        const offsets = []
         const weights = []
-        let cx = 0
+        let cpos = 0
         for (let i = 0; i < n; ++i) {
             const it = list[i]
             let w = 0.0
             if (themeHub.dockMagnify && isDockKeycapKind(it.kind) && waveStrength > 0.001) {
-                const dist = Math.abs(pointerX - baseCenters[i])
+                const dist = Math.abs(pointerAxis - baseCenters[i])
                 if (dist < waveRadius) {
                     w = 0.5 * (1.0 + Math.cos(Math.PI * dist / waveRadius)) * waveStrength
                 }
             }
             weights.push(w)
-            const curW = isDockKeycapKind(it.kind)
+            const curS = isDockKeycapKind(it.kind)
                 ? (baseTileSize + (maxTileSize - baseTileSize) * w)
-                : (it.kind === "media" ? 124 : 8)
-            widths.push(curW)
-            xs.push(cx)
-            cx += curW + (i < n - 1 ? tileGap : 0)
+                : (it.kind === "media" ? mediaTileExtent : dividerExtent)
+            sizes.push(curS)
+            offsets.push(cpos)
+            cpos += curS + (i < n - 1 ? tileGap : 0)
         }
 
         return {
-            totalWidth: Math.max(1, cx),
-            xs: xs,
-            widths: widths,
+            totalExtent: Math.max(1, cpos),
+            offsets: offsets,
+            sizes: sizes,
             weights: weights
         }
     }
 
-    // Fixed window width so mouse sweep NEVER calls SetWindowPos or SetWindowRgn.
-    width: idleTotalWidth + pillPadX * 2 + hoverPadX + shadowOffset
-    height: headroom + baseTileSize + pillPadY * 2 + shadowOffset
+    // Fixed window extent so mouse sweep NEVER calls SetWindowPos or SetWindowRgn.
+    width: isVertical
+        ? (headroom + maxPillCross + shadowOffset)
+        : (idleTotalExtent + pillMainPad * 2 + hoverPadMain + shadowOffset)
+    height: isVertical
+        ? (idleTotalExtent + pillMainPad * 2 + hoverPadMain + shadowOffset)
+        : (headroom + maxPillCross + shadowOffset)
 
-    anchors.bottom: true
-    anchors.margins.bottom: 10
+    anchors.left: isLeft
+    anchors.right: isRight
+    anchors.top: isTop
+    anchors.bottom: isBottom
+    anchors.margins.left: isLeft ? (baseMargin + sameEdgeBarClearance) : 0
+    anchors.margins.right: isRight ? (baseMargin + sameEdgeBarClearance) : 0
+    anchors.margins.top: isTop ? (baseMargin + sameEdgeBarClearance) : 0
+    anchors.margins.bottom: isBottom ? (baseMargin + sameEdgeBarClearance) : 0
     clickThrough: topBarWindow.fullscreenActive || dockWindow.hideProgress > 0.5
 
     // When hidden (or fullscreen active), mask is empty (100% click-through). When idle, mask strictly to the static idle pill rect;
@@ -298,12 +371,19 @@ PanelWindow {
             ? []
             : (dockWindow.dockHovered || dockWindow.waveStrength > 0.02
                 ? [{ x: 0, y: 0, width: dockWindow.width, height: dockWindow.height }]
-                : [{
-                    x: (dockWindow.width - dockWindow.shadowOffset - (dockWindow.idleTotalWidth + dockWindow.pillPadX * 2)) * 0.5,
-                    y: dockWindow.headroom,
-                    width: dockWindow.idleTotalWidth + dockWindow.pillPadX * 2 + dockWindow.shadowOffset,
-                    height: dockWindow.baseTileSize + dockWindow.pillPadY * 2 + dockWindow.shadowOffset
-                }]))
+                : (dockWindow.isVertical
+                    ? [{
+                        x: dockWindow.isLeft ? 0 : dockWindow.headroom,
+                        y: (dockWindow.height - dockWindow.shadowOffset - (dockWindow.idleTotalExtent + dockWindow.pillMainPad * 2)) * 0.5,
+                        width: dockWindow.maxPillCross + dockWindow.shadowOffset,
+                        height: dockWindow.idleTotalExtent + dockWindow.pillMainPad * 2 + dockWindow.shadowOffset
+                    }]
+                    : [{
+                        x: (dockWindow.width - dockWindow.shadowOffset - (dockWindow.idleTotalExtent + dockWindow.pillMainPad * 2)) * 0.5,
+                        y: dockWindow.isTop ? 0 : dockWindow.headroom,
+                        width: dockWindow.idleTotalExtent + dockWindow.pillMainPad * 2 + dockWindow.shadowOffset,
+                        height: dockWindow.maxPillCross + dockWindow.shadowOffset
+                    }])))
 
     Timer {
         id: previewShowTimer
@@ -354,28 +434,44 @@ PanelWindow {
 
     // Hard flat offset shadow
     Rectangle {
-        visible: themeHub.dockStyle !== "transparent"
+        visible: !dockWindow.isTransparent
         x: dockPill.x + dockWindow.shadowOffset
-        y: dockWindow.headroom + dockWindow.shadowOffset + dockWindow.hideOffsetY
+        y: dockPill.y + dockWindow.shadowOffset
         width: dockPill.width
         height: dockPill.height
         radius: dockPill.radius
-        color: "#1A1B2E"
+        color: dockWindow.isCapsule ? themeHub.barShadeColor : "#1A1B2E"
     }
 
     // Main Dock Pill (centered in fixed dockWindow)
     Rectangle {
         id: dockPill
-        x: (dockWindow.width - dockWindow.shadowOffset - width) * 0.5
-        y: dockWindow.headroom + dockWindow.hideOffsetY
-        width: dockWindow.layoutData.totalWidth + dockWindow.pillPadX * 2
-        height: dockWindow.baseTileSize + dockWindow.pillPadY * 2
-        radius: themeHub.dockStyle === "capsule" ? Math.round(height * 0.5) : 20
-        color: themeHub.dockStyle === "transparent" ? Qt.rgba(26/255, 27/255, 46/255, 0.28) : "#1A1B2E"
+        x: (dockWindow.isVertical
+                ? (dockWindow.isLeft ? 0 : dockWindow.headroom)
+                : ((dockWindow.width - dockWindow.shadowOffset - width) * 0.5))
+            + dockWindow.hideOffsetX
+        y: (dockWindow.isVertical
+                ? ((dockWindow.height - dockWindow.shadowOffset - height) * 0.5)
+                : (dockWindow.isTop ? 0 : dockWindow.headroom))
+            + dockWindow.hideOffsetY
+        width: dockWindow.isVertical
+            ? dockWindow.maxPillCross
+            : (dockWindow.layoutData.totalExtent + dockWindow.pillMainPad * 2)
+        height: dockWindow.isVertical
+            ? (dockWindow.layoutData.totalExtent + dockWindow.pillMainPad * 2)
+            : dockWindow.maxPillCross
+        radius: dockWindow.isCapsule
+            ? Math.round(Math.min(width, height) * 0.5)
+            : 20
+        color: dockWindow.isTransparent
+            ? "transparent"
+            : (dockWindow.isCapsule ? themeHub.barBodyColor : "#1A1B2E")
+        border.width: dockWindow.isCapsule ? 2.5 : 0
+        border.color: dockWindow.isCapsule ? themeHub.barRimColor : "transparent"
 
-        // White inner ring
+        // White inner ring (Float sticker style only)
         Rectangle {
-            visible: themeHub.dockStyle !== "transparent"
+            visible: !dockWindow.isTransparent && !dockWindow.isCapsule
             anchors.fill: parent
             anchors.margins: 2.5
             radius: Math.max(4, parent.radius - 2.5)
@@ -393,18 +489,23 @@ PanelWindow {
         HoverHandler {
             id: pillHover
             onPointChanged: {
-                // Map pointer relative to idle row center so wave centers stay stable
-                const idleLeft = (dockPill.width - dockWindow.idleTotalWidth) * 0.5
-                dockWindow.pointerX = point.position.x - idleLeft
+                // Map pointer relative to idle row/col center so wave centers stay stable
+                if (dockWindow.isVertical) {
+                    const idleTop = (dockPill.height - dockWindow.idleTotalExtent) * 0.5
+                    dockWindow.pointerAxis = point.position.y - idleTop
+                } else {
+                    const idleLeft = (dockPill.width - dockWindow.idleTotalExtent) * 0.5
+                    dockWindow.pointerAxis = point.position.x - idleLeft
+                }
             }
         }
 
         Item {
             id: dockRow
-            x: dockWindow.pillPadX
-            y: dockWindow.pillPadY
-            width: dockWindow.layoutData.totalWidth
-            height: dockWindow.baseTileSize
+            x: dockWindow.isVertical ? dockWindow.pillCrossPad : dockWindow.pillMainPad
+            y: dockWindow.isVertical ? dockWindow.pillMainPad : dockWindow.pillCrossPad
+            width: dockWindow.isVertical ? dockWindow.baseTileSize : dockWindow.layoutData.totalExtent
+            height: dockWindow.isVertical ? dockWindow.layoutData.totalExtent : dockWindow.baseTileSize
 
             Repeater {
                 model: (dockWindow.dragFromSlot >= 0 && dockWindow.frozenDockItems)
@@ -421,18 +522,18 @@ PanelWindow {
                             dockWindow.frozenDockItems = null
                             dockWindow.dragFromSlot = -1
                             dockWindow.dragHoverSlot = -1
-                            dockWindow.dragLiveX = 0
+                            dockWindow.dragLivePos = 0
                         }
                     }
 
                     readonly property real wFactor: dockWindow.layoutData.weights[index] || 0
-                    readonly property real slotW: dockWindow.layoutData.widths[index] || dockWindow.baseTileSize
-                    readonly property real slotX: dockWindow.layoutData.xs[index] || 0
+                    readonly property real slotSize: dockWindow.layoutData.sizes[index] || dockWindow.baseTileSize
+                    readonly property real slotPos: dockWindow.layoutData.offsets[index] || 0
                     readonly property bool isAppItem: modelData.kind === "app"
                     readonly property int pIdx: (modelData.pinned && modelData.pinnedIndex !== undefined)
                         ? modelData.pinnedIndex : -1
                     readonly property bool isDraggingThis: isAppItem && dockWindow.dragFromSlot >= 0 && index === dockWindow.dragFromSlot
-                    property real dragShiftX: {
+                    property real dragShift: {
                         const from = dockWindow.dragFromSlot
                         const to = dockWindow.dragHoverSlot
                         if (from < 0 || !isAppItem || isDraggingThis)
@@ -445,47 +546,49 @@ PanelWindow {
                         return 0
                     }
 
-                    Behavior on dragShiftX {
-                        NumberAnimation { duration: 140; easing.type: Easing.OutCubic }
+                    Behavior on dragShift {
+                        NumberAnimation { duration: 130; easing.type: Easing.OutCubic }
                     }
                     Behavior on scale {
-                        NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
-                    }
-                    Behavior on y {
                         NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
                     }
 
                     z: isDraggingThis ? 100 : 1
                     scale: isDraggingThis ? 1.12 : 1.0
-                    y: isDraggingThis ? -6 : 0
-                    x: isDraggingThis ? dockWindow.dragLiveX : (slotX + dragShiftX)
-                    width: slotW
-                    height: dockWindow.baseTileSize
-
-                    Behavior on dragShiftX {
-                        NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
-                    }
+                    x: dockWindow.isVertical
+                        ? (isDraggingThis ? (dockWindow.isLeft ? 6 : -6) : 0)
+                        : (isDraggingThis ? dockWindow.dragLivePos : (slotPos + dragShift))
+                    y: dockWindow.isVertical
+                        ? (isDraggingThis ? dockWindow.dragLivePos : (slotPos + dragShift))
+                        : (isDraggingThis ? (dockWindow.isTop ? 6 : -6) : 0)
+                    width: dockWindow.isVertical ? dockWindow.baseTileSize : slotSize
+                    height: dockWindow.isVertical ? slotSize : dockWindow.baseTileSize
 
                     // --- App Keycap ---
                     Item {
                         id: appBox
                         visible: slot.modelData.kind === "app"
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.bottom: parent.bottom
-                        width: slot.slotW
-                        height: slot.slotW
+                        x: dockWindow.isRight ? (parent.width - width) : (dockWindow.isLeft ? 0 : (parent.width - width) * 0.5)
+                        y: dockWindow.isBottom ? (parent.height - height) : (dockWindow.isTop ? 0 : (parent.height - height) * 0.5)
+                        width: slot.slotSize
+                        height: slot.slotSize
 
                         readonly property bool hovered: appArea.containsMouse
                         readonly property bool pressed: appArea.pressed
-                        readonly property real curIconSize: dockWindow.baseIconSize
-                            + (dockWindow.maxIconSize - dockWindow.baseIconSize) * slot.wFactor
+                        readonly property bool isLit: appBox.hovered || !!slot.modelData.active
+                        readonly property bool unplugged: !slot.modelData.running && !appBox.hovered
+                        readonly property real curIconSize: dockWindow.circleIcons
+                            ? Math.max(20, slot.slotSize - 6)
+                            : (dockWindow.baseIconSize + (dockWindow.maxIconSize - dockWindow.baseIconSize) * slot.wFactor)
 
                         onHoveredChanged: {
                             if (hovered && slot.modelData.running) {
                                 dockWindow.hoveredAppTarget = slot.modelData.target || ""
                                 dockWindow.hoveredAppName = slot.modelData.name || ""
-                                dockWindow.hoveredIconCenterX = dockWindow.x + dockPill.x
-                                    + dockRow.x + slot.slotX + slot.slotW * 0.5
+                                dockWindow.hoveredIconGlobalX = dockWindow.x + dockPill.x
+                                    + dockRow.x + slot.x + slot.width * 0.5
+                                dockWindow.hoveredIconGlobalY = dockWindow.y + dockPill.y
+                                    + dockRow.y + slot.y + slot.height * 0.5
                                 previewHideTimer.stop()
                                 previewShowTimer.restart()
                             } else if (!hovered && dockWindow.hoveredAppTarget === (slot.modelData.target || "")) {
@@ -495,8 +598,35 @@ PanelWindow {
                             }
                         }
 
-                        // Keycap bottom lip
+                        // Multi-window peeking sheets behind key (SekaiPop signature)
                         Rectangle {
+                            visible: !!slot.modelData.running && (slot.modelData.count || 0) > 2
+                            x: -3
+                            y: -2
+                            width: keyCap.width
+                            height: keyCap.height
+                            radius: dockWindow.circleIcons ? Math.round(height * 0.5) : keyCap.radius
+                            rotation: -9
+                            color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
+                            border.width: 1.5
+                            border.color: dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E"
+                        }
+                        Rectangle {
+                            visible: !!slot.modelData.running && (slot.modelData.count || 0) > 1
+                            x: 2
+                            y: -3
+                            width: keyCap.width
+                            height: keyCap.height
+                            radius: dockWindow.circleIcons ? Math.round(height * 0.5) : keyCap.radius
+                            rotation: 7
+                            color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
+                            border.width: 1.5
+                            border.color: dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E"
+                        }
+
+                        // Keycap bottom lip (Float square keycap only)
+                        Rectangle {
+                            visible: !dockWindow.isCapsule && !dockWindow.circleIcons
                             anchors.fill: keyCap
                             anchors.topMargin: 2.5
                             anchors.bottomMargin: -2.5
@@ -509,38 +639,94 @@ PanelWindow {
                             id: keyCap
                             width: parent.width
                             height: parent.height
-                            y: appBox.pressed ? 2.5 : (appBox.hovered ? -2 : 0)
-                            radius: 13 + 5 * slot.wFactor
-                            color: appBox.hovered ? "#E0F2FE" : "#FFFFFF"
-                            border.width: 2
-                            border.color: appBox.hovered ? "#0284C7" : "#1A1B2E"
+                            x: appBox.pressed
+                                ? (dockWindow.isLeft ? -2 : (dockWindow.isRight ? 2 : 0))
+                                : (appBox.hovered ? (dockWindow.isLeft ? 2 : (dockWindow.isRight ? -2 : 0)) : 0)
+                            y: appBox.pressed
+                                ? (dockWindow.isTop ? -2 : (dockWindow.isBottom ? 2 : 0))
+                                : (appBox.hovered ? (dockWindow.isTop ? 2 : (dockWindow.isBottom ? -2 : 0)) : 0)
+                            radius: dockWindow.circleIcons
+                                ? Math.round(Math.min(width, height) * 0.5)
+                                : (13 + 5 * slot.wFactor)
+                            color: dockWindow.isCapsule
+                                ? (appBox.hovered ? themeHub.barChipHover : themeHub.barBodyColor)
+                                : (appBox.hovered ? "#E0F2FE" : "#FFFFFF")
+                            border.width: dockWindow.isCapsule ? (appBox.isLit ? 2.5 : 2) : 2
+                            border.color: dockWindow.isCapsule
+                                ? (appBox.isLit ? themeHub.accentA : themeHub.barRimColor)
+                                : (appBox.isLit ? themeHub.accentA : "#1A1B2E")
 
-                            Image {
+                            Item {
+                                id: appIconBox
                                 anchors.centerIn: parent
                                 width: appBox.curIconSize
                                 height: appBox.curIconSize
-                                source: "image://winicon/" + encodeURIComponent(slot.modelData.target || "")
-                                sourceSize: Qt.size(dockWindow.maxIconSize, dockWindow.maxIconSize)
-                                smooth: true
-                                mipmap: true
+
+                                Item {
+                                    id: appIconLayer
+                                    anchors.fill: parent
+                                    layer.enabled: dockWindow.circleIcons && visible && width > 4 && height > 4
+                                    layer.smooth: true
+                                    layer.mipmap: true
+                                    layer.textureSize: Qt.size(Math.max(32, Math.round(width * 2)), Math.max(32, Math.round(height * 2)))
+                                    layer.effect: MultiEffect {
+                                        maskEnabled: dockWindow.circleIcons
+                                        maskSource: appIconMask
+                                        saturation: appBox.unplugged ? -0.45 : 0.0
+                                        brightness: appBox.unplugged ? -0.06 : 0.0
+                                    }
+
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: dockWindow.circleIcons ? parent.width * 1.06 : parent.width
+                                        height: dockWindow.circleIcons ? parent.height * 1.06 : parent.height
+                                        source: "image://winicon/" + encodeURIComponent(slot.modelData.target || "")
+                                        sourceSize: Qt.size(dockWindow.maxIconSize * 2, dockWindow.maxIconSize * 2)
+                                        smooth: true
+                                        mipmap: true
+                                        opacity: (!dockWindow.circleIcons && appBox.unplugged) ? 0.65 : 1.0
+                                    }
+                                }
+
+                                Item {
+                                    id: appIconMask
+                                    anchors.fill: parent
+                                    visible: false
+                                    layer.enabled: dockWindow.circleIcons && width > 4 && height > 4
+                                    layer.smooth: true
+                                    layer.textureSize: appIconLayer.layer.textureSize
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: Math.round(Math.min(width, height) * 0.5)
+                                        color: "black"
+                                        antialiasing: true
+                                    }
+                                }
                             }
                         }
 
-                        // Running Diamond Dot
+                        // Running Dot (SekaiPop: pastel round dot in Capsule / Circle, diamond in Square Keycap)
                         Rectangle {
                             visible: !!slot.modelData.running
-                            anchors.horizontalCenter: keyCap.horizontalCenter
-                            anchors.bottom: keyCap.bottom
-                            anchors.bottomMargin: -5
-                            width: 6
-                            height: 6
-                            rotation: 45
-                            radius: 1
-                            color: slot.modelData.active
-                                ? "#06B6D4"
-                                : (slot.modelData.minimized ? "#FFFFFF" : "#10B981")
-                            border.width: 1.5
-                            border.color: "#1A1B2E"
+                            width: dockWindow.circleIcons ? (slot.modelData.active ? 7 : 5) : 6
+                            height: width
+                            rotation: dockWindow.circleIcons ? 0 : 45
+                            radius: dockWindow.circleIcons ? Math.round(width * 0.5) : 1
+                            x: dockWindow.isLeft
+                                ? (dockWindow.isCapsule ? -7 : -5)
+                                : (dockWindow.isRight ? (keyCap.width + (dockWindow.isCapsule ? 2 : -1)) : ((keyCap.width - width) * 0.5))
+                            y: dockWindow.isBottom
+                                ? (keyCap.height + (dockWindow.isCapsule ? 2 : -1))
+                                : (dockWindow.isTop ? (dockWindow.isCapsule ? -7 : -5) : ((keyCap.height - height) * 0.5))
+                            color: slot.modelData.minimized
+                                ? "transparent"
+                                : (dockWindow.isCapsule
+                                    ? (slot.modelData.active ? themeHub.accentA : themeHub.accentB)
+                                    : (slot.modelData.active ? "#06B6D4" : "#10B981"))
+                            border.width: dockWindow.circleIcons ? (slot.modelData.minimized ? 1.5 : 0) : 1.5
+                            border.color: dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E"
+                            antialiasing: true
                         }
 
                         MouseArea {
@@ -550,15 +736,17 @@ PanelWindow {
                             preventStealing: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             cursorShape: slot.isDraggingThis ? Qt.ClosedHandCursor : Qt.PointingHandCursor
-                            property real pressGlobalX: 0
+                            property real pressGlobalMain: 0
                             property real grabRatio: 0.5
                             property bool didDrag: false
 
                             onPressed: (mouse) => {
                                 didDrag = false
                                 if (mouse.button === Qt.LeftButton) {
-                                    pressGlobalX = mapToGlobal(mouse.x, mouse.y).x
-                                    grabRatio = Math.max(0.15, Math.min(0.85, mouse.x / Math.max(1, slot.slotW)))
+                                    const g = mapToGlobal(mouse.x, mouse.y)
+                                    pressGlobalMain = dockWindow.isVertical ? g.y : g.x
+                                    const localAxis = dockWindow.isVertical ? mouse.y : mouse.x
+                                    grabRatio = Math.max(0.15, Math.min(0.85, localAxis / Math.max(1, slot.slotSize)))
                                 }
                             }
                             onPositionChanged: (mouse) => {
@@ -569,27 +757,33 @@ PanelWindow {
                                     }
                                     return
                                 }
-                                const globalX = mapToGlobal(mouse.x, mouse.y).x
-                                const dx = globalX - pressGlobalX
-                                const rowMouseX = dockRow.mapFromGlobal(globalX, 0).x
-                                if (!didDrag && Math.abs(dx) > 6) {
+                                const g = mapToGlobal(mouse.x, mouse.y)
+                                const globalMain = dockWindow.isVertical ? g.y : g.x
+                                const delta = globalMain - pressGlobalMain
+                                const rowLocal = dockRow.mapFromGlobal(g.x, g.y)
+                                const rowMousePos = dockWindow.isVertical ? rowLocal.y : rowLocal.x
+                                if (!didDrag && Math.abs(delta) > 6) {
                                     didDrag = true
                                     previewShowTimer.stop()
                                     dockWindow.activePreviewTarget = ""
                                     dockWindow.activePreviewWindows = []
                                     dockWindow.ctxOpen = false
-                                    dockWindow.dragItemWidth = dockWindow.baseTileSize
-                                    dockWindow.dragGrabOffsetX = grabRatio * dockWindow.baseTileSize
+                                    dockWindow.dragItemSize = dockWindow.baseTileSize
+                                    dockWindow.dragGrabOffset = grabRatio * dockWindow.baseTileSize
                                     dockWindow.frozenDockItems = dockWindow.dockItems
                                     dockWindow.dragFromSlot = slot.index
                                     dockWindow.dragHoverSlot = slot.index
                                 }
                                 if (didDrag) {
+                                    const firstIdx = dockWindow.appStartSlot()
                                     const maxApps = dockWindow.appSlotCount()
-                                    const maxX = Math.max(0, (maxApps - 1) * (dockWindow.baseTileSize + dockWindow.tileGap) + 8)
-                                    const rawX = rowMouseX - dockWindow.dragGrabOffsetX
-                                    dockWindow.dragLiveX = Math.max(-8, Math.min(maxX, rawX))
-                                    dockWindow.updateDragHover(dockWindow.dragLiveX + dockWindow.baseTileSize * 0.5)
+                                    const offs = dockWindow.layoutData.offsets || []
+                                    const minPos = (firstIdx >= 0 && offs[firstIdx] !== undefined) ? (offs[firstIdx] - 8) : -8
+                                    const lastIdx = firstIdx + Math.max(0, maxApps - 1)
+                                    const maxPos = (lastIdx >= 0 && offs[lastIdx] !== undefined) ? (offs[lastIdx] + 8) : 0
+                                    const rawPos = rowMousePos - dockWindow.dragGrabOffset
+                                    dockWindow.dragLivePos = Math.max(minPos, Math.min(maxPos, rawPos))
+                                    dockWindow.updateDragHover(dockWindow.dragLivePos + dockWindow.baseTileSize * 0.5)
                                 }
                             }
                             onReleased: {
@@ -618,8 +812,10 @@ PanelWindow {
                                     dockWindow.ctxArgs = slot.modelData.args || ""
                                     dockWindow.ctxPinned = !!slot.modelData.pinned
                                     dockWindow.ctxRunning = !!slot.modelData.running
-                                    dockWindow.ctxCenterX = dockWindow.x + dockPill.x
-                                        + dockRow.x + slot.slotX + slot.slotW * 0.5
+                                    dockWindow.ctxGlobalX = dockWindow.x + dockPill.x
+                                        + dockRow.x + slot.x + slot.width * 0.5
+                                    dockWindow.ctxGlobalY = dockWindow.y + dockPill.y
+                                        + dockRow.y + slot.y + slot.height * 0.5
                                     dockWindow.ctxOpen = true
                                     ctxAutoHideTimer.restart()
                                     return
@@ -645,8 +841,12 @@ PanelWindow {
 
                         Rectangle {
                             anchors.centerIn: parent
-                            width: (customSepArea.containsMouse || slot.isDraggingThis) ? 3 : 2
-                            height: dockWindow.baseTileSize - 12
+                            width: dockWindow.isVertical
+                                ? (dockWindow.baseTileSize - 12)
+                                : ((customSepArea.containsMouse || slot.isDraggingThis) ? 3 : 2)
+                            height: dockWindow.isVertical
+                                ? ((customSepArea.containsMouse || slot.isDraggingThis) ? 3 : 2)
+                                : (dockWindow.baseTileSize - 12)
                             radius: 1.5
                             color: (customSepArea.containsMouse || slot.isDraggingThis)
                                 ? "#0284C7" : "#94A3B8"
@@ -658,50 +858,8 @@ PanelWindow {
                             hoverEnabled: true
                             preventStealing: true
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
-                            cursorShape: slot.isDraggingThis ? Qt.ClosedHandCursor : Qt.SizeHorCursor
-                            property real pressGlobalX: 0
-                            property real startSlotCenterX: 0
-                            property bool didDrag: false
-
-                            onPressed: (mouse) => {
-                                didDrag = false
-                                if (mouse.button === Qt.LeftButton && slot.pIdx >= 0) {
-                                    pressGlobalX = mapToGlobal(mouse.x, mouse.y).x
-                                    startSlotCenterX = slot.slotX + slot.slotW * 0.5
-                                }
-                            }
-                            onPositionChanged: (mouse) => {
-                                if (!(mouse.buttons & Qt.LeftButton) || slot.pIdx < 0)
-                                    return
-                                const dx = mapToGlobal(mouse.x, mouse.y).x - pressGlobalX
-                                if (!didDrag && Math.abs(dx) > 5) {
-                                    didDrag = true
-                                    dockWindow.ctxOpen = false
-                                    dockWindow.dragItemWidth = slot.slotW
-                                    dockWindow.dragFromIdx = slot.pIdx
-                                    dockWindow.dragUnpinnedSlotIdx = -1
-                                    dockWindow.dragHoverIdx = slot.pIdx
-                                }
-                                if (didDrag) {
-                                    dockWindow.dragDeltaX = dx
-                                    dockWindow.updateDragHover(startSlotCenterX + dx)
-                                }
-                            }
-                            onReleased: {
-                                if (didDrag)
-                                    dockWindow.finishDrag()
-                            }
-                            onCanceled: {
-                                if (didDrag) {
-                                    didDrag = false
-                                    dockWindow.finishDrag()
-                                }
-                            }
+                            cursorShape: Qt.PointingHandCursor
                             onClicked: (mouse) => {
-                                if (didDrag) {
-                                    didDrag = false
-                                    return
-                                }
                                 if (mouse.button === Qt.RightButton) {
                                     previewShowTimer.stop()
                                     dockWindow.activePreviewTarget = ""
@@ -713,8 +871,10 @@ PanelWindow {
                                     dockWindow.ctxArgs = ""
                                     dockWindow.ctxPinned = true
                                     dockWindow.ctxRunning = false
-                                    dockWindow.ctxCenterX = dockWindow.x + dockPill.x
-                                        + dockRow.x + slot.slotX + slot.slotW * 0.5
+                                    dockWindow.ctxGlobalX = dockWindow.x + dockPill.x
+                                        + dockRow.x + slot.x + slot.width * 0.5
+                                    dockWindow.ctxGlobalY = dockWindow.y + dockPill.y
+                                        + dockRow.y + slot.y + slot.height * 0.5
                                     dockWindow.ctxOpen = true
                                     ctxAutoHideTimer.restart()
                                 }
@@ -726,25 +886,26 @@ PanelWindow {
                     Rectangle {
                         visible: slot.modelData.kind === "divider"
                         anchors.centerIn: parent
-                        width: 2
-                        height: dockWindow.baseTileSize - 14
-                        radius: 1
-                        color: "#CBD5E1"
+                        width: dockWindow.isVertical ? Math.round(dockWindow.baseTileSize * 0.56) : 3
+                        height: dockWindow.isVertical ? 3 : Math.round(dockWindow.baseTileSize * 0.56)
+                        radius: 2
+                        color: dockWindow.isCapsule ? themeHub.barRimColor : "#CBD5E1"
                     }
 
-                    // --- Native Trash Bin Keycap (Phase 1d) ---
+                    // --- Solar Trash Bin Keycap ---
                     Item {
                         id: trashBox
                         visible: slot.modelData.kind === "trash"
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.bottom: parent.bottom
-                        width: slot.slotW
-                        height: slot.slotW
+                        x: dockWindow.isRight ? (parent.width - width) : (dockWindow.isLeft ? 0 : (parent.width - width) * 0.5)
+                        y: dockWindow.isBottom ? (parent.height - height) : (dockWindow.isTop ? 0 : (parent.height - height) * 0.5)
+                        width: slot.slotSize
+                        height: slot.slotSize
 
                         readonly property bool hovered: trashArea.containsMouse
                         readonly property bool pressed: trashArea.pressed
 
                         Rectangle {
+                            visible: !dockWindow.isCapsule && !dockWindow.circleIcons
                             anchors.fill: trashCap
                             anchors.topMargin: 2.5
                             anchors.bottomMargin: -2.5
@@ -757,100 +918,51 @@ PanelWindow {
                             id: trashCap
                             width: parent.width
                             height: parent.height
-                            y: trashBox.pressed ? 2.5 : (trashBox.hovered ? -2 : 0)
-                            radius: 13 + 5 * slot.wFactor
-                            color: trashBox.hovered ? "#FEF3C7" : "#FFFFFF"
-                            border.width: 2
-                            border.color: trashBox.hovered ? "#D97706" : "#1A1B2E"
+                            x: trashBox.pressed
+                                ? (dockWindow.isLeft ? -2 : (dockWindow.isRight ? 2 : 0))
+                                : (trashBox.hovered ? (dockWindow.isLeft ? 2 : (dockWindow.isRight ? -2 : 0)) : 0)
+                            y: trashBox.pressed
+                                ? (dockWindow.isTop ? -2 : (dockWindow.isBottom ? 2 : 0))
+                                : (trashBox.hovered ? (dockWindow.isTop ? 2 : (dockWindow.isBottom ? -2 : 0)) : 0)
+                            radius: dockWindow.circleIcons
+                                ? Math.round(Math.min(width, height) * 0.5)
+                                : (13 + 5 * slot.wFactor)
+                            color: dockWindow.isCapsule
+                                ? (trashBox.hovered ? themeHub.barChipHover : themeHub.barBodyColor)
+                                : (trashBox.hovered ? "#FEF3C7" : "#FFFFFF")
+                            border.width: dockWindow.isCapsule ? (trashBox.hovered ? 2.5 : 2) : 2
+                            border.color: dockWindow.isCapsule
+                                ? (trashBox.hovered ? themeHub.accentA : themeHub.barRimColor)
+                                : (trashBox.hovered ? "#D97706" : "#1A1B2E")
 
-                            // Sticker Trash Can Graphic
-                            Item {
+                            Image {
                                 anchors.centerIn: parent
-                                width: parent.width * 0.62
-                                height: parent.height * 0.62
-
-                                // Paper peeking out when non-empty
-                                Rectangle {
-                                    visible: !TrashService.isEmpty
-                                    x: parent.width * 0.22
-                                    y: parent.height * 0.06
-                                    width: parent.width * 0.36
-                                    height: parent.height * 0.34
-                                    radius: 3
-                                    rotation: -10
-                                    color: "#BAE6FD"
-                                    border.width: 1.5
-                                    border.color: "#1A1B2E"
-                                }
-                                Rectangle {
-                                    visible: !TrashService.isEmpty
-                                    x: parent.width * 0.44
-                                    y: parent.height * 0.08
-                                    width: parent.width * 0.34
-                                    height: parent.height * 0.32
-                                    radius: 3
-                                    rotation: 12
-                                    color: "#FDE68A"
-                                    border.width: 1.5
-                                    border.color: "#1A1B2E"
-                                }
-
-                                // Bin lid
-                                Rectangle {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    y: parent.height * 0.22
-                                    width: parent.width * 0.84
-                                    height: Math.max(4, parent.height * 0.14)
-                                    radius: 3
-                                    color: TrashService.isEmpty ? "#94A3B8" : "#F59E0B"
-                                    border.width: 1.5
-                                    border.color: "#1A1B2E"
-                                }
-
-                                // Bin body
-                                Rectangle {
-                                    anchors.horizontalCenter: parent.horizontalCenter
-                                    y: parent.height * 0.34
-                                    width: parent.width * 0.72
-                                    height: parent.height * 0.56
-                                    radius: 5
-                                    color: TrashService.isEmpty ? "#E2E8F0" : "#FDE68A"
-                                    border.width: 1.8
-                                    border.color: "#1A1B2E"
-
-                                    Row {
-                                        anchors.centerIn: parent
-                                        spacing: Math.max(2, parent.width * 0.14)
-                                        Repeater {
-                                            model: 3
-                                            Rectangle {
-                                                width: 2
-                                                height: parent.parent.height * 0.52
-                                                radius: 1
-                                                color: "#64748B"
-                                            }
-                                        }
-                                    }
-                                }
+                                width: Math.round(parent.width * 0.48)
+                                height: Math.round(parent.height * 0.48)
+                                sourceSize.width: 48
+                                sourceSize.height: 48
+                                smooth: true
+                                source: dockWindow.isCapsule
+                                    ? "qrc:/qml/icons/trash-bin-trash-light.svg"
+                                    : (TrashService.isEmpty ? "qrc:/qml/icons/trash-bin-trash-dark.svg" : "qrc:/qml/icons/trash-bin-trash-red.svg")
                             }
 
-                            // Item count badge
                             Rectangle {
                                 visible: !TrashService.isEmpty
                                 anchors.right: parent.right
                                 anchors.top: parent.top
-                                anchors.margins: -4
+                                anchors.margins: -3
                                 width: Math.max(18, trashBadgeTxt.implicitWidth + 8)
                                 height: 18
                                 radius: 9
-                                color: "#EF4444"
-                                border.width: 1.5
-                                border.color: "#1A1B2E"
+                                color: "#e0575b"
+                                border.width: 2
+                                border.color: dockWindow.isCapsule ? "#FFFFFF" : "#1A1B2E"
 
                                 Text {
                                     id: trashBadgeTxt
                                     anchors.centerIn: parent
-                                    text: TrashService.itemCount > 99 ? "99+" : String(TrashService.itemCount)
+                                    text: TrashService.itemCount > 99 ? "99+" : (TrashService.itemCount > 9 ? "9+" : String(TrashService.itemCount))
                                     color: "#FFFFFF"
                                     font.family: "Segoe UI"
                                     font.pixelSize: 10
@@ -866,61 +978,231 @@ PanelWindow {
                             acceptedButtons: Qt.LeftButton | Qt.RightButton
                             cursorShape: Qt.PointingHandCursor
                             onClicked: (mouse) => {
-                                if (mouse.button === Qt.RightButton) {
+                                if (mouse.button === Qt.RightButton)
                                     TrashService.emptyBin()
-                                } else {
+                                else
                                     TrashService.openBin()
-                                }
                             }
                         }
                     }
 
-                    // --- GSMTC Media Controls Pill (Phase 1d) ---
-                    Rectangle {
-                        visible: slot.modelData.kind === "media"
+                    // --- SekaiPop Wide Inline Media Pill (Horizontal Dock) ---
+                    Item {
+                        id: wideMediaPill
+                        visible: slot.modelData.kind === "media" && !dockWindow.isVertical
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 124
-                        height: dockWindow.baseTileSize - 2
-                        radius: 13
-                        color: "#FFFFFF"
-                        border.width: 2
-                        border.color: "#1A1B2E"
+                        width: dockWindow.mediaTileExtent
+                        height: dockWindow.baseTileSize
 
-                        Column {
+                        readonly property bool activeRim: MediaService.isPlaying || wideBodyMa.containsMouse
+                        readonly property real strokeW: dockWindow.isCapsule ? (activeRim ? 2.5 : 2.0) : 2.0
+                        readonly property real pillRadius: dockWindow.isCapsule ? Math.round(height * 0.5) : 15
+                        readonly property real innerRadius: Math.max(4, pillRadius - strokeW)
+                        readonly property bool hasArt: wideMediaArtImg.status === Image.Ready
+                        readonly property color inkCol: (hasArt || dockWindow.isCapsule) ? "#FFFFFF" : "#1A1B2E"
+                        readonly property color subCol: (hasArt || dockWindow.isCapsule) ? Qt.rgba(1, 1, 1, 0.78) : "#64748B"
+                        readonly property real trackProgress: (MediaService.durationSec > 0)
+                            ? Math.max(0.0, Math.min(1.0, MediaService.positionSec / MediaService.durationSec))
+                            : 0.0
+
+                        // Base fill behind inner content
+                        Rectangle {
                             anchors.fill: parent
-                            anchors.margins: 4
-                            spacing: 2
+                            radius: wideMediaPill.pillRadius
+                            color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
+                        }
 
-                            Text {
-                                width: parent.width
-                                text: MediaService.title !== "" ? MediaService.title : "Media"
-                                color: "#1A1B2E"
-                                font.family: "Segoe UI"
-                                font.pixelSize: 10
-                                font.bold: true
-                                elide: Text.ElideRight
-                                horizontalAlignment: Text.AlignHCenter
+                        // All pill contents sit cleanly inside strokeW so they never overlap the border ring
+                        Item {
+                            id: wideInner
+                            anchors.fill: parent
+                            anchors.margins: wideMediaPill.strokeW
+
+                            // Blurred full-bleed cover art backdrop
+                            Item {
+                                anchors.fill: parent
+                                visible: wideBlurArtImg.status === Image.Ready
+
+                                Item {
+                                    id: wideBlurLayer
+                                    anchors.fill: parent
+                                    layer.enabled: visible && width > 4 && height > 4
+                                    layer.smooth: true
+                                    layer.textureSize: Qt.size(Math.max(32, Math.round(width)), Math.max(16, Math.round(height)))
+                                    layer.effect: MultiEffect {
+                                        blurEnabled: true
+                                        blur: 0.72
+                                        blurMax: 32
+                                        autoPaddingEnabled: false
+                                        maskEnabled: true
+                                        maskSource: wideBlurMask
+                                    }
+
+                                    Image {
+                                        id: wideBlurArtImg
+                                        anchors.centerIn: parent
+                                        width: parent.width * 1.4
+                                        height: parent.height * 1.5
+                                        asynchronous: true
+                                        smooth: true
+                                        fillMode: Image.PreserveAspectCrop
+                                        sourceSize: Qt.size(160, 160)
+                                        source: MediaService.hasSession ? MediaService.artUrl : ""
+                                        opacity: MediaService.isPlaying ? 0.92 : 0.65
+                                    }
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: Qt.rgba(themeHub.barBodyColor.r, themeHub.barBodyColor.g, themeHub.barBodyColor.b, 0.44)
+                                    }
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        color: Qt.rgba(themeHub.accentA.r, themeHub.accentA.g, themeHub.accentA.b, 0.08)
+                                    }
+                                }
+
+                                Item {
+                                    id: wideBlurMask
+                                    anchors.fill: parent
+                                    visible: false
+                                    layer.enabled: wideBlurArtImg.status === Image.Ready && width > 4 && height > 4
+                                    layer.smooth: true
+                                    layer.textureSize: wideBlurLayer.layer.textureSize
+
+                                    Rectangle {
+                                        anchors.fill: parent
+                                        radius: wideMediaPill.innerRadius
+                                        color: "black"
+                                        antialiasing: true
+                                    }
+                                }
                             }
 
-                            Row {
-                                anchors.horizontalCenter: parent.horizontalCenter
-                                spacing: 6
+                            MouseArea {
+                                id: wideBodyMa
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: mouse => {
+                                    if (mouse.button === Qt.RightButton)
+                                        MediaService.next()
+                                    else if (mouse.button === Qt.MiddleButton)
+                                        MediaService.previous()
+                                    else
+                                        MediaService.playPause()
+                                }
+                            }
+
+                            // Left Cover Art Disc (circleIcons: concentric circle) or Flush Left Art (squareIcons: curved left, square right)
+                            Item {
+                                id: wideCoverWrap
+                                anchors.left: parent.left
+                                anchors.leftMargin: dockWindow.circleIcons ? 2 : 0
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: dockWindow.circleIcons ? Math.max(16, parent.height - 4) : parent.height
+                                height: width
+                                z: 1
 
                                 Rectangle {
-                                    width: 26
-                                    height: 20
-                                    radius: 7
-                                    color: prevArea.containsMouse ? "#E0F2FE" : "#F1F5F9"
-                                    border.width: 1.2
-                                    border.color: "#1A1B2E"
+                                    visible: wideMediaArtImg.status !== Image.Ready
+                                    anchors.fill: parent
+                                    radius: dockWindow.circleIcons ? Math.round(height * 0.5) : 0
+                                    color: dockWindow.isCapsule ? themeHub.barChipColor : "#E2E8F0"
+                                }
+
+                                Item {
+                                    id: wideCoverLayer
+                                    anchors.fill: parent
+                                    layer.enabled: visible && width > 4 && height > 4
+                                    layer.smooth: true
+                                    layer.mipmap: true
+                                    layer.textureSize: Qt.size(Math.max(24, Math.round(width * 2)), Math.max(24, Math.round(height * 2)))
+                                    layer.effect: MultiEffect {
+                                        maskEnabled: true
+                                        maskSource: wideCoverMask
+                                    }
+
+                                    Image {
+                                        id: wideMediaArtImg
+                                        anchors.fill: parent
+                                        asynchronous: true
+                                        smooth: true
+                                        mipmap: true
+                                        fillMode: Image.PreserveAspectCrop
+                                        sourceSize: Qt.size(96, 96)
+                                        source: MediaService.hasSession ? MediaService.artUrl : ""
+                                        visible: status === Image.Ready
+                                        opacity: MediaService.isPlaying ? 1.0 : 0.72
+                                    }
+                                }
+
+                                Item {
+                                    id: wideCoverMask
+                                    anchors.fill: parent
+                                    visible: false
+                                    layer.enabled: width > 4 && height > 4
+                                    layer.smooth: true
+                                    layer.textureSize: wideCoverLayer.layer.textureSize
+
+                                    Item {
+                                        anchors.fill: parent
+                                        clip: true
+                                        Rectangle {
+                                            x: 0
+                                            y: 0
+                                            width: dockWindow.circleIcons
+                                                ? parent.width
+                                                : (parent.width + wideMediaPill.innerRadius)
+                                            height: parent.height
+                                            radius: dockWindow.circleIcons
+                                                ? Math.round(Math.min(parent.width, parent.height) * 0.5)
+                                                : wideMediaPill.innerRadius
+                                            color: "black"
+                                            antialiasing: true
+                                        }
+                                    }
+                                }
+
+                                Image {
+                                    anchors.centerIn: parent
+                                    visible: wideMediaArtImg.status !== Image.Ready
+                                    width: Math.round(parent.width * 0.52)
+                                    height: Math.round(parent.height * 0.52)
+                                    sourceSize: Qt.size(36, 36)
+                                    smooth: true
+                                    source: (dockWindow.isCapsule || wideMediaPill.hasArt)
+                                        ? "qrc:/qml/icons/music-note-light.svg"
+                                        : "qrc:/qml/icons/music-note-dark.svg"
+                                }
+                            }
+
+                            // Right Controls Row
+                            Row {
+                                id: wideMediaBtns
+                                anchors.right: parent.right
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 4
+                                z: 2
+
+                                Rectangle {
+                                    width: 22
+                                    height: 22
+                                    radius: 11
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: prevArea.containsMouse
+                                        ? (dockWindow.isCapsule || wideMediaPill.hasArt ? Qt.rgba(1, 1, 1, 0.22) : "#E2E8F0")
+                                        : "transparent"
                                     Image {
                                         anchors.centerIn: parent
-                                        width: 11
-                                        height: 11
-                                        sourceSize.width: 22
-                                        sourceSize.height: 22
+                                        width: 12
+                                        height: 12
+                                        sourceSize: Qt.size(24, 24)
                                         smooth: true
-                                        source: "qrc:/qml/icons/skip-previous-dark.svg"
+                                        source: (dockWindow.isCapsule || wideMediaPill.hasArt)
+                                            ? "qrc:/qml/icons/skip-previous-light.svg"
+                                            : "qrc:/qml/icons/skip-previous-dark.svg"
                                     }
                                     MouseArea {
                                         id: prevArea
@@ -932,18 +1214,18 @@ PanelWindow {
                                 }
 
                                 Rectangle {
-                                    width: 30
-                                    height: 20
-                                    radius: 7
-                                    color: playArea.containsMouse ? "#BAE6FD" : "#38BDF8"
-                                    border.width: 1.2
+                                    width: 26
+                                    height: 26
+                                    radius: 13
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: playArea.containsMouse ? themeHub.accentB : themeHub.accentA
+                                    border.width: dockWindow.isCapsule ? 0 : 1.5
                                     border.color: "#1A1B2E"
                                     Image {
                                         anchors.centerIn: parent
-                                        width: 11
-                                        height: 11
-                                        sourceSize.width: 22
-                                        sourceSize.height: 22
+                                        width: 13
+                                        height: 13
+                                        sourceSize: Qt.size(26, 26)
                                         smooth: true
                                         source: MediaService.isPlaying ? "qrc:/qml/icons/pause-dark.svg" : "qrc:/qml/icons/play-dark.svg"
                                     }
@@ -957,20 +1239,22 @@ PanelWindow {
                                 }
 
                                 Rectangle {
-                                    width: 26
-                                    height: 20
-                                    radius: 7
-                                    color: nextArea.containsMouse ? "#E0F2FE" : "#F1F5F9"
-                                    border.width: 1.2
-                                    border.color: "#1A1B2E"
+                                    width: 22
+                                    height: 22
+                                    radius: 11
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: nextArea.containsMouse
+                                        ? (dockWindow.isCapsule || wideMediaPill.hasArt ? Qt.rgba(1, 1, 1, 0.22) : "#E2E8F0")
+                                        : "transparent"
                                     Image {
                                         anchors.centerIn: parent
-                                        width: 11
-                                        height: 11
-                                        sourceSize.width: 22
-                                        sourceSize.height: 22
+                                        width: 12
+                                        height: 12
+                                        sourceSize: Qt.size(24, 24)
                                         smooth: true
-                                        source: "qrc:/qml/icons/skip-next-dark.svg"
+                                        source: (dockWindow.isCapsule || wideMediaPill.hasArt)
+                                            ? "qrc:/qml/icons/skip-next-light.svg"
+                                            : "qrc:/qml/icons/skip-next-dark.svg"
                                     }
                                     MouseArea {
                                         id: nextArea
@@ -981,6 +1265,200 @@ PanelWindow {
                                     }
                                 }
                             }
+
+                            // Middle Title + Artist + Progress Bar
+                            Column {
+                                anchors.left: wideCoverWrap.right
+                                anchors.leftMargin: 8
+                                anchors.right: wideMediaBtns.left
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 2
+                                z: 2
+
+                                Text {
+                                    width: parent.width
+                                    text: MediaService.title !== "" ? MediaService.title : "Now Playing"
+                                    color: wideMediaPill.inkCol
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 11
+                                    font.weight: Font.ExtraBold
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    visible: MediaService.artist !== ""
+                                    width: parent.width
+                                    text: MediaService.artist
+                                    color: wideMediaPill.subCol
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 9
+                                    font.weight: Font.Bold
+                                    elide: Text.ElideRight
+                                }
+
+                                Rectangle {
+                                    visible: MediaService.durationSec > 0
+                                    width: parent.width
+                                    height: 3
+                                    radius: 2
+                                    color: (wideMediaPill.hasArt || dockWindow.isCapsule) ? Qt.rgba(1, 1, 1, 0.28) : "#CBD5E1"
+
+                                    Rectangle {
+                                        width: Math.round(parent.width * wideMediaPill.trackProgress)
+                                        height: parent.height
+                                        radius: parent.radius
+                                        color: themeHub.accentB
+                                    }
+                                }
+                            }
+                        }
+
+                        // Outer crisp border sibling overlay (never overlapped by blur or cover)
+                        Rectangle {
+                            anchors.fill: parent
+                            radius: wideMediaPill.pillRadius
+                            color: "transparent"
+                            border.width: wideMediaPill.strokeW
+                            border.color: wideMediaPill.activeRim
+                                ? themeHub.accentA
+                                : (dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E")
+                            antialiasing: true
+                            z: 10
+                        }
+                    }
+
+                    // --- SekaiPop Vertical Circular Cover Media Key (Left/Right Dock) ---
+                    Item {
+                        id: vMediaBox
+                        visible: slot.modelData.kind === "media" && dockWindow.isVertical
+                        x: dockWindow.isRight ? (parent.width - width) : (dockWindow.isLeft ? 0 : (parent.width - width) * 0.5)
+                        y: dockWindow.isBottom ? (parent.height - height) : (dockWindow.isTop ? 0 : (parent.height - height) * 0.5)
+                        width: slot.slotSize
+                        height: slot.slotSize
+
+                        Rectangle {
+                            id: vMediaCap
+                            anchors.fill: parent
+                            radius: dockWindow.circleIcons
+                                ? Math.round(Math.min(width, height) * 0.5)
+                                : (13 + 5 * slot.wFactor)
+                            color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
+
+                            Item {
+                                id: vMediaCoverLayer
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                layer.enabled: visible && width > 4 && height > 4
+                                layer.smooth: true
+                                layer.mipmap: true
+                                layer.textureSize: Qt.size(Math.max(24, Math.round(width * 2)), Math.max(24, Math.round(height * 2)))
+                                layer.effect: MultiEffect {
+                                    maskEnabled: true
+                                    maskSource: vMediaCoverMask
+                                }
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    color: dockWindow.isCapsule ? themeHub.barChipColor : "#E2E8F0"
+                                }
+
+                                Image {
+                                    id: vMediaArtImg
+                                    anchors.fill: parent
+                                    asynchronous: true
+                                    smooth: true
+                                    mipmap: true
+                                    fillMode: Image.PreserveAspectCrop
+                                    sourceSize: Qt.size(120, 120)
+                                    source: MediaService.hasSession ? MediaService.artUrl : ""
+                                    visible: status === Image.Ready
+                                    opacity: MediaService.isPlaying ? 1.0 : 0.72
+                                }
+
+                                Image {
+                                    anchors.centerIn: parent
+                                    visible: vMediaArtImg.status !== Image.Ready
+                                    width: Math.round(parent.width * 0.52)
+                                    height: Math.round(parent.height * 0.52)
+                                    sourceSize: Qt.size(36, 36)
+                                    smooth: true
+                                    source: dockWindow.isCapsule ? "qrc:/qml/icons/music-note-light.svg" : "qrc:/qml/icons/music-note-dark.svg"
+                                }
+                            }
+
+                            Item {
+                                id: vMediaCoverMask
+                                anchors.fill: vMediaCoverLayer
+                                visible: false
+                                layer.enabled: width > 4 && height > 4
+                                layer.smooth: true
+                                layer.textureSize: vMediaCoverLayer.layer.textureSize
+
+                                Rectangle {
+                                    anchors.fill: parent
+                                    radius: Math.max(4, vMediaCap.radius - 3)
+                                    color: "black"
+                                    antialiasing: true
+                                }
+                            }
+
+                            Rectangle {
+                                anchors.fill: parent
+                                radius: vMediaCap.radius
+                                color: "transparent"
+                                border.width: dockWindow.isCapsule ? ((MediaService.isPlaying || vMediaMa.containsMouse) ? 2.5 : 2) : 2
+                                border.color: (MediaService.isPlaying || vMediaMa.containsMouse)
+                                    ? themeHub.accentA
+                                    : (dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E")
+                                antialiasing: true
+                                z: 10
+                            }
+
+                            // Corner Play/Pause miniature badge (SekaiPop Dock.qml L3303)
+                            Rectangle {
+                                z: 11
+                                x: dockWindow.circleIcons
+                                    ? (parent.width * 0.5 + (parent.width * 0.5 - 4) * 0.7071 - width * 0.5)
+                                    : (parent.width - width - 1)
+                                y: dockWindow.circleIcons
+                                    ? (parent.height * 0.5 + (parent.height * 0.5 - 4) * 0.7071 - height * 0.5)
+                                    : (parent.height - height - 1)
+                                width: 16
+                                height: 16
+                                radius: 8
+                                color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
+                                border.width: 1.5
+                                border.color: dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E"
+                                antialiasing: true
+
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 9
+                                    height: 9
+                                    sourceSize: Qt.size(18, 18)
+                                    smooth: true
+                                    source: dockWindow.isCapsule
+                                        ? (MediaService.isPlaying ? "qrc:/qml/icons/pause-light.svg" : "qrc:/qml/icons/play-light.svg")
+                                        : (MediaService.isPlaying ? "qrc:/qml/icons/pause-dark.svg" : "qrc:/qml/icons/play-dark.svg")
+                                }
+                            }
+                        }
+
+                        MouseArea {
+                            id: vMediaMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: mouse => {
+                                if (mouse.button === Qt.RightButton)
+                                    MediaService.next()
+                                else if (mouse.button === Qt.MiddleButton)
+                                    MediaService.previous()
+                                else
+                                    MediaService.playPause()
+                            }
                         }
                     }
 
@@ -988,10 +1466,10 @@ PanelWindow {
                     Item {
                         id: utilToolBox
                         visible: slot.modelData.kind === "finder" || slot.modelData.kind === "clipboard" || slot.modelData.kind === "dropshelf"
-                        anchors.horizontalCenter: parent.horizontalCenter
-                        anchors.bottom: parent.bottom
-                        width: slot.slotW
-                        height: slot.slotW
+                        x: dockWindow.isRight ? (parent.width - width) : (dockWindow.isLeft ? 0 : (parent.width - width) * 0.5)
+                        y: dockWindow.isBottom ? (parent.height - height) : (dockWindow.isTop ? 0 : (parent.height - height) * 0.5)
+                        width: slot.slotSize
+                        height: slot.slotSize
 
                         readonly property bool hovered: utilToolMa.containsMouse
                         readonly property bool pressed: utilToolMa.pressed
@@ -1000,6 +1478,7 @@ PanelWindow {
                             || (slot.modelData.kind === "dropshelf" && themeHub.dropShelfOpen)
 
                         Rectangle {
+                            visible: !dockWindow.isCapsule && !dockWindow.circleIcons
                             anchors.fill: utilCap
                             anchors.topMargin: 2.5
                             anchors.bottomMargin: -2.5
@@ -1012,45 +1491,62 @@ PanelWindow {
                             id: utilCap
                             width: parent.width
                             height: parent.height
-                            y: utilToolBox.pressed ? 2.5 : (utilToolBox.hovered ? -2 : 0)
-                            radius: 13 + 5 * slot.wFactor
-                            color: utilToolBox.activeTool ? themeHub.accentA : (utilToolBox.hovered ? themeHub.hoverTint : "#FFFFFF")
-                            border.width: 2
-                            border.color: "#1A1B2E"
+                            x: utilToolBox.pressed
+                                ? (dockWindow.isLeft ? -2 : (dockWindow.isRight ? 2 : 0))
+                                : (utilToolBox.hovered ? (dockWindow.isLeft ? 2 : (dockWindow.isRight ? -2 : 0)) : 0)
+                            y: utilToolBox.pressed
+                                ? (dockWindow.isTop ? -2 : (dockWindow.isBottom ? 2 : 0))
+                                : (utilToolBox.hovered ? (dockWindow.isTop ? 2 : (dockWindow.isBottom ? -2 : 0)) : 0)
+                            radius: dockWindow.circleIcons
+                                ? Math.round(Math.min(width, height) * 0.5)
+                                : (13 + 5 * slot.wFactor)
+                            color: dockWindow.isCapsule
+                                ? ((utilToolBox.activeTool || utilToolBox.hovered) ? themeHub.barChipHover : themeHub.barBodyColor)
+                                : (utilToolBox.activeTool ? themeHub.accentA : (utilToolBox.hovered ? themeHub.hoverTint : "#FFFFFF"))
+                            border.width: dockWindow.isCapsule ? ((utilToolBox.activeTool || utilToolBox.hovered) ? 2.5 : 2) : 2
+                            border.color: (utilToolBox.activeTool || utilToolBox.hovered)
+                                ? themeHub.accentA
+                                : (dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E")
 
                             Image {
                                 anchors.centerIn: parent
-                                width: Math.round(parent.width * 0.54)
-                                height: Math.round(parent.height * 0.54)
+                                width: Math.round(parent.width * 0.48)
+                                height: Math.round(parent.height * 0.48)
                                 sourceSize.width: 48
                                 sourceSize.height: 48
                                 smooth: true
-                                source: slot.modelData.kind === "finder"
-                                    ? "qrc:/qml/icons/magnifer-dark.svg"
-                                    : (slot.modelData.kind === "clipboard"
-                                        ? "qrc:/qml/icons/clipboard-text-dark.svg"
-                                        : "qrc:/qml/icons/folder-with-files-dark.svg")
+                                source: dockWindow.isCapsule
+                                    ? (slot.modelData.kind === "finder"
+                                        ? "qrc:/qml/icons/magnifer-light.svg"
+                                        : (slot.modelData.kind === "clipboard"
+                                            ? "qrc:/qml/icons/clipboard-text-light.svg"
+                                            : "qrc:/qml/icons/inbox-archive-light.svg"))
+                                    : (slot.modelData.kind === "finder"
+                                        ? "qrc:/qml/icons/magnifer-dark.svg"
+                                        : (slot.modelData.kind === "clipboard"
+                                            ? "qrc:/qml/icons/clipboard-text-dark.svg"
+                                            : "qrc:/qml/icons/inbox-archive-dark.svg"))
                             }
 
                             Rectangle {
                                 visible: slot.modelData.kind === "dropshelf" && DropShelfService.count > 0
                                 anchors.right: parent.right
                                 anchors.top: parent.top
-                                anchors.margins: -4
+                                anchors.margins: -3
                                 width: Math.max(18, dsDockBadge.implicitWidth + 8)
                                 height: 18
                                 radius: 9
-                                color: themeHub.accentB
-                                border.width: 1.5
-                                border.color: "#1A1B2E"
+                                color: "#e0575b"
+                                border.width: 2
+                                border.color: dockWindow.isCapsule ? "#FFFFFF" : "#1A1B2E"
                                 Text {
                                     id: dsDockBadge
                                     anchors.centerIn: parent
-                                    text: String(DropShelfService.count)
+                                    text: DropShelfService.count > 9 ? "9+" : String(DropShelfService.count)
                                     font.family: "Segoe UI"
                                     font.pixelSize: 10
-                                    font.weight: Font.Bold
-                                    color: "#1A1B2E"
+                                    font.bold: true
+                                    color: "#FFFFFF"
                                 }
                             }
                         }
@@ -1101,10 +1597,23 @@ PanelWindow {
 
         x: {
             const scrW = themeHub.screenW
-            const rawX = Math.round(dockWindow.hoveredIconCenterX - width * 0.5)
+            if (dockWindow.isLeft)
+                return Math.min(scrW - width - 12, dockWindow.x + dockWindow.width - 4)
+            if (dockWindow.isRight)
+                return Math.max(12, dockWindow.x + 4 - width)
+            const rawX = Math.round(dockWindow.hoveredIconGlobalX - width * 0.5)
             return Math.max(12, Math.min(scrW - width - 12, rawX))
         }
-        y: Math.max(12, dockWindow.y + 4 - height)
+        y: {
+            const scrH = themeHub.screenH
+            if (dockWindow.isTop)
+                return Math.min(scrH - height - 12, dockWindow.y + dockWindow.height - 4)
+            if (dockWindow.isVertical) {
+                const rawY = Math.round(dockWindow.hoveredIconGlobalY - height * 0.5)
+                return Math.max(12, Math.min(scrH - height - 12, rawY))
+            }
+            return Math.max(12, dockWindow.y + 4 - height)
+        }
 
         mask: [{ x: 0, y: 0, width: previewCard.width + cardShadow, height: previewCard.height + cardShadow }]
 
@@ -1127,7 +1636,7 @@ PanelWindow {
             width: previewCard.width
             height: previewCard.height
             radius: previewCard.radius
-            color: "#1A1B2E"
+            color: dockWindow.isCapsule ? themeHub.barShadeColor : "#1A1B2E"
         }
 
         Rectangle {
@@ -1137,15 +1646,16 @@ PanelWindow {
             width: previewRow.implicitWidth + previewWindow.cardPad * 2
             height: previewWindow.tileH + previewWindow.cardPad * 2 + 24
             radius: 18
-            color: "#1A1B2E"
+            color: dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E"
 
             Rectangle {
                 anchors.fill: parent
                 anchors.margins: 2.5
                 radius: parent.radius - 2.5
-                color: "#FFFFFF"
+                color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
 
                 Rectangle {
+                    visible: !dockWindow.isCapsule
                     anchors.fill: parent
                     anchors.margins: 3
                     radius: parent.radius - 3
@@ -1158,7 +1668,7 @@ PanelWindow {
                 x: previewWindow.cardPad
                 y: 8
                 text: dockWindow.activePreviewName
-                color: "#1A1B2E"
+                color: dockWindow.isCapsule ? themeHub.barInkColor : "#1A1B2E"
                 font.family: "Segoe UI"
                 font.pixelSize: 12
                 font.bold: true
@@ -1337,10 +1847,23 @@ PanelWindow {
 
         x: {
             const scrW = themeHub.screenW
-            const rawX = Math.round(dockWindow.ctxCenterX - width * 0.5)
+            if (dockWindow.isLeft)
+                return Math.min(scrW - width - 12, dockWindow.x + dockWindow.width - 4)
+            if (dockWindow.isRight)
+                return Math.max(12, dockWindow.x + 4 - width)
+            const rawX = Math.round(dockWindow.ctxGlobalX - width * 0.5)
             return Math.max(12, Math.min(scrW - width - 12, rawX))
         }
-        y: Math.max(12, dockWindow.y + 4 - height)
+        y: {
+            const scrH = themeHub.screenH
+            if (dockWindow.isTop)
+                return Math.min(scrH - height - 12, dockWindow.y + dockWindow.height - 4)
+            if (dockWindow.isVertical) {
+                const rawY = Math.round(dockWindow.ctxGlobalY - height * 0.5)
+                return Math.max(12, Math.min(scrH - height - 12, rawY))
+            }
+            return Math.max(12, dockWindow.y + 4 - height)
+        }
 
         mask: [{ x: 0, y: 0, width: menuW + cardShadow, height: ctxCard.height + cardShadow }]
 
@@ -1351,7 +1874,7 @@ PanelWindow {
             width: contextWindow.menuW
             height: ctxCard.height
             radius: 14
-            color: "#1A1B2E"
+            color: dockWindow.isCapsule ? themeHub.barShadeColor : "#1A1B2E"
         }
 
         Rectangle {
@@ -1361,9 +1884,9 @@ PanelWindow {
             width: contextWindow.menuW
             height: ctxCol.implicitHeight + 14
             radius: 14
-            color: "#FFFFFF"
+            color: dockWindow.isCapsule ? themeHub.barBodyColor : "#FFFFFF"
             border.width: 2
-            border.color: "#1A1B2E"
+            border.color: dockWindow.isCapsule ? themeHub.barRimColor : "#1A1B2E"
 
             HoverHandler {
                 id: ctxHoverHandler
@@ -1397,7 +1920,7 @@ PanelWindow {
                         font.family: "Segoe UI"
                         font.pixelSize: 12
                         font.bold: true
-                        color: "#1E293B"
+                        color: dockWindow.isCapsule ? themeHub.barInkColor : "#1E293B"
                         elide: Text.ElideRight
                     }
 
@@ -1408,13 +1931,13 @@ PanelWindow {
                         width: 20
                         height: 20
                         radius: 6
-                        color: ctxDismissArea.containsMouse ? "#F1F5F9" : "transparent"
+                        color: ctxDismissArea.containsMouse ? (dockWindow.isCapsule ? themeHub.barChipHover : "#F1F5F9") : "transparent"
                         Text {
                             anchors.centerIn: parent
                             text: "×"
                             font.pixelSize: 13
                             font.bold: true
-                            color: "#64748B"
+                            color: dockWindow.isCapsule ? themeHub.barMutedInk : "#64748B"
                         }
                         MouseArea {
                             id: ctxDismissArea
@@ -1429,7 +1952,7 @@ PanelWindow {
                 Rectangle {
                     width: parent.width
                     height: 1
-                    color: "#E2E8F0"
+                    color: dockWindow.isCapsule ? themeHub.barRimColor : "#E2E8F0"
                 }
 
                 Repeater {
@@ -1441,7 +1964,7 @@ PanelWindow {
                         height: 30
                         radius: 8
                         color: menuBtnArea.containsMouse
-                            ? (modelData.danger ? "#FEE2E2" : "#E0F2FE")
+                            ? (modelData.danger ? (dockWindow.isCapsule ? "#451A22" : "#FEE2E2") : (dockWindow.isCapsule ? themeHub.barChipHover : "#E0F2FE"))
                             : "transparent"
 
                         Text {
@@ -1453,8 +1976,8 @@ PanelWindow {
                             font.pixelSize: 12
                             font.weight: Font.Medium
                             color: menuBtn.modelData.danger
-                                ? (menuBtnArea.containsMouse ? "#B91C1C" : "#DC2626")
-                                : (menuBtnArea.containsMouse ? "#0369A1" : "#1E293B")
+                                ? (menuBtnArea.containsMouse ? "#F87171" : "#EF4444")
+                                : (dockWindow.isCapsule ? themeHub.barInkColor : (menuBtnArea.containsMouse ? "#0369A1" : "#1E293B"))
                         }
 
                         MouseArea {
@@ -1500,15 +2023,22 @@ PanelWindow {
     PanelWindow {
         id: topBarWindow
         visible: true
-        anchors.top: true
-        anchors.left: true
-        anchors.right: true
-        anchors.margins.top: 0
-        anchors.margins.left: 0
-        anchors.margins.right: 0
-        height: themeHub.barStyle === "float" ? 34 : 28
+
+        readonly property string barEdge: themeHub.barEdge
+        readonly property bool barVertical: themeHub.barVertical
+        readonly property bool barTop: barEdge === "top"
+        readonly property bool barBottom: barEdge === "bottom"
+        readonly property bool barLeft: barEdge === "left"
+        readonly property bool barRight: barEdge === "right"
+        readonly property int stripThickness: themeHub.barStripThickness
+
+        x: barRight ? Math.max(0, themeHub.screenW - stripThickness) : 0
+        y: barBottom ? Math.max(0, themeHub.screenH - stripThickness) : 0
+        width: barVertical ? stripThickness : themeHub.screenW
+        height: barVertical ? themeHub.screenH : stripThickness
         reserveTopBar: !themeHub.barAutoHide && !topBarWindow.fullscreenActive
-        reserveHeight: (themeHub.barAutoHide || topBarWindow.fullscreenActive) ? 0 : (themeHub.barStyle === "float" ? 34 : 28)
+        reserveEdge: barEdge
+        reserveHeight: (themeHub.barAutoHide || topBarWindow.fullscreenActive) ? 0 : stripThickness
         clickThrough: topBarWindow.fullscreenActive
 
         property string timeText: ""
@@ -1529,10 +2059,16 @@ PanelWindow {
         property double volumePopupClosedAt: 0
         readonly property bool phoneMode: themeHub.phoneMode
         readonly property bool anyPopupOpen: mediaPopupOpen || trayPopupOpen || quickPanelOpen || calendarOpen || wifiPopupOpen || btPopupOpen || volumePopupOpen
+        readonly property bool barEdgeOverlap: barBottom ? WindowTracker.dockOverlap
+            : (barLeft ? WindowTracker.leftOverlap
+                : (barRight ? WindowTracker.rightOverlap : WindowTracker.topOverlap))
+        readonly property bool barEdgeHovered: barBottom ? WindowTracker.bottomEdgeHovered
+            : (barLeft ? WindowTracker.leftEdgeHovered
+                : (barRight ? WindowTracker.rightEdgeHovered : WindowTracker.topEdgeHovered))
         readonly property bool autoHideTriggered: themeHub.barAutoHide
-                                                  && WindowTracker.topOverlap
+                                                  && barEdgeOverlap
                                                   && !topBarHover.hovered
-                                                  && !WindowTracker.topEdgeHovered
+                                                  && !barEdgeHovered
                                                   && !anyPopupOpen
         property real topHideProgress: (topBarWindow.fullscreenActive || topBarWindow.autoHideTriggered) ? 1.0 : 0.0
 
@@ -1555,14 +2091,40 @@ PanelWindow {
         Behavior on topHideProgress {
             NumberAnimation { duration: 190; easing.type: Easing.OutCubic }
         }
-        readonly property real topHideOffsetY: -topHideProgress * 38
+        readonly property real topHideOffsetX: barVertical ? (barLeft ? -topHideProgress * 72 : topHideProgress * 72) : 0
+        readonly property real topHideOffsetY: barVertical ? 0 : (barBottom ? topHideProgress * 38 : -topHideProgress * 38)
+
+        function barPopupX(popW, anchorX) {
+            const scrW = themeHub.screenW
+            if (barLeft)
+                return Math.min(scrW - popW - 8, stripThickness + 6)
+            if (barRight)
+                return Math.max(8, scrW - stripThickness - popW - 6)
+            return Math.max(8, Math.min(scrW - popW - 8, anchorX))
+        }
+        function barPopupY(popH, anchorY) {
+            const scrH = themeHub.screenH
+            if (barBottom)
+                return Math.max(8, scrH - stripThickness - popH - 4)
+            if (barTop)
+                return Math.min(scrH - popH - 8, stripThickness + 4)
+            return Math.max(8, Math.min(scrH - popH - 8, anchorY))
+        }
 
         blurBehind: !topBarWindow.fullscreenActive && topBarWindow.topHideProgress < 0.95
         blurRadius: themeHub.barStyle === "capsule" ? 14 : (themeHub.barStyle === "float" ? 10 : 0)
-        blurInsetX: themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0)
-        blurInsetY: themeHub.barStyle === "float" ? 4 : 0
-        blurInsetRight: themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0)
-        blurInsetBottom: themeHub.barStyle === "float" ? 2 : 0
+        blurInsetX: barVertical
+            ? (barLeft ? (themeHub.barStyle === "float" ? 2 : 0) : (themeHub.barStyle === "float" ? 4 : 0))
+            : (themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0))
+        blurInsetY: barVertical
+            ? (themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0))
+            : (barBottom ? (themeHub.barStyle === "float" ? 2 : 0) : (themeHub.barStyle === "float" ? 4 : 0))
+        blurInsetRight: barVertical
+            ? (barRight ? (themeHub.barStyle === "float" ? 2 : 0) : (themeHub.barStyle === "float" ? 4 : 0))
+            : (themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0))
+        blurInsetBottom: barVertical
+            ? (themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0))
+            : (barBottom ? (themeHub.barStyle === "float" ? 4 : 0) : (themeHub.barStyle === "float" ? 2 : 0))
         blurTint: themeHub.barStyle === "transparent"
                   ? Qt.rgba(14/255, 18/255, 30/255, 0.35)
                   : Qt.rgba(16/255, 20/255, 36/255, 0.84)
@@ -1570,7 +2132,11 @@ PanelWindow {
         mask: topBarWindow.fullscreenActive
               ? []
               : (topBarWindow.topHideProgress > 0.95
-                 ? (themeHub.barAutoHide ? [{ x: 0, y: 0, width: Math.max(1, topBarWindow.width), height: 3 }] : [])
+                 ? (themeHub.barAutoHide
+                    ? (barVertical
+                       ? [{ x: barLeft ? 0 : Math.max(0, topBarWindow.width - 3), y: 0, width: 3, height: Math.max(1, topBarWindow.height) }]
+                       : [{ x: 0, y: barBottom ? Math.max(0, topBarWindow.height - 3) : 0, width: Math.max(1, topBarWindow.width), height: 3 }])
+                    : [])
                  : null)
 
         Timer {
@@ -1598,782 +2164,1272 @@ PanelWindow {
                 id: topBarHover
             }
 
-            // Styled TopBar frame (transparent / straight / float / capsule)
+            // SekaiPop-inspired hard capsule drop shadow (when Capsule mode is active)
+            Rectangle {
+                visible: themeHub.barStyle === "capsule"
+                x: barFrame.x
+                y: barFrame.y + 3
+                width: barFrame.width
+                height: barFrame.height
+                radius: barFrame.radius
+                color: themeHub.barShadeColor
+                antialiasing: true
+            }
+
+            // Styled Bar frame (supports Top / Bottom horizontal & Left / Right slim vertical)
             Rectangle {
                 id: barFrame
-                x: themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0)
-                y: (themeHub.barStyle === "float" ? 4 : 0) + topBarWindow.topHideOffsetY
-                width: topBarRoot.width - x * 2
-                height: 28
-                radius: themeHub.barStyle === "capsule" ? 14 : (themeHub.barStyle === "float" ? 10 : 0)
-                color: {
-                    if (themeHub.barStyle === "transparent")
-                        return "transparent"
-                    if (themeHub.barStyle === "straight")
-                        return Qt.rgba(14/255, 18/255, 32/255, 0.78)
-                    return Qt.rgba(18/255, 22/255, 38/255, 0.88)
-                }
-                border.width: (themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 2 : 0
-                border.color: themeHub.barStyle === "capsule" ? themeHub.accentA : "#1A1B2E"
+                x: topBarWindow.barVertical
+                    ? ((topBarWindow.barRight ? ((themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 4 : 0)
+                                              : ((themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 2 : 0)) + topBarWindow.topHideOffsetX)
+                    : ((themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 14 : 0)) + topBarWindow.topHideOffsetX)
+                y: topBarWindow.barVertical
+                    ? (themeHub.barStyle === "float" ? 8 : (themeHub.barStyle === "capsule" ? 12 : 0))
+                    : ((topBarWindow.barBottom ? ((themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 1 : 0)
+                                               : ((themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 2 : 0)) + topBarWindow.topHideOffsetY)
+                width: topBarWindow.barVertical
+                    ? ((themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 44 : topBarWindow.stripThickness)
+                    : (topBarRoot.width - (themeHub.barStyle === "float" ? 16 : (themeHub.barStyle === "capsule" ? 28 : 0)))
+                height: topBarWindow.barVertical
+                    ? (topBarRoot.height - (themeHub.barStyle === "float" ? 16 : (themeHub.barStyle === "capsule" ? 24 : 0)) - (themeHub.barStyle === "capsule" ? 3 : 0))
+                    : ((themeHub.barStyle === "float" || themeHub.barStyle === "capsule") ? 31 : 30)
+                radius: themeHub.barStyle === "capsule"
+                    ? (Math.min(width, height) / 2)
+                    : (themeHub.barStyle === "float" ? 12 : 0)
+                color: themeHub.barStyle === "transparent" ? "transparent" : themeHub.barBodyColor
+                border.width: themeHub.barStyle === "capsule" ? 2.5 : (themeHub.barStyle === "float" ? 2 : 0)
+                border.color: themeHub.barRimColor
+                antialiasing: true
 
                 Rectangle {
                     visible: themeHub.barStyle === "straight"
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    height: 2
-                    color: "#1A1B2E"
+                    x: topBarWindow.barVertical ? (topBarWindow.barRight ? 0 : (parent.width - width)) : 0
+                    y: topBarWindow.barVertical ? 0 : (topBarWindow.barBottom ? 0 : (parent.height - height))
+                    width: topBarWindow.barVertical ? 2 : parent.width
+                    height: topBarWindow.barVertical ? parent.height : 2
+                    color: themeHub.barRimColor
                 }
 
-                // --- Left Zone: Active App Badge + SekaiPop MediaPill + Window Title ---
-                Row {
-                    id: leftContentRow
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: 5
-                    spacing: 6
+                // =============================================================
+                // Horizontal Bar: 3-Zone SekaiPop Layout (Left / Center / Right)
+                // =============================================================
+                Item {
+                    id: horizontalBarContent
+                    visible: !topBarWindow.barVertical
+                    anchors.fill: parent
+                    anchors.leftMargin: 6
+                    anchors.rightMargin: 6
 
-                    Rectangle {
-                        id: appBadgeRect
-                        visible: themeHub.barShowActiveWindow
+                    // --- Left Zone: Active App Pill + Media Pill + Active Title ---
+                    Row {
+                        id: leftContentRow
                         anchors.verticalCenter: parent.verticalCenter
-                        width: appNameTxt.implicitWidth + 14
-                        height: 20
-                        radius: 8
-                        color: themeHub.accentA
-                        border.width: 1.5
-                        border.color: "#1A1B2E"
-
-                        Text {
-                            id: appNameTxt
-                            anchors.centerIn: parent
-                            text: WindowTracker.activeAppName || "Desktop"
-                            font.family: "Segoe UI"
-                            font.pixelSize: 11
-                            font.weight: Font.Bold
-                            color: "#1A1B2E"
-                        }
-                    }
-
-                    // --- SekaiPop MediaPill (22px inside 28px TopBar, pinned left next to AppBadge) ---
-                    Rectangle {
-                        id: mediaPill
-                        anchors.verticalCenter: parent.verticalCenter
-                        visible: themeHub.barShowMedia
-                        width: Math.max(148, Math.min(280, 5 + mediaArtBox.width + 4 + mediaDivider.width + 20 + mediaSingleLineTxt.implicitWidth))
-                        height: 22
-                        radius: 10
-                        color: "#1A1B2E"
-                        scale: mediaPillArea.pressed ? 0.97 : 1.0
-
-                        Behavior on width {
-                            NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-                        }
-                        Behavior on scale {
-                            NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
-                        }
+                        anchors.left: parent.left
+                        spacing: 6
 
                         Rectangle {
-                            id: mediaPillFill
-                            anchors.fill: parent
-                            anchors.margins: 2
-                            radius: 8
-                            clip: true
-                            gradient: Gradient {
-                                orientation: Gradient.Vertical
-                                GradientStop { position: 0.0; color: themeHub.accentB }
-                                GradientStop { position: 1.0; color: themeHub.accentA }
+                            id: appBadgeRect
+                            visible: themeHub.barShowActiveWindow
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: appNameTxt.implicitWidth + 16
+                            height: 22
+                            radius: 11
+                            color: themeHub.accentA
+
+                            Text {
+                                id: appNameTxt
+                                anchors.centerIn: parent
+                                text: WindowTracker.activeAppName || "Desktop"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                                color: themeHub.darkInk
+                            }
+                        }
+
+                        // SekaiPop MediaPill (unified rounded capsule)
+                        Rectangle {
+                            id: mediaPill
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: themeHub.barShowMedia
+                            width: Math.max(146, Math.min(260, 6 + mediaArtBox.width + 5 + mediaDivider.width + 18 + mediaSingleLineTxt.implicitWidth))
+                            height: 22
+                            radius: 11
+                            color: themeHub.darkInk
+                            scale: mediaPillArea.pressed ? 0.97 : 1.0
+
+                            Behavior on width {
+                                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+                            }
+                            Behavior on scale {
+                                NumberAnimation { duration: 90; easing.type: Easing.OutCubic }
                             }
 
-                            Item {
-                                id: mediaArtBox
-                                anchors.left: parent.left
-                                anchors.leftMargin: 5
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 16
-                                height: 16
+                            Rectangle {
+                                id: mediaPillFill
+                                anchors.fill: parent
+                                anchors.margins: 1.5
+                                radius: 9.5
                                 clip: true
-                                opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
-                                Behavior on opacity { NumberAnimation { duration: 150 } }
-
-                                Image {
-                                    anchors.centerIn: parent
-                                    visible: mediaPillCover.status !== Image.Ready
-                                    width: 13
-                                    height: 13
-                                    sourceSize.width: 26
-                                    sourceSize.height: 26
-                                    smooth: true
-                                    source: "qrc:/qml/icons/music-note-dark.svg"
+                                gradient: Gradient {
+                                    orientation: Gradient.Vertical
+                                    GradientStop { position: 0.0; color: themeHub.accentB }
+                                    GradientStop { position: 1.0; color: themeHub.accentA }
                                 }
 
-                                Image {
-                                    id: mediaPillCover
-                                    anchors.fill: parent
-                                    source: MediaService.hasSession ? MediaService.artUrl : ""
-                                    sourceSize.width: 32
-                                    sourceSize.height: 32
-                                    fillMode: Image.PreserveAspectCrop
+                                Item {
+                                    id: mediaArtBox
+                                    anchors.left: parent.left
+                                    anchors.leftMargin: 5
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 15
+                                    height: 15
                                     clip: true
-                                    asynchronous: true
-                                    smooth: true
-                                    mipmap: true
-                                    cache: false
-                                    visible: status === Image.Ready
+                                    opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
+                                    Behavior on opacity { NumberAnimation { duration: 150 } }
+
+                                    Image {
+                                        anchors.centerIn: parent
+                                        visible: mediaPillCover.status !== Image.Ready
+                                        width: 12
+                                        height: 12
+                                        sourceSize.width: 24
+                                        sourceSize.height: 24
+                                        smooth: true
+                                        source: "qrc:/qml/icons/music-note-dark.svg"
+                                    }
+
+                                    Image {
+                                        id: mediaPillCover
+                                        anchors.fill: parent
+                                        source: MediaService.hasSession ? MediaService.artUrl : ""
+                                        sourceSize.width: 30
+                                        sourceSize.height: 30
+                                        fillMode: Image.PreserveAspectCrop
+                                        clip: true
+                                        asynchronous: true
+                                        smooth: true
+                                        mipmap: true
+                                        cache: false
+                                        visible: status === Image.Ready
+                                    }
+                                }
+
+                                Rectangle {
+                                    id: mediaDivider
+                                    anchors.left: mediaArtBox.right
+                                    anchors.leftMargin: 4
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    width: 1.5
+                                    color: themeHub.darkInk
+                                }
+
+                                Item {
+                                    anchors.left: mediaDivider.right
+                                    anchors.right: parent.right
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    anchors.top: parent.top
+                                    anchors.bottom: parent.bottom
+                                    clip: true
+
+                                    Text {
+                                        id: mediaSingleLineTxt
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        width: parent.width
+                                        horizontalAlignment: Text.AlignHCenter
+                                        elide: Text.ElideRight
+                                        textFormat: Text.PlainText
+                                        opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
+                                        Behavior on opacity { NumberAnimation { duration: 150 } }
+                                        text: {
+                                            if (!MediaService.hasSession)
+                                                return "Nothing Playing"
+                                            const t = MediaService.title || "Playing"
+                                            const a = (MediaService.artist || "").trim()
+                                            return a !== "" ? (t + "  ·  " + a) : t
+                                        }
+                                        font.family: "Segoe UI"
+                                        font.pixelSize: 10
+                                        font.weight: Font.Bold
+                                        color: themeHub.darkInk
+                                    }
                                 }
                             }
 
                             Rectangle {
-                                id: mediaDivider
-                                anchors.left: mediaArtBox.right
-                                anchors.leftMargin: 4
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                width: 2
-                                color: "#1A1B2E"
+                                z: 5
+                                anchors.fill: parent
+                                radius: parent.radius
+                                color: "transparent"
+                                border.width: 1.5
+                                border.color: themeHub.darkInk
+                                antialiasing: true
                             }
 
-                            Item {
-                                anchors.left: mediaDivider.right
-                                anchors.right: parent.right
-                                anchors.leftMargin: 8
-                                anchors.rightMargin: 8
-                                anchors.top: parent.top
-                                anchors.bottom: parent.bottom
-                                clip: true
-
-                                Text {
-                                    id: mediaSingleLineTxt
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    width: parent.width
-                                    horizontalAlignment: Text.AlignHCenter
-                                    elide: Text.ElideRight
-                                    textFormat: Text.PlainText
-                                    opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
-                                    Behavior on opacity { NumberAnimation { duration: 150 } }
-                                    text: {
-                                        if (!MediaService.hasSession)
-                                            return "Nothing Playing"
-                                        const t = MediaService.title || "Playing"
-                                        const a = (MediaService.artist || "").trim()
-                                        return a !== "" ? (t + "  ·  " + a) : t
+                            MouseArea {
+                                id: mediaPillArea
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                                onClicked: mouse => {
+                                    if (mouse.button === Qt.LeftButton) {
+                                        if (!topBarWindow.mediaPopupOpen && (Date.now() - topBarWindow.mediaPopupClosedAt) < 220)
+                                            return
+                                        topBarWindow.mediaPopupOpen = !topBarWindow.mediaPopupOpen
+                                    } else if (mouse.button === Qt.RightButton) {
+                                        MediaService.next()
+                                    } else if (mouse.button === Qt.MiddleButton) {
+                                        MediaService.playPause()
                                     }
-                                    font.family: "Segoe UI"
-                                    font.pixelSize: 10
-                                    font.weight: Font.Bold
-                                    color: "#1A1B2E"
                                 }
+                            }
+                        }
+
+                        // Window title smoothly clipped before the centered clock/weather island
+                        Text {
+                            id: activeWinTitleTxt
+                            readonly property real availW: centerContentRow.x - leftContentRow.x
+                                - (appBadgeRect.visible ? (appBadgeRect.width + 6) : 0)
+                                - (mediaPill.visible ? (mediaPill.width + 6) : 0) - 16
+                            anchors.verticalCenter: parent.verticalCenter
+                            visible: themeHub.barShowActiveWindow && (WindowTracker.activeWindowTitle || "") !== "" && availW >= 42
+                            text: WindowTracker.activeWindowTitle || ""
+                            width: Math.min(implicitWidth, Math.max(0, availW))
+                            elide: Text.ElideRight
+                            font.family: "Segoe UI"
+                            font.pixelSize: 11
+                            color: themeHub.barMutedInk
+                        }
+                    }
+
+                    // --- Center Zone: Clean Weather + Clock/Date Hub ---
+                    Row {
+                        id: centerContentRow
+                        anchors.centerIn: parent
+                        spacing: 6
+
+                        Rectangle {
+                            id: barWeatherPill
+                            visible: themeHub.barShowWeather
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: barWeatherRow.implicitWidth + 14
+                            height: 22
+                            radius: 11
+                            color: barWeatherMouse.containsMouse ? themeHub.barChipHover : themeHub.barChipColor
+
+                            Row {
+                                id: barWeatherRow
+                                anchors.centerIn: parent
+                                spacing: 4
+                                Image {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 12; height: 12
+                                    sourceSize.width: 24; sourceSize.height: 24
+                                    smooth: true
+                                    source: WeatherService.isDay ? "qrc:/qml/icons/sun-light.svg" : "qrc:/qml/icons/moon-light.svg"
+                                }
+                                Text {
+                                    id: barWeatherTxt
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: themeHub.formatTemp(WeatherService.temperature) + "°"
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                    color: themeHub.barInkColor
+                                }
+                            }
+
+                            MouseArea {
+                                id: barWeatherMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: WeatherService.refresh()
                             }
                         }
 
                         Rectangle {
-                            z: 5
-                            anchors.fill: parent
-                            radius: parent.radius
-                            color: "transparent"
-                            border.width: 2
-                            border.color: "#1A1B2E"
-                            antialiasing: true
-                        }
+                            id: clockPill
+                            visible: themeHub.barShowClock
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: clockRow.implicitWidth + 16
+                            height: 22
+                            radius: 11
+                            color: topBarWindow.calendarOpen
+                                ? themeHub.accentB
+                                : (clockPillMouse.containsMouse ? themeHub.hoverTint : themeHub.accentA)
 
-                        MouseArea {
-                            id: mediaPillArea
-                            anchors.fill: parent
-                            cursorShape: Qt.PointingHandCursor
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
-                            onClicked: mouse => {
-                                if (mouse.button === Qt.LeftButton) {
-                                    if (!topBarWindow.mediaPopupOpen && (Date.now() - topBarWindow.mediaPopupClosedAt) < 220)
+                            Row {
+                                id: clockRow
+                                anchors.centerIn: parent
+                                spacing: 5
+
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: topBarWindow.dateText
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 10
+                                    font.weight: Font.DemiBold
+                                    color: themeHub.darkInk
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "·"
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                    color: themeHub.darkInk
+                                    opacity: 0.65
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: topBarWindow.timeText
+                                    font.family: "Segoe UI"
+                                    font.pixelSize: 11
+                                    font.weight: Font.Bold
+                                    color: themeHub.darkInk
+                                }
+                            }
+
+                            MouseArea {
+                                id: clockPillMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.calendarOpen && (Date.now() - topBarWindow.calendarClosedAt) < 220)
                                         return
-                                    topBarWindow.mediaPopupOpen = !topBarWindow.mediaPopupOpen
-                                } else if (mouse.button === Qt.RightButton) {
-                                    MediaService.next()
-                                } else if (mouse.button === Qt.MiddleButton) {
-                                    MediaService.playPause()
+                                    topBarWindow.calendarOpen = !topBarWindow.calendarOpen
                                 }
                             }
                         }
                     }
 
-                    Text {
+                    // --- Right Zone: Grouped Utilities, Telemetry, Tray, StatusPill, Bell ---
+                    Row {
+                        id: rightContentRow
                         anchors.verticalCenter: parent.verticalCenter
-                        visible: themeHub.barShowActiveWindow && (WindowTracker.activeWindowTitle || "") !== ""
-                        text: WindowTracker.activeWindowTitle || ""
-                        width: Math.min(implicitWidth, Math.max(40, rightContentRow.x - leftContentRow.x - (appBadgeRect.visible ? appBadgeRect.width : 0) - (mediaPill.visible ? mediaPill.width : 0) - 30))
-                        elide: Text.ElideRight
-                        font.family: "Segoe UI"
-                        font.pixelSize: 11
-                        color: "#E2E8F0"
-                    }
-                }
+                        anchors.right: parent.right
+                        spacing: 6
 
-                // --- Right Zone: PowerTools, Hardware, Tray, Audio, Clock ---
-                Row {
-                    id: rightContentRow
-                    anchors.verticalCenter: parent.verticalCenter
-                    anchors.right: parent.right
-                    anchors.rightMargin: 5
-                    spacing: 5
+                        // Grouped Utilities Pill (Settings/Theme, Edit Mode, Spotlight, Clipboard, DropShelf)
+                        Rectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: utilPillRow.implicitWidth + 6
+                            height: 22
+                            radius: 11
+                            color: themeHub.barChipColor
 
-                    // --- Band Theme / Settings Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: bandPillRow.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: themeHub.settingsOpen ? themeHub.accentA : (bandPillMa.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: themeHub.accentA
-                        Row {
-                            id: bandPillRow
-                            anchors.centerIn: parent
-                            spacing: 4
+                            Row {
+                                id: utilPillRow
+                                anchors.centerIn: parent
+                                spacing: 2
+
+                                // Theme / Settings (icon-only, matching SekaiPop)
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20
+                                    height: 18
+                                    radius: 9
+                                    color: themeHub.settingsOpen ? themeHub.accentA : (bandPillMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.settingsOpen ? "qrc:/qml/icons/palette-dark.svg" : "qrc:/qml/icons/palette-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: bandPillMa
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.settingsOpen && (Date.now() - themeHub.settingsClosedAt) < 220)
+                                                return
+                                            themeHub.spotlightOpen = false
+                                            themeHub.clipboardOpen = false
+                                            themeHub.settingsOpen = !themeHub.settingsOpen
+                                        }
+                                    }
+                                }
+
+                                // Edit Desktop (Solar Pen icon)
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20; height: 18; radius: 9
+                                    color: themeHub.editMode ? themeHub.accentB : (editPillMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.editMode ? "qrc:/qml/icons/pen-dark.svg" : "qrc:/qml/icons/pen-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: editPillMa
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: themeHub.setEditMode(!themeHub.editMode)
+                                    }
+                                }
+
+                                // Spotlight Search
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20; height: 18; radius: 9
+                                    color: themeHub.spotlightOpen ? themeHub.accentA : (spotPillMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.spotlightOpen ? "qrc:/qml/icons/magnifer-dark.svg" : "qrc:/qml/icons/magnifer-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: spotPillMa
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.spotlightOpen && (Date.now() - themeHub.spotlightClosedAt) < 220)
+                                                return
+                                            themeHub.settingsOpen = false
+                                            themeHub.clipboardOpen = false
+                                            themeHub.spotlightOpen = !themeHub.spotlightOpen
+                                        }
+                                    }
+                                }
+
+                                // Clipboard History
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20; height: 18; radius: 9
+                                    color: themeHub.clipboardOpen ? themeHub.accentA : (clipPillMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.clipboardOpen ? "qrc:/qml/icons/clipboard-text-dark.svg" : "qrc:/qml/icons/clipboard-text-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: clipPillMa
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.clipboardOpen && (Date.now() - themeHub.clipboardClosedAt) < 220)
+                                                return
+                                            themeHub.settingsOpen = false
+                                            themeHub.spotlightOpen = false
+                                            themeHub.clipboardOpen = !themeHub.clipboardOpen
+                                        }
+                                    }
+                                }
+
+                                // Drop Shelf
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: DropShelfService.count > 0 ? (shelfPillRow.implicitWidth + 8) : 20
+                                    height: 18; radius: 9
+                                    color: themeHub.dropShelfOpen ? themeHub.accentB : (shelfPillMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Row {
+                                        id: shelfPillRow
+                                        anchors.centerIn: parent
+                                        spacing: 3
+                                        Image {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                            source: themeHub.dropShelfOpen ? "qrc:/qml/icons/folder-with-files-dark.svg" : "qrc:/qml/icons/folder-with-files-light.svg"
+                                        }
+                                        Text {
+                                            visible: DropShelfService.count > 0
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: "" + DropShelfService.count
+                                            font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold
+                                            color: themeHub.dropShelfOpen ? themeHub.darkInk : themeHub.accentB
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: shelfPillMa
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.dropShelfOpen && (Date.now() - themeHub.dropShelfClosedAt) < 220)
+                                                return
+                                            themeHub.dropShelfOpen = !themeHub.dropShelfOpen
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Grouped Telemetry Pill (single flat pill instead of 3 rainbow rectangles)
+                        Rectangle {
+                            visible: themeHub.barShowStats
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: statsGroupRow.implicitWidth + 14
+                            height: 22
+                            radius: 11
+                            color: themeHub.barChipColor
+
+                            Row {
+                                id: statsGroupRow
+                                anchors.centerIn: parent
+                                spacing: 6
+
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "CPU " + (WindowTracker.cpuTemp >= 0 ? (WindowTracker.cpuTemp + "°") : "--°")
+                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Bold
+                                    color: WindowTracker.cpuTemp >= 80 ? "#FCA5A5" : "#7DD3FC"
+                                }
+                                Text {
+                                    visible: WindowTracker.gpuTemp >= 0
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "·"
+                                    font.family: "Segoe UI"; font.pixelSize: 10
+                                    color: themeHub.barMutedInk
+                                }
+                                Text {
+                                    visible: WindowTracker.gpuTemp >= 0
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "GPU " + WindowTracker.gpuTemp + "°"
+                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Bold
+                                    color: WindowTracker.gpuTemp >= 80 ? "#FCA5A5" : "#C4B5FD"
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "·"
+                                    font.family: "Segoe UI"; font.pixelSize: 10
+                                    color: themeHub.barMutedInk
+                                }
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: "RAM " + WindowTracker.ramUsage + "%"
+                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Bold
+                                    color: "#F9A8D4"
+                                }
+                            }
+                        }
+
+                        // System Tray Circle (triangle icon + unread dot, no cluttered text)
+                        Rectangle {
+                            id: trayPill
+                            visible: themeHub.barShowTray
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 22
+                            height: 22
+                            radius: 11
+                            color: topBarWindow.trayPopupOpen ? themeHub.accentA : (trayPillMouse.containsMouse ? themeHub.barChipHover : themeHub.barChipColor)
+
                             Image {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 11
-                                height: 11
-                                sourceSize.width: 22
-                                sourceSize.height: 22
-                                smooth: true
-                                source: themeHub.settingsOpen ? "qrc:/qml/icons/palette-dark.svg" : "qrc:/qml/icons/palette-light.svg"
-                            }
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: themeHub.bandShort
-                                font.family: "Consolas"
-                                font.pixelSize: 10
-                                font.weight: Font.Bold
-                                color: themeHub.settingsOpen ? themeHub.darkInk : themeHub.accentA
-                            }
-                        }
-                        MouseArea {
-                            id: bandPillMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!themeHub.settingsOpen && (Date.now() - themeHub.settingsClosedAt) < 220)
-                                    return
-                                themeHub.spotlightOpen = false
-                                themeHub.clipboardOpen = false
-                                themeHub.settingsOpen = !themeHub.settingsOpen
-                            }
-                        }
-                    }
-
-                    // --- Edit Desktop Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: editPillTxt.implicitWidth + 12
-                        height: 20
-                        radius: 7
-                        color: themeHub.editMode ? themeHub.accentB : (editPillMa.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: themeHub.editMode ? themeHub.accentA : "#64748B"
-                        Text {
-                            id: editPillTxt
-                            anchors.centerIn: parent
-                            text: themeHub.editMode ? "Editing" : "Edit"
-                            font.family: "Segoe UI"
-                            font.pixelSize: 10
-                            font.weight: Font.Bold
-                            color: themeHub.editMode ? "#1A1B2E" : "#E2E8F0"
-                        }
-                        MouseArea {
-                            id: editPillMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: themeHub.setEditMode(!themeHub.editMode)
-                        }
-                    }
-
-                    // --- Spotlight Search Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 22
-                        height: 20
-                        radius: 7
-                        color: themeHub.spotlightOpen ? themeHub.accentA : (spotPillMa.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: "#64748B"
-                        Image {
-                            anchors.centerIn: parent
-                            width: 12
-                            height: 12
-                            sourceSize.width: 24
-                            sourceSize.height: 24
-                            smooth: true
-                            source: themeHub.spotlightOpen ? "qrc:/qml/icons/magnifer-dark.svg" : "qrc:/qml/icons/magnifer-light.svg"
-                        }
-                        MouseArea {
-                            id: spotPillMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!themeHub.spotlightOpen && (Date.now() - themeHub.spotlightClosedAt) < 220)
-                                    return
-                                themeHub.settingsOpen = false
-                                themeHub.clipboardOpen = false
-                                themeHub.spotlightOpen = !themeHub.spotlightOpen
-                            }
-                        }
-                    }
-
-                    // --- Clipboard History Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 22
-                        height: 20
-                        radius: 7
-                        color: themeHub.clipboardOpen ? themeHub.accentA : (clipPillMa.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: "#64748B"
-                        Image {
-                            anchors.centerIn: parent
-                            width: 12
-                            height: 12
-                            sourceSize.width: 24
-                            sourceSize.height: 24
-                            smooth: true
-                            source: themeHub.clipboardOpen ? "qrc:/qml/icons/clipboard-text-dark.svg" : "qrc:/qml/icons/clipboard-text-light.svg"
-                        }
-                        MouseArea {
-                            id: clipPillMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!themeHub.clipboardOpen && (Date.now() - themeHub.clipboardClosedAt) < 220)
-                                    return
-                                themeHub.settingsOpen = false
-                                themeHub.spotlightOpen = false
-                                themeHub.clipboardOpen = !themeHub.clipboardOpen
-                            }
-                        }
-                    }
-
-                    // --- Drop Shelf Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: DropShelfService.count > 0 ? (shelfPillRow.implicitWidth + 10) : 22
-                        height: 20
-                        radius: 7
-                        color: themeHub.dropShelfOpen ? themeHub.accentB : (shelfPillMa.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: DropShelfService.count > 0 ? themeHub.accentB : "#64748B"
-                        Row {
-                            id: shelfPillRow
-                            anchors.centerIn: parent
-                            spacing: 3
-                            Image {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 12
-                                height: 12
-                                sourceSize.width: 24
-                                sourceSize.height: 24
-                                smooth: true
-                                source: themeHub.dropShelfOpen ? "qrc:/qml/icons/folder-with-files-dark.svg" : "qrc:/qml/icons/folder-with-files-light.svg"
-                            }
-                            Text {
-                                visible: DropShelfService.count > 0
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "" + DropShelfService.count
-                                font.family: "Consolas"
-                                font.pixelSize: 10
-                                font.weight: Font.Bold
-                                color: themeHub.dropShelfOpen ? themeHub.darkInk : themeHub.accentB
-                            }
-                        }
-                        MouseArea {
-                            id: shelfPillMa
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!themeHub.dropShelfOpen && (Date.now() - themeHub.dropShelfClosedAt) < 220)
-                                    return
-                                themeHub.dropShelfOpen = !themeHub.dropShelfOpen
-                            }
-                        }
-                    }
-
-                    Rectangle {
-                        visible: themeHub.barShowStats
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: cpuTxt.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: "#1E293B"
-                        border.width: 1
-                        border.color: "#38BDF8"
-                        Text {
-                            id: cpuTxt
-                            anchors.centerIn: parent
-                            text: "CPU " + (WindowTracker.cpuTemp >= 0 ? (WindowTracker.cpuTemp + "°C") : "--°C")
-                            font.family: "Consolas"
-                            font.pixelSize: 10
-                            font.weight: Font.Bold
-                            color: WindowTracker.cpuTemp >= 80 ? "#FCA5A5" : "#7DD3FC"
-                        }
-                    }
-
-                    Rectangle {
-                        visible: themeHub.barShowStats && WindowTracker.gpuTemp >= 0
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: gpuTxt.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: "#1E293B"
-                        border.width: 1
-                        border.color: "#A78BFA"
-                        Text {
-                            id: gpuTxt
-                            anchors.centerIn: parent
-                            text: "GPU " + WindowTracker.gpuTemp + "°C"
-                            font.family: "Consolas"
-                            font.pixelSize: 10
-                            font.weight: Font.Bold
-                            color: WindowTracker.gpuTemp >= 80 ? "#FCA5A5" : "#C4B5FD"
-                        }
-                    }
-
-                    Rectangle {
-                        visible: themeHub.barShowStats
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: ramTxt.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: "#1E293B"
-                        border.width: 1
-                        border.color: "#F472B6"
-                        Text {
-                            id: ramTxt
-                            anchors.centerIn: parent
-                            text: "RAM " + WindowTracker.ramUsage + "%"
-                            font.family: "Consolas"
-                            font.pixelSize: 10
-                            font.weight: Font.Bold
-                            color: "#F9A8D4"
-                        }
-                    }
-
-                    // --- System Tray Pill (click to open Tray Popup) ---
-                    Rectangle {
-                        id: trayPill
-                        visible: themeHub.barShowTray
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: trayPillRow.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: topBarWindow.trayPopupOpen ? themeHub.accentA : (trayPillMouse.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: "#64748B"
-
-                        Row {
-                            id: trayPillRow
-                            anchors.centerIn: parent
-                            spacing: 4
-                            Image {
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 10
-                                height: 10
-                                sourceSize.width: 20
-                                sourceSize.height: 20
+                                anchors.centerIn: parent
+                                width: 10; height: 10
+                                sourceSize.width: 20; sourceSize.height: 20
                                 smooth: true
                                 source: topBarWindow.trayPopupOpen
                                     ? "qrc:/qml/icons/alt-arrow-down-dark.svg"
                                     : "qrc:/qml/icons/alt-arrow-up-light.svg"
                             }
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "Tray" + (TrayService.items.length > 0 ? (" " + TrayService.items.length) : "")
-                                font.family: "Segoe UI"
-                                font.pixelSize: 10
-                                font.weight: Font.Bold
-                                color: topBarWindow.trayPopupOpen ? "#1A1B2E" : "#E2E8F0"
+
+                            Rectangle {
+                                visible: TrayService.items.length > 0 && !topBarWindow.trayPopupOpen
+                                anchors.right: parent.right; anchors.top: parent.top
+                                width: 5; height: 5; radius: 2.5
+                                color: themeHub.accentA
                             }
-                        }
 
-                        MouseArea {
-                            id: trayPillMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!topBarWindow.trayPopupOpen && (Date.now() - topBarWindow.trayPopupClosedAt) < 220)
-                                    return
-                                if (!topBarWindow.trayPopupOpen)
-                                    TrayService.refresh()
-                                topBarWindow.trayPopupOpen = !topBarWindow.trayPopupOpen
-                            }
-                        }
-                    }
-
-                    // --- Network / Wi-Fi Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 24
-                        height: 20
-                        radius: 7
-                        color: topBarWindow.wifiPopupOpen ? themeHub.accentA : (wifiPillMouse.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: "#38BDF8"
-                        Image {
-                            anchors.centerIn: parent
-                            width: 13
-                            height: 13
-                            sourceSize.width: 26
-                            sourceSize.height: 26
-                            smooth: true
-                            source: topBarWindow.wifiPopupOpen
-                                ? (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-dark.svg" : "qrc:/qml/icons/network-dark.svg")
-                                : (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-light.svg" : "qrc:/qml/icons/network-light.svg")
-                        }
-                        MouseArea {
-                            id: wifiPillMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!topBarWindow.wifiPopupOpen && (Date.now() - topBarWindow.wifiPopupClosedAt) < 220)
-                                    return
-                                if (!topBarWindow.wifiPopupOpen) {
-                                    SystemControl.refresh()
-                                    SystemControl.refreshWifi()
-                                }
-                                topBarWindow.wifiPopupOpen = !topBarWindow.wifiPopupOpen
-                            }
-                        }
-                    }
-
-                    // --- Bluetooth Pill ---
-                    Rectangle {
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 22
-                        height: 20
-                        radius: 7
-                        color: topBarWindow.btPopupOpen ? themeHub.accentA : (btPillMouse.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: "#818CF8"
-                        Image {
-                            anchors.centerIn: parent
-                            width: 13
-                            height: 13
-                            sourceSize.width: 26
-                            sourceSize.height: 26
-                            smooth: true
-                            opacity: SystemControl.bluetoothEnabled ? 1.0 : 0.6
-                            source: topBarWindow.btPopupOpen ? "qrc:/qml/icons/bt-dark.svg" : "qrc:/qml/icons/bt-light.svg"
-                        }
-                        MouseArea {
-                            id: btPillMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!topBarWindow.btPopupOpen && (Date.now() - topBarWindow.btPopupClosedAt) < 220)
-                                    return
-                                if (!topBarWindow.btPopupOpen)
-                                    SystemControl.refreshBluetooth()
-                                topBarWindow.btPopupOpen = !topBarWindow.btPopupOpen
-                            }
-                        }
-                    }
-
-                    // --- Volume Pill (wheel = master vol, right click = mute, left click = Volume Mixer Popup) ---
-                    Rectangle {
-                        id: volPill
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: volPillTxt.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: topBarWindow.volumePopupOpen
-                            ? themeHub.accentB
-                            : (volPillMouse.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: AudioService.masterMuted ? "#F59E0B" : themeHub.accentB
-
-                        Text {
-                            id: volPillTxt
-                            anchors.centerIn: parent
-                            text: AudioService.masterMuted ? "MUTE" : ("VOL " + AudioService.masterVolume + "%")
-                            font.family: "Consolas"
-                            font.pixelSize: 10
-                            font.weight: Font.Bold
-                            color: topBarWindow.volumePopupOpen
-                                ? "#1A1B2E"
-                                : (AudioService.masterMuted ? "#FCD34D" : themeHub.accentB)
-                        }
-
-                        MouseArea {
-                            id: volPillMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            acceptedButtons: Qt.LeftButton | Qt.RightButton
-                            onClicked: mouse => {
-                                if (mouse.button === Qt.RightButton) {
-                                    AudioService.toggleMasterMute()
-                                } else {
-                                    if (!topBarWindow.volumePopupOpen && (Date.now() - topBarWindow.volumePopupClosedAt) < 220)
+                            MouseArea {
+                                id: trayPillMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.trayPopupOpen && (Date.now() - topBarWindow.trayPopupClosedAt) < 220)
                                         return
-                                    if (!topBarWindow.volumePopupOpen) {
-                                        AudioService.refreshSessions()
-                                        AudioService.refreshOutputDevices()
-                                    }
-                                    topBarWindow.volumePopupOpen = !topBarWindow.volumePopupOpen
+                                    if (!topBarWindow.trayPopupOpen)
+                                        TrayService.refresh()
+                                    topBarWindow.trayPopupOpen = !topBarWindow.trayPopupOpen
                                 }
                             }
-                            onWheel: wheel => {
-                                const step = wheel.angleDelta.y > 0 ? 4 : -4
-                                AudioService.setMasterVolume(AudioService.masterVolume + step)
-                                wheel.accepted = true
+                        }
+
+                        // SekaiPop Grouped StatusPill ([ Wi-Fi | Bluetooth | Volume ] inside ONE pill)
+                        Rectangle {
+                            id: hStatusPill
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: hStatusRow.implicitWidth + 6
+                            height: 22
+                            radius: 11
+                            color: themeHub.barChipColor
+
+                            Row {
+                                id: hStatusRow
+                                anchors.centerIn: parent
+                                spacing: 2
+
+                                // Wi-Fi / Ethernet segment
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 22; height: 18; radius: 9
+                                    color: topBarWindow.wifiPopupOpen ? themeHub.accentA : (wifiPillMouse.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 12; height: 12; sourceSize.width: 24; sourceSize.height: 24; smooth: true
+                                        source: topBarWindow.wifiPopupOpen
+                                            ? (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-dark.svg" : "qrc:/qml/icons/network-dark.svg")
+                                            : (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-light.svg" : "qrc:/qml/icons/network-light.svg")
+                                    }
+                                    MouseArea {
+                                        id: wifiPillMouse
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!topBarWindow.wifiPopupOpen && (Date.now() - topBarWindow.wifiPopupClosedAt) < 220)
+                                                return
+                                            if (!topBarWindow.wifiPopupOpen) {
+                                                SystemControl.refresh()
+                                                SystemControl.refreshWifi()
+                                            }
+                                            topBarWindow.wifiPopupOpen = !topBarWindow.wifiPopupOpen
+                                        }
+                                    }
+                                }
+
+                                // Bluetooth segment
+                                Rectangle {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: 20; height: 18; radius: 9
+                                    color: topBarWindow.btPopupOpen ? themeHub.accentA : (btPillMouse.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 12; height: 12; sourceSize.width: 24; sourceSize.height: 24; smooth: true
+                                        opacity: SystemControl.bluetoothEnabled ? 1.0 : 0.45
+                                        source: topBarWindow.btPopupOpen ? "qrc:/qml/icons/bt-dark.svg" : "qrc:/qml/icons/bt-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: btPillMouse
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!topBarWindow.btPopupOpen && (Date.now() - topBarWindow.btPopupClosedAt) < 220)
+                                                return
+                                            if (!topBarWindow.btPopupOpen)
+                                                SystemControl.refreshBluetooth()
+                                            topBarWindow.btPopupOpen = !topBarWindow.btPopupOpen
+                                        }
+                                    }
+                                }
+
+                                // Volume segment (wheel = master vol, right click = mute, left click = Mixer)
+                                Rectangle {
+                                    id: volPill
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    width: hVolRow.implicitWidth + 10; height: 18; radius: 9
+                                    color: topBarWindow.volumePopupOpen ? themeHub.accentB : (volPillMouse.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Row {
+                                        id: hVolRow
+                                        anchors.centerIn: parent
+                                        spacing: 3
+                                        Image {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            width: 12; height: 12; sourceSize.width: 24; sourceSize.height: 24; smooth: true
+                                            opacity: AudioService.masterMuted ? 0.55 : 0.85
+                                            source: topBarWindow.volumePopupOpen
+                                                ? (AudioService.masterMuted ? "qrc:/qml/icons/volume-cross-dark.svg" : "qrc:/qml/icons/volume-loud-dark.svg")
+                                                : (AudioService.masterMuted ? "qrc:/qml/icons/volume-cross-light.svg" : "qrc:/qml/icons/volume-loud-light.svg")
+                                        }
+                                        Text {
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: AudioService.masterMuted ? "X" : (AudioService.masterVolume + "%")
+                                            font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Bold
+                                            color: topBarWindow.volumePopupOpen
+                                                ? themeHub.darkInk
+                                                : (AudioService.masterMuted ? "#FCD34D" : themeHub.barInkColor)
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: volPillMouse
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        onClicked: mouse => {
+                                            if (mouse.button === Qt.RightButton) {
+                                                AudioService.toggleMasterMute()
+                                            } else {
+                                                if (!topBarWindow.volumePopupOpen && (Date.now() - topBarWindow.volumePopupClosedAt) < 220)
+                                                    return
+                                                if (!topBarWindow.volumePopupOpen) {
+                                                    AudioService.refreshSessions()
+                                                    AudioService.refreshOutputDevices()
+                                                }
+                                                topBarWindow.volumePopupOpen = !topBarWindow.volumePopupOpen
+                                            }
+                                        }
+                                        onWheel: wheel => {
+                                            AudioService.setMasterVolume(AudioService.masterVolume + (wheel.angleDelta.y > 0 ? 4 : -4))
+                                            wheel.accepted = true
+                                        }
+                                    }
+                                }
                             }
                         }
-                    }
 
-                    // --- QuickPanel / Notifications Pill (left click = Phone QuickPanel) ---
-                    Rectangle {
-                        id: qpPill
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: qpPillRow.implicitWidth + 10
-                        height: 20
-                        radius: 7
-                        color: topBarWindow.quickPanelOpen
-                            ? themeHub.accentA
-                            : (qpPillMouse.containsMouse ? "#334155" : "#1E293B")
-                        border.width: 1
-                        border.color: NotificationService.count > 0 ? "#FB7185" : themeHub.accentA
+                        // Notifications / QuickPanel Bell Circle (Solar Bell + unread badge)
+                        Item {
+                            id: qpPill
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 24
+                            height: 24
 
-                        Row {
-                            id: qpPillRow
-                            anchors.centerIn: parent
-                            spacing: 4
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 22; height: 22; radius: 11
+                                color: topBarWindow.quickPanelOpen ? themeHub.accentA : (qpPillMouse.containsMouse ? themeHub.barChipHover : themeHub.barChipColor)
 
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "🔔"
-                                font.family: "Segoe UI Emoji"
-                                font.pixelSize: 10
-                                color: topBarWindow.quickPanelOpen ? "#1A1B2E" : themeHub.accentA
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 12; height: 12; sourceSize.width: 24; sourceSize.height: 24; smooth: true
+                                    source: topBarWindow.quickPanelOpen ? "qrc:/qml/icons/bell-dark.svg" : "qrc:/qml/icons/bell-light.svg"
+                                }
                             }
 
                             Rectangle {
                                 visible: NotificationService.count > 0
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: Math.max(14, qpCountTxt.implicitWidth + 6)
-                                height: 14
-                                radius: 7
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                width: Math.max(13, qpCountTxt.implicitWidth + 5)
+                                height: 13
+                                radius: 6.5
                                 color: "#E11D48"
+                                border.width: 1; border.color: themeHub.darkInk
                                 Text {
                                     id: qpCountTxt
                                     anchors.centerIn: parent
                                     text: NotificationService.count > 9 ? "9+" : String(NotificationService.count)
-                                    font.family: "Segoe UI"
-                                    font.pixelSize: 9
-                                    font.weight: Font.Bold
+                                    font.family: "Segoe UI"; font.pixelSize: 8; font.weight: Font.Bold
                                     color: "#FFFFFF"
                                 }
                             }
-                        }
 
-                        MouseArea {
-                            id: qpPillMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!topBarWindow.quickPanelOpen && (Date.now() - topBarWindow.quickPanelClosedAt) < 220)
-                                    return
-                                if (!topBarWindow.quickPanelOpen) {
-                                    AudioService.refreshSessions()
-                                    AudioService.refreshOutputDevices()
-                                    SystemControl.refresh()
-                                    SystemControl.refreshWifi()
-                                    SystemControl.refreshBluetooth()
-                                    NotificationService.refresh()
+                            MouseArea {
+                                id: qpPillMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.quickPanelOpen && (Date.now() - topBarWindow.quickPanelClosedAt) < 220)
+                                        return
+                                    if (!topBarWindow.quickPanelOpen) {
+                                        AudioService.refreshSessions()
+                                        AudioService.refreshOutputDevices()
+                                        SystemControl.refresh()
+                                        SystemControl.refreshWifi()
+                                        SystemControl.refreshBluetooth()
+                                        NotificationService.refresh()
+                                    }
+                                    topBarWindow.quickPanelOpen = !topBarWindow.quickPanelOpen
                                 }
-                                topBarWindow.quickPanelOpen = !topBarWindow.quickPanelOpen
+                            }
+                        }
+                    }
+                }
+
+                // =============================================================
+                // Vertical Side-Bar: 3-Zone SekaiPop Capsule Stack (Top / Center / Bottom)
+                // =============================================================
+                Item {
+                    id: verticalBarContent
+                    visible: topBarWindow.barVertical
+                    anchors.fill: parent
+                    anchors.margins: 4
+
+                    // --- Top Zone: Active App Pill + Pure Media Squircle ---
+                    Column {
+                        anchors.top: parent.top
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: 5
+
+                        Rectangle {
+                            visible: themeHub.barShowActiveWindow
+                            width: parent.width
+                            height: 22
+                            radius: 11
+                            color: themeHub.accentA
+                            Text {
+                                anchors.fill: parent
+                                anchors.margins: 3
+                                horizontalAlignment: Text.AlignHCenter
+                                verticalAlignment: Text.AlignVCenter
+                                elide: Text.ElideRight
+                                text: WindowTracker.activeAppName || "Desk"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 8
+                                font.weight: Font.Black
+                                color: themeHub.darkInk
+                            }
+                        }
+
+                        // SekaiPop-style Pure Vertical Media Square/Circle (art-only when playing, Solar music note when idle)
+                        Rectangle {
+                            visible: themeHub.barShowMedia
+                            width: parent.width
+                            height: width
+                            radius: 12
+                            color: themeHub.darkInk
+                            scale: vBarMediaMa.pressed ? 0.94 : 1.0
+                            Behavior on scale { NumberAnimation { duration: 90 } }
+
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.margins: 1.5
+                                radius: 10.5
+                                clip: true
+                                gradient: Gradient {
+                                    orientation: Gradient.Vertical
+                                    GradientStop { position: 0.0; color: MediaService.hasSession ? themeHub.accentB : themeHub.barChipColor }
+                                    GradientStop { position: 1.0; color: MediaService.hasSession ? themeHub.accentA : themeHub.barChipColor }
+                                }
+
+                                Item {
+                                    anchors.fill: parent
+                                    opacity: (MediaService.hasSession && !MediaService.isPlaying) ? 0.55 : 1.0
+                                    Behavior on opacity { NumberAnimation { duration: 150 } }
+
+                                    Image {
+                                        anchors.centerIn: parent
+                                        visible: vBarMediaCover.status !== Image.Ready
+                                        width: 16; height: 16
+                                        sourceSize.width: 32; sourceSize.height: 32
+                                        smooth: true
+                                        source: MediaService.hasSession ? "qrc:/qml/icons/music-note-dark.svg" : "qrc:/qml/icons/music-note-light.svg"
+                                    }
+                                    Image {
+                                        id: vBarMediaCover
+                                        anchors.fill: parent
+                                        source: MediaService.hasSession ? MediaService.artUrl : ""
+                                        sourceSize.width: 64; sourceSize.height: 64
+                                        fillMode: Image.PreserveAspectCrop
+                                        asynchronous: true; smooth: true; mipmap: true; cache: false
+                                        visible: status === Image.Ready
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                z: 5
+                                anchors.fill: parent
+                                radius: parent.radius
+                                color: "transparent"
+                                border.width: 1.5
+                                border.color: MediaService.hasSession ? themeHub.accentA : themeHub.barRimColor
+                                antialiasing: true
+                            }
+
+                            MouseArea {
+                                id: vBarMediaMa
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                acceptedButtons: Qt.LeftButton | Qt.RightButton | Qt.MiddleButton
+                                onClicked: mouse => {
+                                    if (mouse.button === Qt.LeftButton) {
+                                        if (!topBarWindow.mediaPopupOpen && (Date.now() - topBarWindow.mediaPopupClosedAt) < 220)
+                                            return
+                                        topBarWindow.mediaPopupOpen = !topBarWindow.mediaPopupOpen
+                                    } else if (mouse.button === Qt.RightButton) {
+                                        MediaService.next()
+                                    } else if (mouse.button === Qt.MiddleButton) {
+                                        MediaService.playPause()
+                                    }
+                                }
                             }
                         }
                     }
 
-                    Rectangle {
-                        id: barWeatherPill
-                        visible: themeHub.barShowWeather
+                    // --- Center Zone: Telemetry Capsule + Clock Circle + Date Circle ---
+                    Column {
                         anchors.verticalCenter: parent.verticalCenter
-                        width: barWeatherTxt.implicitWidth + 12
-                        height: 20
-                        radius: 7
-                        color: barWeatherMouse.containsMouse ? "#334155" : "#1E293B"
-                        border.width: 1
-                        border.color: themeHub.accentA
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: 4
 
-                        Text {
-                            id: barWeatherTxt
-                            anchors.centerIn: parent
-                            text: (WeatherService.isDay ? "☀ " : "🌙 ") + themeHub.formatTemp(WeatherService.temperature) + "°"
-                            font.family: "Segoe UI"
-                            font.pixelSize: 10
-                            font.weight: Font.Bold
-                            color: "#E2E8F0"
+                        // Grouped Telemetry Pill (single flat pill replacing 3 bordered boxes)
+                        Rectangle {
+                            visible: themeHub.barShowStats
+                            width: parent.width
+                            height: vStatsCol.implicitHeight + 10
+                            radius: 17
+                            color: themeHub.barChipColor
+
+                            Column {
+                                id: vStatsCol
+                                anchors.centerIn: parent
+                                spacing: 2
+
+                                Column {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    spacing: -3
+                                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "CPU"; font.family: "Consolas"; font.pixelSize: 7; font.weight: Font.Bold; color: themeHub.barMutedInk }
+                                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: WindowTracker.cpuTemp >= 0 ? (WindowTracker.cpuTemp + "°") : "--°"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: WindowTracker.cpuTemp >= 80 ? "#FCA5A5" : "#7DD3FC" }
+                                }
+                                Column {
+                                    visible: WindowTracker.gpuTemp >= 0
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    spacing: -3
+                                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "GPU"; font.family: "Consolas"; font.pixelSize: 7; font.weight: Font.Bold; color: themeHub.barMutedInk }
+                                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: WindowTracker.gpuTemp + "°"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: WindowTracker.gpuTemp >= 80 ? "#FCA5A5" : "#C4B5FD" }
+                                }
+                                Column {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    spacing: -3
+                                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: "RAM"; font.family: "Consolas"; font.pixelSize: 7; font.weight: Font.Bold; color: themeHub.barMutedInk }
+                                    Text { anchors.horizontalCenter: parent.horizontalCenter; text: WindowTracker.ramUsage + "%"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#F9A8D4" }
+                                }
+                            }
                         }
 
-                        MouseArea {
-                            id: barWeatherMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: WeatherService.refresh()
+                        // Clock Circle (centered HH:mm, matches SekaiPop round clock chip)
+                        Rectangle {
+                            visible: themeHub.barShowClock
+                            width: parent.width
+                            height: 34
+                            radius: 17
+                            color: topBarWindow.calendarOpen
+                                ? themeHub.accentB
+                                : (vClockMa.containsMouse ? themeHub.hoverTint : themeHub.accentA)
+
+                            Column {
+                                anchors.centerIn: parent
+                                spacing: -2
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: topBarWindow.timeText.split(":")[0] || "00"
+                                    font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black
+                                    color: themeHub.darkInk
+                                }
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: topBarWindow.timeText.split(":")[1] || "00"
+                                    font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black
+                                    color: themeHub.darkInk
+                                }
+                            }
+
+                            MouseArea {
+                                id: vClockMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.calendarOpen && (Date.now() - topBarWindow.calendarClosedAt) < 220) return
+                                    topBarWindow.calendarOpen = !topBarWindow.calendarOpen
+                                }
+                            }
+                        }
+
+                        // Date Circle (matches SekaiPop round Oct / 17 chip)
+                        Rectangle {
+                            visible: themeHub.barShowClock
+                            width: parent.width
+                            height: 34
+                            radius: 17
+                            color: topBarWindow.calendarOpen
+                                ? themeHub.accentB
+                                : (vDateMa.containsMouse ? themeHub.barChipHover : themeHub.barChipColor)
+
+                            Column {
+                                anchors.centerIn: parent
+                                spacing: -2
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: topBarWindow.dateText.split(" ")[0] || ""
+                                    font.family: "Segoe UI"; font.pixelSize: 9; font.weight: Font.Bold
+                                    color: topBarWindow.calendarOpen ? themeHub.darkInk : themeHub.barMutedInk
+                                }
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: topBarWindow.dateText.replace(/^[A-Z0-9]+\s+/, "")
+                                    font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black
+                                    color: topBarWindow.calendarOpen ? themeHub.darkInk : themeHub.barInkColor
+                                }
+                            }
+
+                            MouseArea {
+                                id: vDateMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.calendarOpen && (Date.now() - topBarWindow.calendarClosedAt) < 220) return
+                                    topBarWindow.calendarOpen = !topBarWindow.calendarOpen
+                                }
+                            }
                         }
                     }
 
-                    Rectangle {
-                        id: clockPill
-                        visible: themeHub.barShowClock
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: clockRow.implicitWidth + 12
-                        height: 20
-                        radius: 8
-                        color: topBarWindow.calendarOpen ? themeHub.accentB : (clockPillMouse.containsMouse ? "#67E8F9" : themeHub.accentA)
-                        border.width: 1.5
-                        border.color: "#1A1B2E"
+                    // --- Bottom Zone: Grouped Utilities Pill, Tray, StatusPill, Weather, Bell ---
+                    Column {
+                        anchors.bottom: parent.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: 4
 
-                        Row {
-                            id: clockRow
-                            anchors.centerIn: parent
-                            spacing: 5
+                        // Grouped Utilities Pill (Settings, Edit pen, Search, Clip, Shelf)
+                        Rectangle {
+                            width: parent.width
+                            height: vUtilCol.implicitHeight + 8
+                            radius: 17
+                            color: themeHub.barChipColor
 
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: topBarWindow.dateText
-                                font.family: "Segoe UI"
-                                font.pixelSize: 10
-                                font.weight: Font.Medium
-                                color: "#1A1B2E"
-                            }
+                            Column {
+                                id: vUtilCol
+                                anchors.centerIn: parent
+                                spacing: 2
 
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: topBarWindow.timeText
-                                font.family: "Segoe UI"
-                                font.pixelSize: 11
-                                font.weight: Font.Bold
-                                color: "#1A1B2E"
+                                Rectangle {
+                                    width: 30; height: 19; radius: 9.5
+                                    color: themeHub.settingsOpen ? themeHub.accentA : (vSetMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.settingsOpen ? "qrc:/qml/icons/palette-dark.svg" : "qrc:/qml/icons/palette-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: vSetMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.settingsOpen && (Date.now() - themeHub.settingsClosedAt) < 220) return
+                                            themeHub.spotlightOpen = false; themeHub.clipboardOpen = false
+                                            themeHub.settingsOpen = !themeHub.settingsOpen
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 30; height: 19; radius: 9.5
+                                    color: themeHub.editMode ? themeHub.accentB : (vEditMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.editMode ? "qrc:/qml/icons/pen-dark.svg" : "qrc:/qml/icons/pen-light.svg"
+                                    }
+                                    MouseArea { id: vEditMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setEditMode(!themeHub.editMode) }
+                                }
+
+                                Rectangle {
+                                    width: 30; height: 19; radius: 9.5
+                                    color: themeHub.spotlightOpen ? themeHub.accentA : (vSpotMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.spotlightOpen ? "qrc:/qml/icons/magnifer-dark.svg" : "qrc:/qml/icons/magnifer-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: vSpotMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.spotlightOpen && (Date.now() - themeHub.spotlightClosedAt) < 220) return
+                                            themeHub.settingsOpen = false; themeHub.clipboardOpen = false
+                                            themeHub.spotlightOpen = !themeHub.spotlightOpen
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 30; height: 19; radius: 9.5
+                                    color: themeHub.clipboardOpen ? themeHub.accentA : (vClipMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.clipboardOpen ? "qrc:/qml/icons/clipboard-text-dark.svg" : "qrc:/qml/icons/clipboard-text-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: vClipMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.clipboardOpen && (Date.now() - themeHub.clipboardClosedAt) < 220) return
+                                            themeHub.settingsOpen = false; themeHub.spotlightOpen = false
+                                            themeHub.clipboardOpen = !themeHub.clipboardOpen
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 30; height: 19; radius: 9.5
+                                    color: themeHub.dropShelfOpen ? themeHub.accentB : (vShelfMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                        source: themeHub.dropShelfOpen ? "qrc:/qml/icons/folder-with-files-dark.svg" : "qrc:/qml/icons/folder-with-files-light.svg"
+                                    }
+                                    Rectangle {
+                                        visible: DropShelfService.count > 0
+                                        anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 2
+                                        width: 5; height: 5; radius: 2.5; color: themeHub.accentB
+                                    }
+                                    MouseArea {
+                                        id: vShelfMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!themeHub.dropShelfOpen && (Date.now() - themeHub.dropShelfClosedAt) < 220) return
+                                            themeHub.dropShelfOpen = !themeHub.dropShelfOpen
+                                        }
+                                    }
+                                }
                             }
                         }
 
-                        MouseArea {
-                            id: clockPillMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: {
-                                if (!topBarWindow.calendarOpen && (Date.now() - topBarWindow.calendarClosedAt) < 220)
-                                    return
-                                topBarWindow.calendarOpen = !topBarWindow.calendarOpen
+                        // Tray Pill (icon-only arrow + unread dot)
+                        Rectangle {
+                            visible: themeHub.barShowTray
+                            width: parent.width; height: 22; radius: 11
+                            color: topBarWindow.trayPopupOpen ? themeHub.accentA : (vTrayMa.containsMouse ? themeHub.barChipHover : themeHub.barChipColor)
+                            Image {
+                                anchors.centerIn: parent; width: 10; height: 10; sourceSize.width: 20; sourceSize.height: 20; smooth: true
+                                source: topBarWindow.trayPopupOpen ? "qrc:/qml/icons/alt-arrow-down-dark.svg" : "qrc:/qml/icons/alt-arrow-up-light.svg"
+                            }
+                            Rectangle {
+                                visible: TrayService.items.length > 0 && !topBarWindow.trayPopupOpen
+                                anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 4
+                                width: 4; height: 4; radius: 2; color: themeHub.accentA
+                            }
+                            MouseArea {
+                                id: vTrayMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.trayPopupOpen && (Date.now() - topBarWindow.trayPopupClosedAt) < 220) return
+                                    if (!topBarWindow.trayPopupOpen) TrayService.refresh()
+                                    topBarWindow.trayPopupOpen = !topBarWindow.trayPopupOpen
+                                }
+                            }
+                        }
+
+                        // SekaiPop Grouped Vertical StatusPill (Wi-Fi / BT / Volume inside ONE pill)
+                        Rectangle {
+                            width: parent.width
+                            height: vStatusCol.implicitHeight + 8
+                            radius: 17
+                            color: themeHub.barChipColor
+
+                            Column {
+                                id: vStatusCol
+                                anchors.centerIn: parent
+                                spacing: 2
+
+                                Rectangle {
+                                    width: 30; height: 21; radius: 10.5
+                                    color: topBarWindow.wifiPopupOpen ? themeHub.accentA : (vWifiMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 12; height: 12; sourceSize.width: 24; sourceSize.height: 24; smooth: true
+                                        source: topBarWindow.wifiPopupOpen
+                                            ? (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-dark.svg" : "qrc:/qml/icons/network-dark.svg")
+                                            : (SystemControl.networkType === "Wi-Fi" ? "qrc:/qml/icons/wifi-light.svg" : "qrc:/qml/icons/network-light.svg")
+                                    }
+                                    MouseArea {
+                                        id: vWifiMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!topBarWindow.wifiPopupOpen && (Date.now() - topBarWindow.wifiPopupClosedAt) < 220) return
+                                            if (!topBarWindow.wifiPopupOpen) { SystemControl.refresh(); SystemControl.refreshWifi() }
+                                            topBarWindow.wifiPopupOpen = !topBarWindow.wifiPopupOpen
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 30; height: 20; radius: 10
+                                    color: topBarWindow.btPopupOpen ? themeHub.accentA : (vBtMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Image {
+                                        anchors.centerIn: parent; width: 12; height: 12; sourceSize.width: 24; sourceSize.height: 24; smooth: true
+                                        opacity: SystemControl.bluetoothEnabled ? 1.0 : 0.45
+                                        source: topBarWindow.btPopupOpen ? "qrc:/qml/icons/bt-dark.svg" : "qrc:/qml/icons/bt-light.svg"
+                                    }
+                                    MouseArea {
+                                        id: vBtMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            if (!topBarWindow.btPopupOpen && (Date.now() - topBarWindow.btPopupClosedAt) < 220) return
+                                            if (!topBarWindow.btPopupOpen) SystemControl.refreshBluetooth()
+                                            topBarWindow.btPopupOpen = !topBarWindow.btPopupOpen
+                                        }
+                                    }
+                                }
+
+                                Rectangle {
+                                    width: 30; height: 27; radius: 13
+                                    color: topBarWindow.volumePopupOpen ? themeHub.accentB : (vVolMa.containsMouse ? themeHub.barChipHover : "transparent")
+                                    Column {
+                                        anchors.centerIn: parent; spacing: 0
+                                        Image {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                            opacity: AudioService.masterMuted ? 0.55 : 0.85
+                                            source: topBarWindow.volumePopupOpen
+                                                ? (AudioService.masterMuted ? "qrc:/qml/icons/volume-cross-dark.svg" : "qrc:/qml/icons/volume-loud-dark.svg")
+                                                : (AudioService.masterMuted ? "qrc:/qml/icons/volume-cross-light.svg" : "qrc:/qml/icons/volume-loud-light.svg")
+                                        }
+                                        Text {
+                                            anchors.horizontalCenter: parent.horizontalCenter
+                                            text: AudioService.masterMuted ? "X" : (AudioService.masterVolume + "%")
+                                            font.family: "Consolas"; font.pixelSize: 8; font.weight: Font.Black
+                                            color: topBarWindow.volumePopupOpen ? themeHub.darkInk : (AudioService.masterMuted ? "#FCD34D" : themeHub.barInkColor)
+                                        }
+                                    }
+                                    MouseArea {
+                                        id: vVolMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                        onClicked: mouse => {
+                                            if (mouse.button === Qt.RightButton) AudioService.toggleMasterMute()
+                                            else {
+                                                if (!topBarWindow.volumePopupOpen && (Date.now() - topBarWindow.volumePopupClosedAt) < 220) return
+                                                if (!topBarWindow.volumePopupOpen) { AudioService.refreshSessions(); AudioService.refreshOutputDevices() }
+                                                topBarWindow.volumePopupOpen = !topBarWindow.volumePopupOpen
+                                            }
+                                        }
+                                        onWheel: wheel => {
+                                            AudioService.setMasterVolume(AudioService.masterVolume + (wheel.angleDelta.y > 0 ? 4 : -4))
+                                            wheel.accepted = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Weather Pill (Solar Sun/Moon + Temp)
+                        Rectangle {
+                            visible: themeHub.barShowWeather
+                            width: parent.width; height: 32; radius: 16
+                            color: vWeatherMa.containsMouse ? themeHub.barChipHover : themeHub.barChipColor
+                            Column {
+                                anchors.centerIn: parent; spacing: 0
+                                Image {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    width: 11; height: 11; sourceSize.width: 22; sourceSize.height: 22; smooth: true
+                                    source: WeatherService.isDay ? "qrc:/qml/icons/sun-light.svg" : "qrc:/qml/icons/moon-light.svg"
+                                }
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: themeHub.formatTemp(WeatherService.temperature) + "°"
+                                    font.family: "Segoe UI"; font.pixelSize: 9; font.weight: Font.Bold
+                                    color: themeHub.barInkColor
+                                }
+                            }
+                            MouseArea { id: vWeatherMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: WeatherService.refresh() }
+                        }
+
+                        // Notifications / QuickPanel Bell Circle (Solar Bell + floating unread badge)
+                        Item {
+                            width: parent.width
+                            height: 34
+
+                            Rectangle {
+                                anchors.centerIn: parent
+                                width: 34; height: 34; radius: 17
+                                color: topBarWindow.quickPanelOpen ? themeHub.accentA : (vQpMa.containsMouse ? themeHub.barChipHover : themeHub.barChipColor)
+                                Image {
+                                    anchors.centerIn: parent
+                                    width: 15; height: 15; sourceSize.width: 30; sourceSize.height: 30; smooth: true
+                                    source: topBarWindow.quickPanelOpen ? "qrc:/qml/icons/bell-dark.svg" : "qrc:/qml/icons/bell-light.svg"
+                                }
+                            }
+
+                            Rectangle {
+                                visible: NotificationService.count > 0
+                                anchors.right: parent.right
+                                anchors.top: parent.top
+                                width: Math.max(14, vQpCountTxt.implicitWidth + 5)
+                                height: 14
+                                radius: 7
+                                color: "#E11D48"
+                                border.width: 1.5; border.color: themeHub.darkInk
+                                Text {
+                                    id: vQpCountTxt
+                                    anchors.centerIn: parent
+                                    text: NotificationService.count > 9 ? "9+" : String(NotificationService.count)
+                                    font.family: "Segoe UI"; font.pixelSize: 8; font.weight: Font.Bold
+                                    color: "#FFFFFF"
+                                }
+                            }
+
+                            MouseArea {
+                                id: vQpMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    if (!topBarWindow.quickPanelOpen && (Date.now() - topBarWindow.quickPanelClosedAt) < 220) return
+                                    if (!topBarWindow.quickPanelOpen) {
+                                        AudioService.refreshSessions(); AudioService.refreshOutputDevices()
+                                        SystemControl.refresh(); SystemControl.refreshWifi()
+                                        SystemControl.refreshBluetooth(); NotificationService.refresh()
+                                    }
+                                    topBarWindow.quickPanelOpen = !topBarWindow.quickPanelOpen
+                                }
                             }
                         }
                     }
@@ -2461,12 +3517,8 @@ PanelWindow {
         width: innerW + pad * 2 + cardShadow
         height: popupStack.implicitHeight + pad * 2 + cardShadow
 
-        x: {
-            const scrW = themeHub.screenW
-            const targetX = topBarWindow.anchors.margins.left + leftContentRow.x + appBadgeRect.width + 6
-            return Math.max(8, Math.min(scrW - width - 8, targetX))
-        }
-        y: 34
+        x: topBarWindow.barPopupX(width, topBarWindow.anchors.margins.left + leftContentRow.x + appBadgeRect.width + 6)
+        y: topBarWindow.barPopupY(height, 44)
 
         property double openedAt: 0
         onVisibleChanged: {
@@ -3154,12 +4206,8 @@ PanelWindow {
 
         width: cardW + cardShadow
         height: Math.max(92, trayCol.implicitHeight + 24) + cardShadow
-        x: {
-            const barRight = topBarWindow.anchors.margins.left + topBarWindow.width
-            const target = topBarWindow.anchors.margins.left + rightContentRow.x + trayPill.x + Math.round((trayPill.width - cardW) * 0.5)
-            return Math.max(8, Math.min(barRight - width, target))
-        }
-        y: 34
+        x: topBarWindow.barPopupX(width, topBarWindow.anchors.margins.left + rightContentRow.x + trayPill.x + Math.round((trayPill.width - cardW) * 0.5))
+        y: topBarWindow.barPopupY(height, themeHub.screenH - height - 60)
 
         onVisibleChanged: {
             if (visible) {
@@ -6295,8 +7343,8 @@ PanelWindow {
                                         width: (parent.width - 24) * 0.45; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
                                         Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 16
-                                            Text { text: "TOPBAR STYLE & BEHAVIOR"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                            anchors.fill: parent; anchors.margins: 24; spacing: 14
+                                            Text { text: "BAR STYLE & EDGE"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
                                             Grid {
                                                 columns: 2; columnSpacing: 12; rowSpacing: 12; width: parent.width
                                                 Repeater {
@@ -6309,7 +7357,7 @@ PanelWindow {
                                                     delegate: Rectangle {
                                                         required property var modelData
                                                         readonly property bool sel: themeHub.barStyle === modelData.id
-                                                        width: (parent.width - 12) * 0.5; height: 92; radius: 16
+                                                        width: (parent.width - 12) * 0.5; height: 84; radius: 16
                                                         color: sel ? "#FEF3C7" : "#F8FAFC"
                                                         border.width: sel ? 3.5 : 2; border.color: "#1A1B2E"
                                                         Column {
@@ -6321,21 +7369,53 @@ PanelWindow {
                                                     }
                                                 }
                                             }
-                                            Rectangle {
-                                                width: parent.width; height: 74; radius: 16
-                                                color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Column {
-                                                    anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; spacing: 2
-                                                    Text { text: "Auto-Hide TopBar on Overlap"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    Text { text: "Slides away when maximized windows reach top edge"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#64748B" }
+                                            // 4-Edge Selector
+                                            Column {
+                                                width: parent.width; spacing: 8
+                                                Text { text: "SCREEN EDGE"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#64748B" }
+                                                Row {
+                                                    width: parent.width; spacing: 8
+                                                    Repeater {
+                                                        model: [
+                                                            { id: "top", l: "TOP" },
+                                                            { id: "bottom", l: "BOT" },
+                                                            { id: "left", l: "LEFT" },
+                                                            { id: "right", l: "RIGHT" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            readonly property bool sel: themeHub.barEdge === modelData.id
+                                                            width: (parent.width - 24) / 4; height: 42; radius: 12
+                                                            color: sel ? themeHub.accentA : "#F1F5F9"
+                                                            border.width: sel ? 3 : 2; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarEdge(modelData.id) }
+                                                        }
+                                                    }
                                                 }
-                                                Rectangle {
-                                                    anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                    width: 72; height: 32; radius: 16
-                                                    color: themeHub.barAutoHide ? themeHub.accentA : "#CBD5E1"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: themeHub.barAutoHide ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                            }
+                                            // Visibility Mode: Auto-Hide vs No-Hide
+                                            Row {
+                                                width: parent.width; spacing: 10
+                                                Repeater {
+                                                    model: [
+                                                        { val: true,  l: "AUTO-HIDE", desc: "Hide on overlap" },
+                                                        { val: false, l: "NO-HIDE",   desc: "Always reserve" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        readonly property bool sel: themeHub.barAutoHide === modelData.val
+                                                        width: (parent.width - 10) * 0.5; height: 64; radius: 16
+                                                        color: sel ? themeHub.accentB : "#F8FAFC"
+                                                        border.width: sel ? 3 : 2; border.color: "#1A1B2E"
+                                                        Column {
+                                                            anchors.centerIn: parent; spacing: 2
+                                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.desc; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#475569" }
+                                                        }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarAutoHide(modelData.val) }
+                                                    }
                                                 }
-                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarAutoHide(!themeHub.barAutoHide) }
                                             }
                                         }
                                     }
@@ -6394,39 +7474,61 @@ PanelWindow {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
                                         Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 14
-                                            Text { text: "DOCK & UTILITY KEYCAPS"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                            anchors.fill: parent; anchors.margins: 18; spacing: 8
+                                            Text { text: "DOCK STYLE & KEYS"; font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black; color: "#1A1B2E" }
 
+                                            // Dock Outer Pill Style
                                             Row {
-                                                width: parent.width; spacing: 10
+                                                width: parent.width; spacing: 8
                                                 Repeater {
                                                     model: [{ id: "float", l: "FLOAT" }, { id: "capsule", l: "CAPSULE" }, { id: "transparent", l: "CLEAR" }]
                                                     delegate: Rectangle {
                                                         required property var modelData
-                                                        width: (parent.width - 20) / 3; height: 46; radius: 14
+                                                        width: (parent.width - 16) / 3; height: 38; radius: 12
                                                         color: themeHub.dockStyle === modelData.id ? themeHub.accentA : "#F1F5F9"
                                                         border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
                                                         MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockStyle(modelData.id) }
+                                                    }
+                                                }
+                                            }
+
+                                            // Icon Roundness (Auto vs Round Circle vs Square Keycap)
+                                            Row {
+                                                width: parent.width; spacing: 8
+                                                Repeater {
+                                                    model: [
+                                                        { id: "auto",   l: "ICONS: AUTO" },
+                                                        { id: "circle", l: "ROUND ICONS" },
+                                                        { id: "square", l: "SQUARE KEYCAPS" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        readonly property bool sel: themeHub.dockIconShape === modelData.id
+                                                        width: (parent.width - 16) / 3; height: 36; radius: 11
+                                                        color: sel ? themeHub.accentB : "#F1F5F9"
+                                                        border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockIconShape(modelData.id) }
                                                     }
                                                 }
                                             }
 
                                             // Dock Tile Size stepped slider (40..64)
                                             Rectangle {
-                                                width: parent.width; height: 64; radius: 16
+                                                width: parent.width; height: 50; radius: 14
                                                 color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
                                                 Row {
-                                                    anchors.fill: parent; anchors.margins: 14; spacing: 8
-                                                    Text { anchors.verticalCenter: parent.verticalCenter; text: "ICON SIZE (" + themeHub.dockTileSize + "px)"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"; width: 144 }
+                                                    anchors.fill: parent; anchors.margins: 10; spacing: 6
+                                                    Text { anchors.verticalCenter: parent.verticalCenter; text: "SIZE (" + themeHub.dockTileSize + "px)"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E"; width: 108 }
                                                     Repeater {
                                                         model: [40, 44, 48, 52, 56, 60, 64]
                                                         delegate: Rectangle {
                                                             required property int modelData
-                                                            width: 46; height: 34; radius: 10; anchors.verticalCenter: parent.verticalCenter
+                                                            width: 46; height: 30; radius: 9; anchors.verticalCenter: parent.verticalCenter
                                                             color: themeHub.dockTileSize === modelData ? themeHub.accentB : "#FFFFFF"
                                                             border.width: 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: String(modelData); font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            Text { anchors.centerIn: parent; text: String(modelData); font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
                                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockTileSize(modelData) }
                                                         }
                                                     }
@@ -6435,48 +7537,79 @@ PanelWindow {
 
                                             // Magnification toggle
                                             Rectangle {
-                                                width: parent.width; height: 52; radius: 14; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: "Dock Hover Magnification"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                width: parent.width; height: 42; radius: 13; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                Text { anchors.left: parent.left; anchors.leftMargin: 14; anchors.verticalCenter: parent.verticalCenter; text: "Dock Hover Magnification"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                 Rectangle {
-                                                    anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                    width: 68; height: 30; radius: 15; color: themeHub.dockMagnify ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: themeHub.dockMagnify ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
+                                                    width: 64; height: 26; radius: 13; color: themeHub.dockMagnify ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
+                                                    Text { anchors.centerIn: parent; text: themeHub.dockMagnify ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
                                                 }
                                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockMagnify(!themeHub.dockMagnify) }
                                             }
 
-                                            // Auto-hide / Dodge overlapping windows toggle
-                                            Rectangle {
-                                                width: parent.width; height: 52; radius: 14; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: "Dodge Overlapping Windows"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                Rectangle {
-                                                    anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                    width: 68; height: 30; radius: 15; color: themeHub.dockAutoHide ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: themeHub.dockAutoHide ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                }
-                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockAutoHide(!themeHub.dockAutoHide) }
-                                            }
-
-                                            // Dock utility keycap pills (2x2 grid)
-                                            Grid {
-                                                columns: 2; columnSpacing: 12; rowSpacing: 12; width: parent.width
+                                            // Dock Edge & Visibility Mode
+                                            Row {
+                                                width: parent.width; spacing: 8
                                                 Repeater {
                                                     model: [
-                                                        { l: "Finder",    val: themeHub.dockShowFinder,    k: "finder" },
-                                                        { l: "Clipboard", val: themeHub.dockShowClipboard, k: "clip" },
-                                                        { l: "DropShelf", val: themeHub.dockShowDropShelf, k: "drop" },
-                                                        { l: "Trash",     val: themeHub.dockShowTrash,     k: "trash" }
+                                                        { id: "bottom", l: "BOT" },
+                                                        { id: "top",    l: "TOP" },
+                                                        { id: "left",   l: "LEFT" },
+                                                        { id: "right",  l: "RIGHT" }
                                                     ]
                                                     delegate: Rectangle {
                                                         required property var modelData
-                                                        width: (parent.width - 12) * 0.5; height: 52; radius: 14
+                                                        readonly property bool sel: themeHub.dockEdge === modelData.id
+                                                        width: (parent.width - 24) / 4; height: 36; radius: 10
+                                                        color: sel ? themeHub.accentA : "#F1F5F9"
+                                                        border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockEdge(modelData.id) }
+                                                    }
+                                                }
+                                            }
+
+                                            // Auto-hide vs No-hide toggle
+                                            Row {
+                                                width: parent.width; spacing: 8
+                                                Repeater {
+                                                    model: [
+                                                        { val: true,  l: "AUTO-HIDE (Dodge)" },
+                                                        { val: false, l: "NO-HIDE (Pinned)" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        readonly property bool sel: themeHub.dockAutoHide === modelData.val
+                                                        width: (parent.width - 8) * 0.5; height: 38; radius: 12
+                                                        color: sel ? themeHub.accentB : "#F8FAFC"
+                                                        border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockAutoHide(modelData.val) }
+                                                    }
+                                                }
+                                            }
+
+                                            // Dock utility keycap pills (3x2 grid)
+                                            Grid {
+                                                columns: 3; columnSpacing: 8; rowSpacing: 8; width: parent.width
+                                                Repeater {
+                                                    model: [
+                                                        { l: "Finder",    val: themeHub.dockShowFinder,    k: "finder" },
+                                                        { l: "Clip",      val: themeHub.dockShowClipboard, k: "clip" },
+                                                        { l: "Shelf",     val: themeHub.dockShowDropShelf, k: "drop" },
+                                                        { l: "Trash",     val: themeHub.dockShowTrash,     k: "trash" },
+                                                        { l: "Media",     val: themeHub.dockShowMedia,     k: "media" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        width: (parent.width - 16) / 3; height: 42; radius: 12
                                                         color: modelData.val ? "#ECFDF5" : "#F8FAFC"
                                                         border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.left: parent.left; anchors.leftMargin: 14; anchors.verticalCenter: parent.verticalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        Text { anchors.left: parent.left; anchors.leftMargin: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
                                                         Rectangle {
-                                                            anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter
-                                                            width: 58; height: 28; radius: 14; color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            anchors.right: parent.right; anchors.rightMargin: 8; anchors.verticalCenter: parent.verticalCenter
+                                                            width: 44; height: 24; radius: 12; color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E" }
                                                         }
                                                         MouseArea {
                                                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -6485,6 +7618,7 @@ PanelWindow {
                                                                 else if (modelData.k === "clip") themeHub.setDockShowClipboard(!themeHub.dockShowClipboard)
                                                                 else if (modelData.k === "drop") themeHub.setDockShowDropShelf(!themeHub.dockShowDropShelf)
                                                                 else if (modelData.k === "trash") themeHub.setDockShowTrash(!themeHub.dockShowTrash)
+                                                                else if (modelData.k === "media") themeHub.setDockShowMedia(!themeHub.dockShowMedia)
                                                             }
                                                         }
                                                     }
@@ -7514,8 +8648,8 @@ PanelWindow {
 
         width: 288 + cardShadow
         height: calCol.implicitHeight + 24 + cardShadow
-        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
-        y: 34
+        x: topBarWindow.barPopupX(width, Math.round(barFrame.x + 6 + centerContentRow.x + clockPill.x + (clockPill.width - width) * 0.5))
+        y: topBarWindow.barPopupY(height, Math.round((themeHub.screenH - height) * 0.5))
 
         onVisibleChanged: {
             if (visible) {
@@ -7923,8 +9057,8 @@ PanelWindow {
 
         width: 268 + cardShadow
         height: wifiCol.implicitHeight + 24 + cardShadow
-        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
-        y: 34
+        x: topBarWindow.barPopupX(width, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
+        y: topBarWindow.barPopupY(height, themeHub.screenH - height - 80)
 
         onVisibleChanged: {
             if (visible) {
@@ -8181,8 +9315,8 @@ PanelWindow {
 
         width: 256 + cardShadow
         height: btCol.implicitHeight + 24 + cardShadow
-        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
-        y: 34
+        x: topBarWindow.barPopupX(width, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
+        y: topBarWindow.barPopupY(height, themeHub.screenH - height - 80)
 
         onVisibleChanged: {
             if (visible) {
@@ -8391,8 +9525,8 @@ PanelWindow {
 
         width: 344 + cardShadow
         height: Math.min(540, volPopupCol.implicitHeight + 24) + cardShadow
-        x: Math.max(8, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
-        y: 34
+        x: topBarWindow.barPopupX(width, (topBarWindow.anchors.margins.left + topBarWindow.width) - width - 6)
+        y: topBarWindow.barPopupY(height, themeHub.screenH - height - 60)
 
         onVisibleChanged: {
             if (visible) {

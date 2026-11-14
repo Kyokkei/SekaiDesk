@@ -4684,24 +4684,49 @@ Item {
                                 }
                             }
 
-                            // Card 2: Bar Behavior
+                            // Card 2: Bar Position & Hide Mode
                             SekaiPill {
-                                width: 176; height: 118; radius: 16; color: "#FFFFFF"; inkColor: themeHub.darkInk; borderWidth: 2; shadowShift: 3; showInnerRing: false
+                                width: 224; height: 118; radius: 16; color: "#FFFFFF"; inkColor: themeHub.darkInk; borderWidth: 2; shadowShift: 3; showInnerRing: false
                                 Column {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8
-                                    Text { text: "BEHAVIOR"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#64748B" }
-                                    Rectangle {
-                                        width: parent.width; height: 44; radius: 11
-                                        color: widgetsRoot.themeHub.barAutoHide ? themeHub.accentB : "#F1F5F9"
-                                        border.width: 2; border.color: themeHub.darkInk
-                                        Column {
-                                            anchors.centerIn: parent; spacing: 1
-                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: "Auto-Hide Bar"; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: themeHub.darkInk }
-                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: widgetsRoot.themeHub.barAutoHide ? "Dodge maximized" : "Always pinned"; font.family: "Segoe UI"; font.pixelSize: 9; font.weight: Font.DemiBold; color: "#475569" }
+                                    Text { text: "EDGE & VISIBILITY"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#64748B" }
+                                    Row {
+                                        width: parent.width; spacing: 5
+                                        Repeater {
+                                            model: [
+                                                { id: "top",    l: "TOP" },
+                                                { id: "bottom", l: "BOT" },
+                                                { id: "left",   l: "LEFT" },
+                                                { id: "right",  l: "RIGHT" }
+                                            ]
+                                            delegate: Rectangle {
+                                                required property var modelData
+                                                readonly property bool act: widgetsRoot.themeHub.barEdge === modelData.id
+                                                width: 47; height: 32; radius: 9
+                                                color: act ? themeHub.accentA : "#F1F5F9"
+                                                border.width: act ? 2 : 1.5; border.color: themeHub.darkInk
+                                                Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setBarEdge(modelData.id) }
+                                            }
                                         }
-                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setBarAutoHide(!widgetsRoot.themeHub.barAutoHide) }
                                     }
-                                    Text { width: parent.width; text: "Hover top edge to reveal"; font.family: "Segoe UI"; font.pixelSize: 9; color: "#64748B"; horizontalAlignment: Text.AlignHCenter }
+                                    Row {
+                                        width: parent.width; spacing: 6
+                                        Rectangle {
+                                            width: 98; height: 34; radius: 9
+                                            color: widgetsRoot.themeHub.barAutoHide ? themeHub.accentB : "#F1F5F9"
+                                            border.width: widgetsRoot.themeHub.barAutoHide ? 2 : 1.5; border.color: themeHub.darkInk
+                                            Text { anchors.centerIn: parent; text: "AUTO-HIDE"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setBarAutoHide(true) }
+                                        }
+                                        Rectangle {
+                                            width: 98; height: 34; radius: 9
+                                            color: !widgetsRoot.themeHub.barAutoHide ? themeHub.accentA : "#F1F5F9"
+                                            border.width: !widgetsRoot.themeHub.barAutoHide ? 2 : 1.5; border.color: themeHub.darkInk
+                                            Text { anchors.centerIn: parent; text: "NO-HIDE"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setBarAutoHide(false) }
+                                        }
+                                    }
                                 }
                             }
 
@@ -4818,20 +4843,56 @@ Item {
                                         }
                                     }
                                     Row {
-                                        spacing: 6
+                                        spacing: 5
                                         Rectangle {
-                                            width: 147; height: 34; radius: 9
+                                            width: 110; height: 34; radius: 9
                                             color: widgetsRoot.themeHub.dockMagnify ? themeHub.accentA : "#F1F5F9"
                                             border.width: 1.5; border.color: themeHub.darkInk
                                             Text { anchors.centerIn: parent; text: "Magnify: " + (widgetsRoot.themeHub.dockMagnify ? "ON" : "OFF"); font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
                                             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setDockMagnify(!widgetsRoot.themeHub.dockMagnify) }
                                         }
                                         Rectangle {
-                                            width: 147; height: 34; radius: 9
+                                            width: 90; height: 34; radius: 9
                                             color: widgetsRoot.themeHub.dockAutoHide ? themeHub.accentB : "#F1F5F9"
-                                            border.width: 1.5; border.color: themeHub.darkInk
-                                            Text { anchors.centerIn: parent; text: "Dodge Win: " + (widgetsRoot.themeHub.dockAutoHide ? "ON" : "OFF"); font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
-                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setDockAutoHide(!widgetsRoot.themeHub.dockAutoHide) }
+                                            border.width: widgetsRoot.themeHub.dockAutoHide ? 2 : 1.5; border.color: themeHub.darkInk
+                                            Text { anchors.centerIn: parent; text: "AUTO-HIDE"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setDockAutoHide(true) }
+                                        }
+                                        Rectangle {
+                                            width: 90; height: 34; radius: 9
+                                            color: !widgetsRoot.themeHub.dockAutoHide ? themeHub.accentA : "#F1F5F9"
+                                            border.width: !widgetsRoot.themeHub.dockAutoHide ? 2 : 1.5; border.color: themeHub.darkInk
+                                            Text { anchors.centerIn: parent; text: "NO-HIDE"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
+                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setDockAutoHide(false) }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Card 2b: Dock 4-Edge Position
+                            SekaiPill {
+                                width: 176; height: 118; radius: 16; color: "#FFFFFF"; inkColor: themeHub.darkInk; borderWidth: 2; shadowShift: 3; showInnerRing: false
+                                Column {
+                                    anchors.fill: parent; anchors.margins: 10; spacing: 8
+                                    Text { text: "DOCK POSITION"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#64748B" }
+                                    Grid {
+                                        columns: 2; spacing: 6; width: parent.width
+                                        Repeater {
+                                            model: [
+                                                { id: "bottom", l: "BOTTOM" },
+                                                { id: "top",    l: "TOP" },
+                                                { id: "left",   l: "LEFT" },
+                                                { id: "right",  l: "RIGHT" }
+                                            ]
+                                            delegate: Rectangle {
+                                                required property var modelData
+                                                readonly property bool act: widgetsRoot.themeHub.dockEdge === modelData.id
+                                                width: 75; height: 34; radius: 9
+                                                color: act ? themeHub.accentA : "#F1F5F9"
+                                                border.width: act ? 2 : 1.5; border.color: themeHub.darkInk
+                                                Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: widgetsRoot.themeHub.setDockEdge(modelData.id) }
+                                            }
                                         }
                                     }
                                 }
@@ -4844,20 +4905,22 @@ Item {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8
                                     Text { text: "DOCK UTILITY KEYS"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#64748B" }
                                     Grid {
-                                        columns: 2; spacing: 6
+                                        columns: 3; spacing: 6
                                         Repeater {
                                             model: [
                                                 { key: "finder",    label: "Spotlight",  on: widgetsRoot.themeHub.dockShowFinder },
                                                 { key: "clipboard", label: "Clipboard",  on: widgetsRoot.themeHub.dockShowClipboard },
                                                 { key: "dropshelf", label: "Drop Shelf", on: widgetsRoot.themeHub.dockShowDropShelf },
-                                                { key: "trash",     label: "Trash Bin",  on: widgetsRoot.themeHub.dockShowTrash }
+                                                { key: "trash",     label: "Trash Bin",  on: widgetsRoot.themeHub.dockShowTrash },
+                                                { key: "media",     label: "Media Pill", on: widgetsRoot.themeHub.dockShowMedia },
+                                                { key: "iconshape", label: "Icons: " + (widgetsRoot.themeHub.dockIconShape === "circle" ? "Round" : (widgetsRoot.themeHub.dockIconShape === "square" ? "Square" : "Auto")), on: widgetsRoot.themeHub.dockIconShape !== "auto" }
                                             ]
                                             delegate: Rectangle {
                                                 required property var modelData
-                                                width: 147; height: 34; radius: 9
+                                                width: 96; height: 34; radius: 9
                                                 color: modelData.on ? themeHub.accentB : "#F1F5F9"
                                                 border.width: modelData.on ? 2 : 1.5; border.color: themeHub.darkInk
-                                                Text { anchors.centerIn: parent; text: (modelData.on ? "✓ " : "○ ") + modelData.label; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: themeHub.darkInk }
+                                                Text { anchors.centerIn: parent; text: modelData.key === "iconshape" ? modelData.label : ((modelData.on ? "✓ " : "○ ") + modelData.label); font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
                                                 MouseArea {
                                                     anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                                     onClicked: {
@@ -4866,6 +4929,11 @@ Item {
                                                         else if (k === "clipboard") widgetsRoot.themeHub.setDockShowClipboard(!modelData.on)
                                                         else if (k === "dropshelf") widgetsRoot.themeHub.setDockShowDropShelf(!modelData.on)
                                                         else if (k === "trash") widgetsRoot.themeHub.setDockShowTrash(!modelData.on)
+                                                        else if (k === "media") widgetsRoot.themeHub.setDockShowMedia(!modelData.on)
+                                                        else if (k === "iconshape") {
+                                                            const cur = widgetsRoot.themeHub.dockIconShape
+                                                            widgetsRoot.themeHub.setDockIconShape(cur === "auto" ? "circle" : (cur === "circle" ? "square" : "auto"))
+                                                        }
                                                     }
                                                 }
                                             }

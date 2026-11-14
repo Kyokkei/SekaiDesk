@@ -16,6 +16,10 @@ class WindowTracker : public QObject {
     Q_PROPERTY(bool bottomEdgeHovered READ bottomEdgeHovered NOTIFY bottomEdgeHoveredChanged)
     Q_PROPERTY(bool topOverlap READ topOverlap NOTIFY topOverlapChanged)
     Q_PROPERTY(bool topEdgeHovered READ topEdgeHovered NOTIFY topEdgeHoveredChanged)
+    Q_PROPERTY(bool leftOverlap READ leftOverlap NOTIFY leftOverlapChanged)
+    Q_PROPERTY(bool leftEdgeHovered READ leftEdgeHovered NOTIFY leftEdgeHoveredChanged)
+    Q_PROPERTY(bool rightOverlap READ rightOverlap NOTIFY rightOverlapChanged)
+    Q_PROPERTY(bool rightEdgeHovered READ rightEdgeHovered NOTIFY rightEdgeHoveredChanged)
     Q_PROPERTY(QString activeAppName READ activeAppName NOTIFY activeWindowChanged)
     Q_PROPERTY(QString activeWindowTitle READ activeWindowTitle NOTIFY activeWindowChanged)
     Q_PROPERTY(int cpuUsage READ cpuUsage NOTIFY statsChanged)
@@ -34,6 +38,10 @@ public:
     bool bottomEdgeHovered() const { return m_bottomEdgeHovered; }
     bool topOverlap() const { return m_topOverlap; }
     bool topEdgeHovered() const { return m_topEdgeHovered; }
+    bool leftOverlap() const { return m_leftOverlap; }
+    bool leftEdgeHovered() const { return m_leftEdgeHovered; }
+    bool rightOverlap() const { return m_rightOverlap; }
+    bool rightEdgeHovered() const { return m_rightEdgeHovered; }
     QString activeAppName() const { return m_activeAppName; }
     QString activeWindowTitle() const { return m_activeWindowTitle; }
     int cpuUsage() const { return m_cpuUsage; }
@@ -62,6 +70,10 @@ signals:
     void bottomEdgeHoveredChanged();
     void topOverlapChanged();
     void topEdgeHoveredChanged();
+    void leftOverlapChanged();
+    void leftEdgeHoveredChanged();
+    void rightOverlapChanged();
+    void rightEdgeHoveredChanged();
     void activeWindowChanged();
     void statsChanged();
 
@@ -84,6 +96,10 @@ private:
     bool m_bottomEdgeHovered = false;
     bool m_topOverlap = false;
     bool m_topEdgeHovered = false;
+    bool m_leftOverlap = false;
+    bool m_leftEdgeHovered = false;
+    bool m_rightOverlap = false;
+    bool m_rightEdgeHovered = false;
     QString m_activeAppName = QStringLiteral("Desktop");
     QString m_activeWindowTitle;
     int m_cpuUsage = 0;

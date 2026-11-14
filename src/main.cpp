@@ -8,10 +8,17 @@
 //   4. Load qrc:/qml/Shell.qml (smoke test; replaced by the full shell in
 //      later phases).
 
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
 #include <QGuiApplication>
+#include <QMutex>
+#include <QMutexLocker>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQmlEngine>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QUrl>
 
 #ifdef Q_OS_WIN
@@ -42,6 +49,30 @@
 #include "services/NotificationService.h"
 #include "services/VisualizerService.h"
 #include "services/WallpaperService.h"
+
+namespace {
+QFile* g_logFile = nullptr;
+QMutex g_logMutex;
+
+void sekaiMessageHandler(QtMsgType type, const QMessageLogContext&, const QString& msg)
+{
+    QMutexLocker lock(&g_logMutex);
+    if (!g_logFile || !g_logFile->isOpen())
+        return;
+    const char* tag = "DBG";
+    switch (type) {
+    case QtDebugMsg:    tag = "DBG"; break;
+    case QtInfoMsg:     tag = "INF"; break;
+    case QtWarningMsg:  tag = "WRN"; break;
+    case QtCriticalMsg: tag = "CRT"; break;
+    case QtFatalMsg:    tag = "FTL"; break;
+    }
+    QTextStream ts(g_logFile);
+    ts << QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz "))
+       << "[" << tag << "] " << msg << "\n";
+    ts.flush();
+}
+}
 
 int main(int argc, char* argv[])
 {
@@ -88,6 +119,19 @@ int main(int argc, char* argv[])
     app.setApplicationDisplayName(QStringLiteral("SekaiDesk"));
     app.setApplicationVersion(QStringLiteral("0.1.0"));
     app.setQuitOnLastWindowClosed(false);
+
+    {
+        const QString baseDir = QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation);
+        const QString logDir = QDir(baseDir.isEmpty() ? QCoreApplication::applicationDirPath() : baseDir)
+                                   .absoluteFilePath(QStringLiteral("SekaiDesk"));
+        QDir().mkpath(logDir);
+        static QFile logFile(QDir(logDir).absoluteFilePath(QStringLiteral("startup.log")));
+        if (logFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
+            g_logFile = &logFile;
+            qInstallMessageHandler(sekaiMessageHandler);
+            qInfo("SekaiDesk booting...");
+        }
+    }
 
     static SettingsStore settings;
     settings.ensureLoaded();
@@ -198,6 +242,12 @@ int main(int argc, char* argv[])
     // --restore: emergency work-area / taskbar rescue (implemented Phase 1).
     // --edit / other flags handled in later phases.
 
+    QObject::connect(&engine, &QQmlApplicationEngine::warnings, &app,
+                     [](const QList<QQmlError>& warnings) {
+                         for (const auto& w : warnings)
+                             qWarning("QML: %s", qPrintable(w.toString()));
+                     });
+
     engine.load(QUrl(QStringLiteral("qrc:/qml/Shell.qml")));
     if (engine.rootObjects().isEmpty()) {
         qCritical("SekaiDesk: failed to load Shell.qml");
@@ -206,6 +256,7 @@ int main(int argc, char* argv[])
 #endif
         return 1;
     }
+    qInfo("SekaiDesk: Shell.qml loaded (%lld root objects)", static_cast<long long>(engine.rootObjects().size()));
 
     const int exitCode = app.exec();
 #ifdef Q_OS_WIN

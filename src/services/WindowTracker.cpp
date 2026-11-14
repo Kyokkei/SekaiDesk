@@ -512,17 +512,33 @@ void WindowTracker::pollEdgeAndOverlap()
     POINT pt{};
     bool nextBottomEdge = m_bottomEdgeHovered;
     bool nextTopEdge = m_topEdgeHovered;
+    bool nextLeftEdge = m_leftEdgeHovered;
+    bool nextRightEdge = m_rightEdgeHovered;
     if (GetCursorPos(&pt)) {
         const bool inX = (pt.x >= mi.rcMonitor.left && pt.x <= mi.rcMonitor.right);
+        const bool inY = (pt.y >= mi.rcMonitor.top && pt.y <= mi.rcMonitor.bottom);
+
         const int botTriggerY = m_bottomEdgeHovered
-            ? (mi.rcMonitor.bottom - qRound(96 * dpr))
-            : (mi.rcMonitor.bottom - qMax(2, qRound(4 * dpr)));
+            ? (mi.rcMonitor.bottom - qRound(136 * dpr))
+            : (mi.rcMonitor.bottom - qMax(4, qRound(10 * dpr)));
         nextBottomEdge = inX && (pt.y >= botTriggerY) && (pt.y <= mi.rcMonitor.bottom);
+
         const int topTriggerY = m_topEdgeHovered
-            ? (mi.rcMonitor.top + qRound(56 * dpr))
-            : (mi.rcMonitor.top + qMax(2, qRound(3 * dpr)));
+            ? (mi.rcMonitor.top + qRound(136 * dpr))
+            : (mi.rcMonitor.top + qMax(3, qRound(6 * dpr)));
         const bool avoidWindowControls = !m_topEdgeHovered && (pt.x >= mi.rcMonitor.right - qRound(150 * dpr));
         nextTopEdge = inX && !avoidWindowControls && (pt.y >= mi.rcMonitor.top) && (pt.y <= topTriggerY);
+
+        const int leftTriggerX = m_leftEdgeHovered
+            ? (mi.rcMonitor.left + qRound(136 * dpr))
+            : (mi.rcMonitor.left + qMax(6, qRound(14 * dpr)));
+        nextLeftEdge = inY && (pt.x >= mi.rcMonitor.left) && (pt.x <= leftTriggerX);
+
+        const int rightTriggerX = m_rightEdgeHovered
+            ? (mi.rcMonitor.right - qRound(136 * dpr))
+            : (mi.rcMonitor.right - qMax(6, qRound(14 * dpr)));
+        const bool avoidTopRightClose = !m_rightEdgeHovered && (pt.y <= mi.rcMonitor.top + qRound(42 * dpr));
+        nextRightEdge = inY && !avoidTopRightClose && (pt.x >= rightTriggerX) && (pt.x <= mi.rcMonitor.right);
     }
     if (nextBottomEdge != m_bottomEdgeHovered) {
         m_bottomEdgeHovered = nextBottomEdge;
@@ -532,6 +548,14 @@ void WindowTracker::pollEdgeAndOverlap()
         m_topEdgeHovered = nextTopEdge;
         emit topEdgeHoveredChanged();
     }
+    if (nextLeftEdge != m_leftEdgeHovered) {
+        m_leftEdgeHovered = nextLeftEdge;
+        emit leftEdgeHoveredChanged();
+    }
+    if (nextRightEdge != m_rightEdgeHovered) {
+        m_rightEdgeHovered = nextRightEdge;
+        emit rightEdgeHoveredChanged();
+    }
 
     struct OverlapCtx {
         DWORD selfPid = 0;
@@ -539,14 +563,18 @@ void WindowTracker::pollEdgeAndOverlap()
         RECT rcMon{};
         int dockBandPx = 92;
         int topBandPx = 52;
+        int sideBandPx = 92;
         bool dockOverlap = false;
         bool topOverlap = false;
+        bool leftOverlap = false;
+        bool rightOverlap = false;
     } ctx;
     ctx.selfPid = GetCurrentProcessId();
     ctx.mon = mon;
     ctx.rcMon = mi.rcMonitor;
     ctx.dockBandPx = qRound(92 * dpr);
     ctx.topBandPx = qRound(52 * dpr);
+    ctx.sideBandPx = qRound(92 * dpr);
 
     EnumWindows([](HWND h, LPARAM lParam) -> BOOL {
         auto* c = reinterpret_cast<OverlapCtx*>(lParam);
@@ -600,15 +628,22 @@ void WindowTracker::pollEdgeAndOverlap()
             return TRUE;
 
         const bool inScreenX = (rc.right > c->rcMon.left) && (rc.left < c->rcMon.right);
-        if (!inScreenX)
-            return TRUE;
+        const bool inScreenY = (rc.bottom > c->rcMon.top) && (rc.top < c->rcMon.bottom);
 
-        if (zoomed || (rc.top < c->rcMon.bottom && rc.bottom >= c->rcMon.bottom - c->dockBandPx))
-            c->dockOverlap = true;
-        if (zoomed || (rc.bottom > c->rcMon.top && rc.top <= c->rcMon.top + c->topBandPx))
-            c->topOverlap = true;
+        if (inScreenX) {
+            if (zoomed || (rc.top < c->rcMon.bottom && rc.bottom >= c->rcMon.bottom - c->dockBandPx))
+                c->dockOverlap = true;
+            if (zoomed || (rc.bottom > c->rcMon.top && rc.top <= c->rcMon.top + c->topBandPx))
+                c->topOverlap = true;
+        }
+        if (inScreenY) {
+            if (zoomed || (rc.right > c->rcMon.left && rc.left <= c->rcMon.left + c->sideBandPx))
+                c->leftOverlap = true;
+            if (zoomed || (rc.left < c->rcMon.right && rc.right >= c->rcMon.right - c->sideBandPx))
+                c->rightOverlap = true;
+        }
 
-        return (c->dockOverlap && c->topOverlap) ? FALSE : TRUE;
+        return (c->dockOverlap && c->topOverlap && c->leftOverlap && c->rightOverlap) ? FALSE : TRUE;
     }, reinterpret_cast<LPARAM>(&ctx));
 
     if (ctx.dockOverlap != m_dockOverlap) {
@@ -618,6 +653,14 @@ void WindowTracker::pollEdgeAndOverlap()
     if (ctx.topOverlap != m_topOverlap) {
         m_topOverlap = ctx.topOverlap;
         emit topOverlapChanged();
+    }
+    if (ctx.leftOverlap != m_leftOverlap) {
+        m_leftOverlap = ctx.leftOverlap;
+        emit leftOverlapChanged();
+    }
+    if (ctx.rightOverlap != m_rightOverlap) {
+        m_rightOverlap = ctx.rightOverlap;
+        emit rightOverlapChanged();
     }
 #endif
 }

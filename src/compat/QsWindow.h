@@ -136,6 +136,7 @@ class PanelWindow : public QQuickWindow {
     Q_PROPERTY(QVariant mask READ maskProperty WRITE setMaskProperty NOTIFY maskChanged)
     Q_PROPERTY(bool reserveTopBar READ reserveTopBar WRITE setReserveTopBar NOTIFY reserveTopBarChanged)
     Q_PROPERTY(int reserveHeight READ reserveHeight WRITE setReserveHeight NOTIFY reserveHeightChanged)
+    Q_PROPERTY(QString reserveEdge READ reserveEdge WRITE setReserveEdge NOTIFY reserveEdgeChanged)
     Q_PROPERTY(bool fullscreenActive READ fullscreenActive NOTIFY fullscreenActiveChanged)
     Q_PROPERTY(bool blurBehind READ blurBehind WRITE setBlurBehind NOTIFY blurChanged)
     Q_PROPERTY(int blurRadius READ blurRadius WRITE setBlurRadius NOTIFY blurChanged)
@@ -187,6 +188,9 @@ public:
     int reserveHeight() const { return m_reserveHeight; }
     void setReserveHeight(int h);
 
+    QString reserveEdge() const { return m_reserveEdge; }
+    void setReserveEdge(const QString& edge);
+
     bool fullscreenActive() const { return m_fullscreenActive; }
 
     bool blurBehind() const { return m_blurBehind; }
@@ -213,6 +217,7 @@ signals:
     void maskChanged();
     void reserveTopBarChanged();
     void reserveHeightChanged();
+    void reserveEdgeChanged();
     void fullscreenActiveChanged();
     void windowDeactivated();
     void blurChanged();
@@ -247,7 +252,14 @@ private:
     bool m_hasAppliedMask = false;
     bool m_reserveTopBar = false;
     int m_reserveHeight = 48;
+    QString m_reserveEdge = QStringLiteral("top");
     bool m_appBarRegistered = false;
+    bool m_inAppBarUpdate = false;
+    int m_lastAppBarEdge = -1;
+    int m_lastAppBarLeft = 0;
+    int m_lastAppBarTop = 0;
+    int m_lastAppBarRight = 0;
+    int m_lastAppBarBottom = 0;
     bool m_fullscreenActive = false;
     bool m_blurBehind = false;
     int m_blurRadius = 14;

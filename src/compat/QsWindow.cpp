@@ -541,7 +541,7 @@ PanelWindow::PanelWindow(QWindow* parent)
     fmt.setAlphaBufferSize(8);
     setFormat(fmt);
 
-    connect(m_anchors, &WindowAnchors::changed, this, &PanelWindow::recomputeGeometry);
+    connect(m_anchors, &WindowAnchors::changed, this, &PanelWindow::recompute);
     connect(this, &QWindow::activeChanged, this, [this]() {
         if (!isActive())
             emit windowDeactivated();
@@ -830,6 +830,16 @@ void PanelWindow::applyBlurBehind()
         GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowCompositionAttribute"));
 
     if (m_blurBehind) {
+        const bool overshotBothAxes = (width() > 300 && height() > 300);
+        if (overshotBothAxes) {
+            if (fnSetWCA) {
+                AccentPolicy policy{};
+                policy.AccentState = 0;
+                WindowCompositionAttribData data{ 19, &policy, sizeof(policy) };
+                fnSetWCA(hwnd, &data);
+            }
+            return;
+        }
         if (fnSetWCA) {
             const DWORD a = static_cast<DWORD>(qBound(0, m_blurTint.alpha(), 255));
             const DWORD r = static_cast<DWORD>(m_blurTint.red());
@@ -858,6 +868,7 @@ void PanelWindow::applyBlurBehind()
         policy.AccentState = 0; // ACCENT_DISABLED
         WindowCompositionAttribData data{ 19, &policy, sizeof(policy) };
         fnSetWCA(hwnd, &data);
+        m_hasAppliedMask = false;
     }
 #endif
 }
@@ -884,37 +895,94 @@ void PanelWindow::setReserveHeight(int h)
         registerOrUpdateAppBar();
 }
 
+void PanelWindow::setReserveEdge(const QString& edge)
+{
+    QString norm = edge.trimmed().toLower();
+    if (norm != QLatin1String("bottom") && norm != QLatin1String("left") && norm != QLatin1String("right"))
+        norm = QStringLiteral("top");
+    if (m_reserveEdge == norm)
+        return;
+    m_reserveEdge = norm;
+    emit reserveEdgeChanged();
+    if (m_appBarRegistered)
+        unregisterAppBar();
+    if (m_reserveTopBar && isVisible())
+        registerOrUpdateAppBar();
+}
+
 void PanelWindow::registerOrUpdateAppBar()
 {
 #ifdef Q_OS_WIN
-    if (!m_reserveTopBar || !isVisible())
+    if (!m_reserveTopBar || !isVisible() || m_inAppBarUpdate)
         return;
     HWND hwnd = reinterpret_cast<HWND>(winId());
     if (!hwnd || !IsWindow(hwnd))
         return;
 
+    m_inAppBarUpdate = true;
     const HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
     MONITORINFO mi{};
     mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(mon, &mi))
+    if (!GetMonitorInfoW(mon, &mi)) {
+        m_inAppBarUpdate = false;
         return;
+    }
 
-    const int physH = qMax(24, qRound(m_reserveHeight * devicePixelRatio()));
+    const int physT = qMax(24, qRound(m_reserveHeight * devicePixelRatio()));
+    UINT uEdge = ABE_TOP;
+    if (m_reserveEdge == QLatin1String("bottom"))
+        uEdge = ABE_BOTTOM;
+    else if (m_reserveEdge == QLatin1String("left"))
+        uEdge = ABE_LEFT;
+    else if (m_reserveEdge == QLatin1String("right"))
+        uEdge = ABE_RIGHT;
+
+    auto applyEdgeRect = [uEdge, physT, &mi](RECT& rc) {
+        rc = mi.rcMonitor;
+        switch (uEdge) {
+        case ABE_BOTTOM: rc.top = rc.bottom - physT; break;
+        case ABE_LEFT:   rc.right = rc.left + physT; break;
+        case ABE_RIGHT:  rc.left = rc.right - physT; break;
+        case ABE_TOP:
+        default:         rc.bottom = rc.top + physT; break;
+        }
+    };
+
     APPBARDATA abd{};
     abd.cbSize = sizeof(abd);
     abd.hWnd = hwnd;
     abd.uCallbackMessage = kAppBarCallbackMsg;
-    abd.uEdge = ABE_TOP;
-    abd.rc = mi.rcMonitor;
-    abd.rc.bottom = abd.rc.top + physH;
+    abd.uEdge = uEdge;
+    applyEdgeRect(abd.rc);
 
+    const bool newlyRegistered = !m_appBarRegistered;
     if (!m_appBarRegistered) {
         SHAppBarMessage(ABM_NEW, &abd);
         m_appBarRegistered = true;
     }
     SHAppBarMessage(ABM_QUERYPOS, &abd);
-    abd.rc.bottom = abd.rc.top + physH;
-    SHAppBarMessage(ABM_SETPOS, &abd);
+    switch (uEdge) {
+    case ABE_BOTTOM: abd.rc.top = abd.rc.bottom - physT; break;
+    case ABE_LEFT:   abd.rc.right = abd.rc.left + physT; break;
+    case ABE_RIGHT:  abd.rc.left = abd.rc.right - physT; break;
+    case ABE_TOP:
+    default:         abd.rc.bottom = abd.rc.top + physT; break;
+    }
+    const bool rectChanged = newlyRegistered
+        || m_lastAppBarEdge != static_cast<int>(uEdge)
+        || m_lastAppBarLeft != abd.rc.left
+        || m_lastAppBarTop != abd.rc.top
+        || m_lastAppBarRight != abd.rc.right
+        || m_lastAppBarBottom != abd.rc.bottom;
+    if (rectChanged) {
+        m_lastAppBarEdge = static_cast<int>(uEdge);
+        m_lastAppBarLeft = abd.rc.left;
+        m_lastAppBarTop = abd.rc.top;
+        m_lastAppBarRight = abd.rc.right;
+        m_lastAppBarBottom = abd.rc.bottom;
+        SHAppBarMessage(ABM_SETPOS, &abd);
+    }
+    m_inAppBarUpdate = false;
 #endif
 }
 
@@ -924,6 +992,7 @@ void PanelWindow::unregisterAppBar()
     if (!m_appBarRegistered)
         return;
     m_appBarRegistered = false;
+    m_lastAppBarEdge = -1;
     HWND hwnd = reinterpret_cast<HWND>(winId());
     if (!hwnd)
         return;
@@ -965,7 +1034,16 @@ static bool isGenuineFullscreenForeground(HWND selfHwnd)
                 const wchar_t* name = base ? base + 1 : exePath;
                 if (_wcsicmp(name, L"wallpaper64.exe") == 0
                     || _wcsicmp(name, L"wallpaper32.exe") == 0
-                    || _wcsicmp(name, L"explorer.exe") == 0) {
+                    || _wcsicmp(name, L"explorer.exe") == 0
+                    || _wcsicmp(name, L"ScreenClippingHost.exe") == 0
+                    || _wcsicmp(name, L"SnippingTool.exe") == 0
+                    || _wcsicmp(name, L"ShellExperienceHost.exe") == 0
+                    || _wcsicmp(name, L"StartMenuExperienceHost.exe") == 0
+                    || _wcsicmp(name, L"SearchHost.exe") == 0
+                    || _wcsicmp(name, L"SearchApp.exe") == 0
+                    || _wcsicmp(name, L"TextInputHost.exe") == 0
+                    || _wcsicmp(name, L"PickerHost.exe") == 0
+                    || _wcsicmp(name, L"LockApp.exe") == 0) {
                     CloseHandle(hProc);
                     return false;
                 }
@@ -973,6 +1051,10 @@ static bool isGenuineFullscreenForeground(HWND selfHwnd)
             CloseHandle(hProc);
         }
     }
+
+    const LONG_PTR exStyle = GetWindowLongPtrW(fg, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_TOOLWINDOW) && !(exStyle & WS_EX_APPWINDOW))
+        return false;
 
     const HMONITOR mon = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
     if (selfHwnd && IsWindow(selfHwnd)) {
@@ -1125,14 +1207,16 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
             return true;
         }
         if (msg && msg->message == kAppBarCallbackMsg) {
-            if (msg->wParam == ABN_POSCHANGED && m_reserveTopBar && isVisible()) {
-                registerOrUpdateAppBar();
-                if (!m_fullscreenActive && !m_desktopLayer) {
-                    HWND hwnd = reinterpret_cast<HWND>(winId());
-                    if (hwnd)
-                        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                }
+            if (msg->wParam == ABN_POSCHANGED && m_reserveTopBar && isVisible() && !m_inAppBarUpdate) {
+                QMetaObject::invokeMethod(this, [this]() {
+                    registerOrUpdateAppBar();
+                    if (!m_fullscreenActive && !m_desktopLayer && handle()) {
+                        HWND hwnd = reinterpret_cast<HWND>(winId());
+                        if (hwnd)
+                            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                    }
+                }, Qt::QueuedConnection);
             } else if (msg->wParam == ABN_FULLSCREENAPP) {
                 HWND selfHwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
                 const bool fs = (msg->lParam != 0) && isGenuineFullscreenForeground(selfHwnd);
