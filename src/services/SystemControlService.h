@@ -27,6 +27,7 @@ class SystemControlService : public QObject, public QAbstractNativeEventFilter {
     Q_PROPERTY(qreal uploadBps READ uploadBps NOTIFY netSpeedChanged)
     Q_PROPERTY(bool keepAwake READ keepAwake NOTIFY keepAwakeChanged)
     Q_PROPERTY(bool suppressStockOsd READ suppressStockOsd WRITE setSuppressStockOsd NOTIFY suppressStockOsdChanged)
+    Q_PROPERTY(bool launchAtStartup READ launchAtStartup WRITE setLaunchAtStartup NOTIFY launchAtStartupChanged)
 
 public:
     explicit SystemControlService(QObject* parent = nullptr);
@@ -49,6 +50,7 @@ public:
     qreal uploadBps() const { return m_uploadBps; }
     bool keepAwake() const { return m_keepAwake; }
     bool suppressStockOsd() const { return m_suppressStockOsd; }
+    bool launchAtStartup() const { return m_launchAtStartup; }
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void refreshWifi();
@@ -72,6 +74,8 @@ public:
     Q_INVOKABLE QString pickImageFile(const QString& title = QStringLiteral("Select Image"));
     Q_INVOKABLE void setSuppressStockOsd(bool on);
     Q_INVOKABLE void hideStockOsdIfActive();
+    Q_INVOKABLE void setLaunchAtStartup(bool on);
+    Q_INVOKABLE void toggleLaunchAtStartup();
 
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
 
@@ -82,6 +86,7 @@ signals:
     void netSpeedChanged();
     void keepAwakeChanged();
     void suppressStockOsdChanged();
+    void launchAtStartupChanged();
     void quickPanelToggleRequested();
     void spotlightToggleRequested();
     void clipboardToggleRequested();
@@ -94,6 +99,7 @@ private:
     void readBrightness();
     void readDarkMode();
     void readNetwork();
+    void readLaunchAtStartup();
     void sampleNetSpeed();
     void registerHotkeys();
     void triggerQuickPanelToggle();
@@ -132,4 +138,5 @@ private:
     bool m_brightnessInitialized = false;
     qint64 m_lastSelfBrightnessMs = 0;
     bool m_suppressStockOsd = false;
+    bool m_launchAtStartup = false;
 };

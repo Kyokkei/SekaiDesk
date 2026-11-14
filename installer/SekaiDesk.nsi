@@ -24,6 +24,7 @@ ShowUninstDetails show
 !define MUI_ABORTWARNING
 
 !insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 
@@ -72,12 +73,17 @@ Section "SekaiDesk" SecMain
     WriteRegDWORD HKCU "${UNINST_REG_KEY}" "EstimatedSize" "$0"
 SectionEnd
 
+Section "Start with Windows" SecAutostart
+    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}" '"$INSTDIR\${APP_EXE}"'
+SectionEnd
+
 Section "Uninstall"
     nsExec::ExecToStack 'taskkill /F /IM ${APP_EXE}'
     Pop $0
     Pop $1
     Sleep 600
 
+    DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
     Delete "$DESKTOP\${APP_NAME}.lnk"
     Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
     Delete "$SMPROGRAMS\${APP_NAME}\Uninstall ${APP_NAME}.lnk"

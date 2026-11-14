@@ -7775,31 +7775,57 @@ PanelWindow {
                                         width: (parent.width - 24) * 0.48; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
                                         Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 14
+                                            anchors.fill: parent; anchors.margins: 22; spacing: 10
                                             Text { text: "HARDWARE & ACTIONS"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
                                             Rectangle {
-                                                width: parent.width; height: 152; radius: 18; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                width: parent.width; height: 128; radius: 18; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
                                                 Column {
-                                                    anchors.fill: parent; anchors.margins: 18; spacing: 8
-                                                    Text { text: "Machine: " + (WindowTracker.machineName || "Windows PC") + "  ·  User: " + (WindowTracker.userName || "User"); font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    Text { text: "Uptime: " + (WindowTracker.uptimeText || "--"); font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#475569" }
-                                                    Text { text: "CPU: " + WindowTracker.cpuUsage + "%  (" + (WindowTracker.cpuTemp >= 0 ? WindowTracker.cpuTemp + "°C" : "--") + ")   ·   RAM: " + WindowTracker.ramUsage + "%"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#0F172A" }
-                                                    Text { text: "Display: " + themeHub.screenW + " x " + themeHub.screenH + "   ·   Band: " + themeHub.currentBand.name; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#0F172A" }
+                                                    anchors.fill: parent; anchors.margins: 16; spacing: 6
+                                                    Text { text: "Machine: " + (WindowTracker.machineName || "Windows PC") + "  ·  User: " + (WindowTracker.userName || "User"); font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    Text { text: "Uptime: " + (WindowTracker.uptimeText || "--"); font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#475569" }
+                                                    Text { text: "CPU: " + WindowTracker.cpuUsage + "%  (" + (WindowTracker.cpuTemp >= 0 ? WindowTracker.cpuTemp + "°C" : "--") + ")   ·   RAM: " + WindowTracker.ramUsage + "%"; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Bold; color: "#0F172A" }
+                                                    Text { text: "Display: " + themeHub.screenW + " x " + themeHub.screenH + "   ·   Band: " + themeHub.currentBand.name; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Bold; color: "#0F172A" }
                                                 }
                                             }
                                             Rectangle {
-                                                width: parent.width; height: 52; radius: 16; color: "#E0F2FE"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.centerIn: parent; text: "⚙ OPEN WINDOWS SYSTEM SETTINGS"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                width: parent.width; height: 50; radius: 16
+                                                color: SystemControl.launchAtStartup ? "#ECFDF5" : "#F8FAFC"
+                                                border.width: 2.5; border.color: "#1A1B2E"
+                                                Row {
+                                                    anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 14; spacing: 10
+                                                    Text {
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        width: parent.width - 74
+                                                        text: "🚀 START WITH WINDOWS"
+                                                        font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E"
+                                                    }
+                                                    Rectangle {
+                                                        anchors.verticalCenter: parent.verticalCenter
+                                                        width: 64; height: 28; radius: 14
+                                                        color: SystemControl.launchAtStartup ? themeHub.accentB : "#E2E8F0"
+                                                        border.width: 2; border.color: "#1A1B2E"
+                                                        Text {
+                                                            anchors.centerIn: parent
+                                                            text: SystemControl.launchAtStartup ? "ON" : "OFF"
+                                                            font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E"
+                                                        }
+                                                    }
+                                                }
+                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: SystemControl.toggleLaunchAtStartup() }
+                                            }
+                                            Rectangle {
+                                                width: parent.width; height: 46; radius: 16; color: "#E0F2FE"; border.width: 2.5; border.color: "#1A1B2E"
+                                                Text { anchors.centerIn: parent; text: "⚙ OPEN WINDOWS SYSTEM SETTINGS"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: SystemControl.openSettings("ms-settings:") }
                                             }
                                             Rectangle {
-                                                width: parent.width; height: 52; radius: 16; color: "#FEF3C7"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.centerIn: parent; text: "↺ RESET ALL WIDGET POSITIONS"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                width: parent.width; height: 46; radius: 16; color: "#FEF3C7"; border.width: 2.5; border.color: "#1A1B2E"
+                                                Text { anchors.centerIn: parent; text: "↺ RESET ALL WIDGET POSITIONS"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.resetWidgetPositions() }
                                             }
                                             Rectangle {
-                                                width: parent.width; height: 52; radius: 16; color: "#FFE4E6"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.centerIn: parent; text: "⏻ QUIT SEKAIDESK SHELL"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                width: parent.width; height: 46; radius: 16; color: "#FFE4E6"; border.width: 2.5; border.color: "#1A1B2E"
+                                                Text { anchors.centerIn: parent; text: "⏻ QUIT SEKAIDESK SHELL"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: Qt.quit() }
                                             }
                                         }

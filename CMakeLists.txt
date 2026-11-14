@@ -137,22 +137,4 @@ if(WIN32)
     )
 endif()
 
-# ---------------------------------------------------------------------------
-# qs.* import alias: SekaiPop QML does `import qs.services` / `qs.modules.*`.
-# Quickshell resolves "qs." to the shell root; we emulate it by exposing the
-# shell tree as <build>/qml/qs and adding <build>/qml as an import path in
-# main.cpp. A NTFS junction is used when possible (fast, stays in sync);
-# otherwise a full copy is made (also what the Colab zip package ships).
-# ---------------------------------------------------------------------------
-set(SEKAIDESK_SHELL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/SekaiPop/sekaipop")
-file(CREATE_LINK "${SEKAIDESK_SHELL_DIR}" "${CMAKE_BINARY_DIR}/qml/qs"
-     SYMBOLIC RESULT _qs_link_result)
-if(NOT _qs_link_result EQUAL 0)
-    message(STATUS "SekaiDesk: junction failed (${_qs_link_result}), copying shell tree")
-    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/qml/qs" "${CMAKE_BINARY_DIR}/qml/qs_tmp")
-    file(COPY "${SEKAIDESK_SHELL_DIR}" DESTINATION "${CMAKE_BINARY_DIR}/qml/qs_tmp")
-    file(RENAME "${CMAKE_BINARY_DIR}/qml/qs_tmp/sekaipop" "${CMAKE_BINARY_DIR}/qml/qs")
-    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/qml/qs_tmp")
-endif()
-
 install(TARGETS SekaiDesk RUNTIME DESTINATION .)

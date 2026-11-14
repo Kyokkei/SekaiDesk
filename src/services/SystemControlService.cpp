@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDir>
 #include <QGuiApplication>
 #include <QHash>
 #include <QHostAddress>
@@ -450,6 +451,7 @@ void SystemControlService::refresh()
     readBrightness();
     readDarkMode();
     readNetwork();
+    readLaunchAtStartup();
     emit stateChanged();
 }
 
@@ -1537,4 +1539,58 @@ void SystemControlService::hideStockOsdIfActive()
     if (m_suppressStockOsd)
         EnumWindows(hideExistingStockOsdProc, 0);
 #endif
+}
+
+void SystemControlService::readLaunchAtStartup()
+{
+#ifdef Q_OS_WIN
+    HKEY hKey = nullptr;
+    bool enabled = false;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS) {
+        DWORD type = 0;
+        DWORD bytes = 0;
+        const LONG rc = RegQueryValueExW(hKey, L"SekaiDesk", nullptr, &type, nullptr, &bytes);
+        enabled = (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)
+                   && bytes > sizeof(wchar_t));
+        RegCloseKey(hKey);
+    }
+    if (m_launchAtStartup != enabled) {
+        m_launchAtStartup = enabled;
+        emit launchAtStartupChanged();
+    }
+#endif
+}
+
+void SystemControlService::setLaunchAtStartup(bool on)
+{
+#ifdef Q_OS_WIN
+    HKEY hKey = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,
+                        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        0, nullptr, REG_OPTION_NON_VOLATILE,
+                        KEY_SET_VALUE | KEY_QUERY_VALUE,
+                        nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
+        if (on) {
+            const QString exeNative = QDir::toNativeSeparators(
+                QCoreApplication::applicationFilePath());
+            const std::wstring cmd = L"\"" + exeNative.toStdWString() + L"\"";
+            RegSetValueExW(hKey, L"SekaiDesk", 0, REG_SZ,
+                           reinterpret_cast<const BYTE*>(cmd.c_str()),
+                           static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
+        } else {
+            RegDeleteValueW(hKey, L"SekaiDesk");
+        }
+        RegCloseKey(hKey);
+    }
+    readLaunchAtStartup();
+#else
+    Q_UNUSED(on);
+#endif
+}
+
+void SystemControlService::toggleLaunchAtStartup()
+{
+    setLaunchAtStartup(!m_launchAtStartup);
 }

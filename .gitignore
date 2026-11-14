@@ -55,10 +55,12 @@ prototype test (failed - no use i think)/
 # Upstream SekaiPop git history backup (removed from SekaiPop/ to vendor it)
 .upstream-backup/
 
-# Local secrets / personal config / internal dev notes
+# Local secrets / personal config / internal dev notes / vendored Linux reference
 config/
 .AI/
 .workbuddy-ai/
 docs/
 research/
+colab/
+SekaiPop/
 sekaidesk_system_blueprint(newest plan).md
