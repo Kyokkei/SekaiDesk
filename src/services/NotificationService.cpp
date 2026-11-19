@@ -116,6 +116,22 @@ void NotificationService::refresh()
 #endif
 }
 
+void NotificationService::setPaused(bool paused)
+{
+#ifdef Q_OS_WIN
+    if (paused) {
+        m_ageTimer.stop();
+        sendCommand(QStringLiteral("pause"));
+    } else {
+        if (!m_ageTimer.isActive())
+            m_ageTimer.start();
+        sendCommand(QStringLiteral("resume"));
+    }
+#else
+    Q_UNUSED(paused);
+#endif
+}
+
 void NotificationService::emitTestNotification()
 {
     QVariantMap m;
@@ -234,6 +250,7 @@ void NotificationService::startWorker()
         "$logoSeq = 0\n"
         "$last = ''\n"
         "$tick = 0\n"
+        "$paused = $false\n"
         "while ($true) {\n"
         "  if ([System.IO.File]::Exists($cmdFile)) {\n"
         "    $rawCmds = [System.IO.File]::ReadAllLines($cmdFile)\n"
@@ -241,6 +258,8 @@ void NotificationService::startWorker()
         "    foreach ($rawLine in $rawCmds) {\n"
         "      $cmd = $rawLine.Trim()\n"
         "      if ($cmd -eq '') { continue }\n"
+        "      if ($cmd -eq 'pause') { $paused = $true; continue }\n"
+        "      if ($cmd -eq 'resume') { $paused = $false; continue }\n"
         "      if ($listener) {\n"
         "        if ($cmd -eq 'clear') {\n"
         "          $listener.ClearNotifications()\n"
@@ -252,9 +271,13 @@ void NotificationService::startWorker()
         "        }\n"
         "      }\n"
         "    }\n"
-        "    $tick = 12\n"
+        "    $tick = 6\n"
         "  }\n"
-        "  if ($tick % 12 -eq 0) {\n"
+        "  if ($paused) {\n"
+        "    Start-Sleep -Milliseconds 1500\n"
+        "    continue\n"
+        "  }\n"
+        "  if ($tick % 6 -eq 0) {\n"
         "    $granted = $false\n"
         "    $items = [System.Collections.Generic.List[object]]::new()\n"
         "    if ($listener) {\n"
@@ -333,7 +356,7 @@ void NotificationService::startWorker()
         "    if ($line -ne $last) { $last = $line; [Console]::Out.WriteLine($line); [Console]::Out.Flush() }\n"
         "  }\n"
         "  $tick++\n"
-        "  Start-Sleep -Milliseconds 100\n"
+        "  Start-Sleep -Milliseconds 250\n"
         "}\n"
     ).arg(escapedCmdPath, escapedIconDir);
 

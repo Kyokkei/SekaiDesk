@@ -46,6 +46,7 @@ public:
     Q_INVOKABLE void previous();
     Q_INVOKABLE void seek(double seconds);
     Q_INVOKABLE void selectSession(const QString& appId);
+    void setPaused(bool paused);
 
 signals:
     void mediaChanged();

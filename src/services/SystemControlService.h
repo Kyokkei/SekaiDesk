@@ -73,6 +73,8 @@ public:
     Q_INVOKABLE void hibernatePc();
     Q_INVOKABLE void signOut();
     Q_INVOKABLE QString pickImageFile(const QString& title = QStringLiteral("Select Image"));
+    Q_INVOKABLE QString pickExecutableFile(const QString& title = QStringLiteral("Select Game Executable"));
+    void setPaused(bool paused);
     Q_INVOKABLE void setSuppressStockOsd(bool on);
     Q_INVOKABLE void hideStockOsdIfActive();
     Q_INVOKABLE void setLaunchAtStartup(bool on);
@@ -98,6 +100,7 @@ signals:
     void volumeStepRequested(int delta);
     void volumeMuteToggleRequested();
     void taskbarToggleRequested();
+    void gameModeToggleRequested();
 
 private:
     void readBrightness();
@@ -135,6 +138,8 @@ private:
     bool m_spotlightHotkeyRegistered = false;
     bool m_clipboardHotkeyRegistered = false;
     bool m_taskbarHotkeyRegistered = false;
+    bool m_gameModeHotkeyRegistered = false;
+    bool m_paused = false;
     void* m_kbdHook = nullptr;
     void* m_hotkeyMsgHwnd = nullptr;
     QTimer m_hotkeyRetryTimer;

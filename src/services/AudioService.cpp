@@ -84,13 +84,27 @@ AudioService::AudioService(QObject* parent)
     readMicState(false);
     refreshOutputDevices();
     m_initialized = true;
-    m_pollTimer.setInterval(200);
+    m_pollTimer.setInterval(350);
     connect(&m_pollTimer, &QTimer::timeout, this, &AudioService::pollMaster);
     m_pollTimer.start();
 #endif
 }
 
 AudioService::~AudioService() = default;
+
+void AudioService::setPaused(bool paused)
+{
+#ifdef Q_OS_WIN
+    if (paused) {
+        m_pollTimer.stop();
+    } else if (!m_pollTimer.isActive()) {
+        m_pollTimer.start();
+        pollMaster();
+    }
+#else
+    Q_UNUSED(paused);
+#endif
+}
 
 void AudioService::pollMaster()
 {

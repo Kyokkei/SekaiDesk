@@ -27,6 +27,7 @@ public:
     Q_INVOKABLE void clearAll();
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void emitTestNotification();
+    void setPaused(bool paused);
 
 signals:
     void notificationsChanged();

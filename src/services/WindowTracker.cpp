@@ -157,16 +157,82 @@ WindowTracker::WindowTracker(QObject* parent)
     if (m_userName.isEmpty())
         m_userName = QStringLiteral("User");
 
-    m_pollTimer.setInterval(350);
+    m_pollTimer.setInterval(600);
     connect(&m_pollTimer, &QTimer::timeout, this, &WindowTracker::refresh);
     m_pollTimer.start();
 
     m_edgeTimer.setInterval(80);
     connect(&m_edgeTimer, &QTimer::timeout, this, &WindowTracker::pollEdgeAndOverlap);
-    m_edgeTimer.start();
+    if (m_edgePollingNeeded)
+        m_edgeTimer.start();
 
     refresh();
-    pollEdgeAndOverlap();
+    if (m_edgePollingNeeded)
+        pollEdgeAndOverlap();
+}
+
+void WindowTracker::setEdgePollingNeeded(bool needed)
+{
+    if (m_edgePollingNeeded == needed)
+        return;
+    m_edgePollingNeeded = needed;
+#ifdef Q_OS_WIN
+    if (!m_edgePollingNeeded) {
+        m_edgeTimer.stop();
+        if (m_dockOverlap) { m_dockOverlap = false; emit dockOverlapChanged(); }
+        if (m_topOverlap) { m_topOverlap = false; emit topOverlapChanged(); }
+        if (m_leftOverlap) { m_leftOverlap = false; emit leftOverlapChanged(); }
+        if (m_rightOverlap) { m_rightOverlap = false; emit rightOverlapChanged(); }
+        if (m_bottomEdgeHovered) { m_bottomEdgeHovered = false; emit bottomEdgeHoveredChanged(); }
+        if (m_topEdgeHovered) { m_topEdgeHovered = false; emit topEdgeHoveredChanged(); }
+        if (m_leftEdgeHovered) { m_leftEdgeHovered = false; emit leftEdgeHoveredChanged(); }
+        if (m_rightEdgeHovered) { m_rightEdgeHovered = false; emit rightEdgeHoveredChanged(); }
+    } else if (!m_paused) {
+        m_overlapSubTick = 0;
+        if (!m_edgeTimer.isActive())
+            m_edgeTimer.start();
+        pollEdgeAndOverlap();
+    }
+#endif
+}
+
+void WindowTracker::setPaused(bool paused)
+{
+    if (m_paused == paused)
+        return;
+    m_paused = paused;
+#ifdef Q_OS_WIN
+    if (m_paused) {
+        m_pollTimer.stop();
+        m_edgeTimer.stop();
+    } else {
+        m_overlapSubTick = 0;
+        if (!m_pollTimer.isActive())
+            m_pollTimer.start();
+        if (m_edgePollingNeeded && !m_edgeTimer.isActive())
+            m_edgeTimer.start();
+        refresh();
+        if (m_edgePollingNeeded)
+            pollEdgeAndOverlap();
+    }
+#endif
+}
+
+QVariantList WindowTracker::runningExeNames() const
+{
+    QVariantList out;
+    QSet<QString> seen;
+    for (auto it = m_groups.constBegin(); it != m_groups.constEnd(); ++it) {
+        const QString base = QFileInfo(it.value().exePath).fileName().toLower();
+        if (base.isEmpty() || seen.contains(base))
+            continue;
+        seen.insert(base);
+        QVariantMap m;
+        m.insert(QStringLiteral("exe"), base);
+        m.insert(QStringLiteral("name"), it.value().name);
+        out.append(m);
+    }
+    return out;
 }
 
 void WindowTracker::refresh()
@@ -231,6 +297,7 @@ void WindowTracker::refresh()
     }
 
 #ifdef Q_OS_WIN
+    bool nextOccluded = false;
     if (ctx.foreground && IsWindow(ctx.foreground) && IsWindowVisible(ctx.foreground) && !IsIconic(ctx.foreground)) {
         DWORD fgPid = 0;
         GetWindowThreadProcessId(ctx.foreground, &fgPid);
@@ -249,6 +316,27 @@ void WindowTracker::refresh()
                 wchar_t tbuf[256] = {};
                 GetWindowTextW(ctx.foreground, tbuf, 256);
                 nextTitle = QString::fromWCharArray(tbuf).trimmed();
+
+                const HMONITOR priMon = MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY);
+                if (MonitorFromWindow(ctx.foreground, MONITOR_DEFAULTTONEAREST) == priMon) {
+                    if (IsZoomed(ctx.foreground)) {
+                        nextOccluded = true;
+                    } else {
+                        MONITORINFO mi{};
+                        mi.cbSize = sizeof(mi);
+                        RECT rc{};
+                        if (GetMonitorInfoW(priMon, &mi)
+                            && (SUCCEEDED(DwmGetWindowAttribute(ctx.foreground, DWMWA_EXTENDED_FRAME_BOUNDS, &rc, sizeof(rc)))
+                                || GetWindowRect(ctx.foreground, &rc))) {
+                            const int monW = qMax(1, static_cast<int>(mi.rcWork.right - mi.rcWork.left));
+                            const int monH = qMax(1, static_cast<int>(mi.rcWork.bottom - mi.rcWork.top));
+                            const int winW = qMax(0, static_cast<int>(rc.right - rc.left));
+                            const int winH = qMax(0, static_cast<int>(rc.bottom - rc.top));
+                            if (winW >= (monW * 95) / 100 && winH >= (monH * 95) / 100)
+                                nextOccluded = true;
+                        }
+                    }
+                }
             }
             if (nextApp != m_activeAppName || nextTitle != m_activeWindowTitle) {
                 m_activeAppName = nextApp;
@@ -262,6 +350,10 @@ void WindowTracker::refresh()
             m_activeWindowTitle.clear();
             emit activeWindowChanged();
         }
+    }
+    if (nextOccluded != m_desktopOccluded) {
+        m_desktopOccluded = nextOccluded;
+        emit desktopOccludedChanged();
     }
     updateSystemStats();
 #endif
@@ -681,6 +773,11 @@ void WindowTracker::pollEdgeAndOverlap()
         m_rightEdgeHovered = nextRightEdge;
         emit rightEdgeHoveredChanged();
     }
+
+    // Throttle expensive EnumWindows + DwmGetWindowAttribute overlap scan to ~320ms
+    const bool runOverlapNow = ((m_overlapSubTick++ % 4) == 0);
+    if (!runOverlapNow)
+        return;
 
     struct OverlapCtx {
         DWORD selfPid = 0;

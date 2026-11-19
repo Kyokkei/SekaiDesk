@@ -15,7 +15,7 @@ Item {
     Timer {
         interval: 1000
         repeat: true
-        running: themeHub.wClockVisible || themeHub.wProfileVisible || themeHub.wCalendarVisible
+        running: !widgetsRoot.fullscreenActive && (themeHub.wClockVisible || themeHub.wProfileVisible || themeHub.wCalendarVisible)
         onTriggered: {
             widgetsRoot.nowDate = new Date()
             widgetsRoot.beatPhase = !widgetsRoot.beatPhase

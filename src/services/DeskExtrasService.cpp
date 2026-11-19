@@ -331,6 +331,19 @@ LyricsService::LyricsService(MediaService* media, QObject* parent)
     onMediaUpdated();
 }
 
+void LyricsService::setPaused(bool paused)
+{
+    if (m_paused == paused)
+        return;
+    m_paused = paused;
+    if (m_paused) {
+        m_tickTimer.stop();
+    } else if (m_media && m_media->isPlaying() && !m_lines.isEmpty()) {
+        updateActiveLine();
+        m_tickTimer.start();
+    }
+}
+
 void LyricsService::refresh()
 {
     if (!m_media || m_media->title().trimmed().isEmpty()) {
@@ -409,9 +422,9 @@ void LyricsService::onTimelineUpdated()
     m_anchorPosSec = m_media->positionSec();
     m_anchorMs = QDateTime::currentMSecsSinceEpoch();
     if (m_synced && !m_lines.isEmpty()) {
-        if (m_media->isPlaying() && !m_tickTimer.isActive())
+        if (!m_paused && m_media->isPlaying() && !m_tickTimer.isActive())
             m_tickTimer.start();
-        else if (!m_media->isPlaying() && m_tickTimer.isActive())
+        else if ((!m_media->isPlaying() || m_paused) && m_tickTimer.isActive())
             m_tickTimer.stop();
     }
     updateActiveLine();
@@ -634,7 +647,7 @@ void LyricsService::parseLrc(const QString& lrcText)
         m_lines.append(row);
     }
 
-    if (m_media && m_media->isPlaying() && !m_lines.isEmpty())
+    if (!m_paused && m_media && m_media->isPlaying() && !m_lines.isEmpty())
         m_tickTimer.start();
 }
 

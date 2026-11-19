@@ -78,6 +78,11 @@ void MediaService::selectSession(const QString& appId)
     sendCommand(QStringLiteral("select:%1").arg(appId));
 }
 
+void MediaService::setPaused(bool paused)
+{
+    sendCommand(paused ? QStringLiteral("pause") : QStringLiteral("resume"));
+}
+
 void MediaService::startWorker()
 {
 #ifdef Q_OS_WIN
@@ -173,6 +178,7 @@ void MediaService::startWorker()
         "$seekBaseTlUpdated = [DateTimeOffset]::MinValue\n"
         "$selectedApp = ''\n"
         "$tick = 0\n"
+        "$paused = $false\n"
         "function PickSession() {\n"
         "  if (-not $mgr) { return $null }\n"
         "  $all = $mgr.GetSessions()\n"
@@ -195,9 +201,14 @@ void MediaService::startWorker()
         "  if ([System.IO.File]::Exists($cmdFile)) {\n"
         "    $cmd = ([System.IO.File]::ReadAllText($cmdFile)).Trim()\n"
         "    [System.IO.File]::Delete($cmdFile)\n"
-        "    if ($cmd.StartsWith('select:')) {\n"
+        "    if ($cmd -eq 'pause') {\n"
+        "      $paused = $true\n"
+        "    } elseif ($cmd -eq 'resume') {\n"
+        "      $paused = $false\n"
+        "      $tick = 4\n"
+        "    } elseif ($cmd.StartsWith('select:')) {\n"
         "      $selectedApp = $cmd.Substring(7)\n"
-        "      $tick = 8\n"
+        "      $tick = 4\n"
         "    } else {\n"
         "      $cs = PickSession\n"
         "      if ($cs) {\n"
@@ -217,11 +228,15 @@ void MediaService::startWorker()
         "            Start-Sleep -Milliseconds 150\n"
         "          }\n"
         "        }\n"
-        "        $tick = 8\n"
+        "        $tick = 4\n"
         "      }\n"
         "    }\n"
         "  }\n"
-        "  if ($tick % 8 -eq 0) {\n"
+        "  if ($paused) {\n"
+        "    Start-Sleep -Milliseconds 1500\n"
+        "    continue\n"
+        "  }\n"
+        "  if ($tick % 4 -eq 0) {\n"
         "    $obj = @{ has = $false; playing = $false; title = ''; artist = ''; album = ''; app = ''; art = ''; pos = 0.0; dur = 0.0; canNext = $false; canPrev = $false; canSeek = $false; players = @() }\n"
         "    $s = PickSession\n"
         "    if ($mgr) {\n"
@@ -324,7 +339,7 @@ void MediaService::startWorker()
         "    if ($line -ne $last) { $last = $line; [Console]::Out.WriteLine($line); [Console]::Out.Flush() }\n"
         "  }\n"
         "  $tick++\n"
-        "  Start-Sleep -Milliseconds 100\n"
+        "  Start-Sleep -Milliseconds 250\n"
         "}\n"
     ).arg(escapedCmdPath, escapedArtDir);
 

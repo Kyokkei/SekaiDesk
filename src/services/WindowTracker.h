@@ -38,12 +38,14 @@ class WindowTracker : public QObject {
     Q_PROPERTY(QString ramDetailText READ ramDetailText NOTIFY statsChanged)
     Q_PROPERTY(QString machineName READ machineName CONSTANT)
     Q_PROPERTY(QString userName READ userName CONSTANT)
+    Q_PROPERTY(bool desktopOccluded READ desktopOccluded NOTIFY desktopOccludedChanged)
 
 public:
     explicit WindowTracker(QObject* parent = nullptr);
 
     QVariantList runningApps() const { return m_runningApps; }
     bool dockOverlap() const { return m_dockOverlap; }
+    bool desktopOccluded() const { return m_desktopOccluded; }
     bool bottomEdgeHovered() const { return m_bottomEdgeHovered; }
     bool topOverlap() const { return m_topOverlap; }
     bool topEdgeHovered() const { return m_topEdgeHovered; }
@@ -83,6 +85,9 @@ public:
     Q_INVOKABLE bool openPath(const QString& path) const;
     Q_INVOKABLE void openTaskManager() const;
     Q_INVOKABLE QVariantList topProcesses(int limit = 6) const;
+    Q_INVOKABLE QVariantList runningExeNames() const;
+    Q_INVOKABLE void setEdgePollingNeeded(bool needed);
+    void setPaused(bool paused);
     Q_INVOKABLE void lockWorkstation();
     Q_INVOKABLE void sleepComputer();
     Q_INVOKABLE void takeScreenshot();
@@ -99,6 +104,7 @@ signals:
     void rightEdgeHoveredChanged();
     void activeWindowChanged();
     void statsChanged();
+    void desktopOccludedChanged();
 
 private:
     void pollEdgeAndOverlap();
@@ -116,6 +122,10 @@ private:
     QTimer m_pollTimer;
     QTimer m_edgeTimer;
     bool m_dockOverlap = false;
+    bool m_desktopOccluded = false;
+    bool m_edgePollingNeeded = true;
+    bool m_paused = false;
+    int m_overlapSubTick = 0;
     bool m_bottomEdgeHovered = false;
     bool m_topOverlap = false;
     bool m_topEdgeHovered = false;

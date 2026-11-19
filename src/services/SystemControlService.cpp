@@ -47,6 +47,7 @@ constexpr int kQuickPanelHotkeyId = 0x534B;
 constexpr int kSpotlightHotkeyId = 0x534C;
 constexpr int kClipboardHotkeyId = 0x5343;
 constexpr int kTaskbarToggleHotkeyId = 0x534D;
+constexpr int kGameModeHotkeyId = 0x5347;
 constexpr UINT kLlAltSpaceMsg = WM_APP + 0x51;
 constexpr UINT kLlQuickPanelMsg = WM_APP + 0x52;
 constexpr UINT kLlVolMuteMsg = WM_APP + 0x53;
@@ -145,6 +146,11 @@ LRESULT CALLBACK lowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     if (nCode == HC_ACTION && lParam) {
         const auto* kb = reinterpret_cast<const KBDLLHOOKSTRUCT*>(lParam);
+        const DWORD vk = kb->vkCode;
+        if (vk != VK_SPACE && vk != 'A' && vk != VK_VOLUME_UP
+            && vk != VK_VOLUME_DOWN && vk != VK_VOLUME_MUTE) {
+            return CallNextHookEx(nullptr, nCode, wParam, lParam);
+        }
         if ((kb->flags & LLKHF_INJECTED) == 0) {
             const bool isDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
             const bool isUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
@@ -354,6 +360,8 @@ SystemControlService::~SystemControlService()
         UnregisterHotKey(msgHwnd, kClipboardHotkeyId);
     if (m_taskbarHotkeyRegistered)
         UnregisterHotKey(msgHwnd, kTaskbarToggleHotkeyId);
+    if (m_gameModeHotkeyRegistered)
+        UnregisterHotKey(msgHwnd, kGameModeHotkeyId);
     if (msgHwnd) {
         DestroyWindow(msgHwnd);
         m_hotkeyMsgHwnd = nullptr;
@@ -385,18 +393,67 @@ void SystemControlService::registerHotkeys()
         qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+T %s",
               m_taskbarHotkeyRegistered ? "ok" : "pending");
     }
+    if (!m_gameModeHotkeyRegistered) {
+        m_gameModeHotkeyRegistered = (RegisterHotKey(msgHwnd, kGameModeHotkeyId,
+                                                     MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'G') != FALSE);
+        qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+G %s",
+              m_gameModeHotkeyRegistered ? "ok" : "pending");
+    }
     if (!m_kbdHook && !m_spotlightHotkeyRegistered) {
         m_spotlightHotkeyRegistered = (RegisterHotKey(msgHwnd, kSpotlightHotkeyId,
                                                       MOD_ALT | MOD_NOREPEAT, VK_SPACE) != FALSE);
     }
 
     const bool needRetry = !m_hotkeyRegistered || !m_clipboardHotkeyRegistered
-                           || !m_taskbarHotkeyRegistered
+                           || !m_taskbarHotkeyRegistered || !m_gameModeHotkeyRegistered
                            || (!m_kbdHook && !m_spotlightHotkeyRegistered);
-    if (needRetry && !m_hotkeyRetryTimer.isActive())
+    if (needRetry && !m_paused && !m_hotkeyRetryTimer.isActive())
         m_hotkeyRetryTimer.start();
     else if (!needRetry && m_hotkeyRetryTimer.isActive())
         m_hotkeyRetryTimer.stop();
+#endif
+}
+
+void SystemControlService::setPaused(bool paused)
+{
+    m_paused = paused;
+#ifdef Q_OS_WIN
+    HWND msgHwnd = static_cast<HWND>(m_hotkeyMsgHwnd);
+    if (paused) {
+        m_netSpeedTimer.stop();
+        m_hotkeyRetryTimer.stop();
+        if (m_kbdHook) {
+            UnhookWindowsHookEx(static_cast<HHOOK>(m_kbdHook));
+            m_kbdHook = nullptr;
+        }
+        s_altSpaceDown = false;
+        s_ctrlAltADown = false;
+        s_volUpDown = false;
+        s_volDownDown = false;
+        s_volMuteDown = false;
+        applyStockOsdSuppression(false);
+        if (msgHwnd && !m_spotlightHotkeyRegistered) {
+            m_spotlightHotkeyRegistered = (RegisterHotKey(msgHwnd, kSpotlightHotkeyId,
+                                                          MOD_ALT | MOD_NOREPEAT, VK_SPACE) != FALSE);
+            qInfo("SystemControlService: RegisterHotKey Alt+Space (game-safe) %s",
+                  m_spotlightHotkeyRegistered ? "ok" : "failed");
+        }
+    } else {
+        if (m_netSpeedActive) {
+            m_hasNetBaseline = false;
+            m_netSpeedTimer.start();
+        }
+        applyStockOsdSuppression(m_suppressStockOsd);
+        if (!m_kbdHook) {
+            m_kbdHook = SetWindowsHookExW(WH_KEYBOARD_LL, lowLevelKeyboardProc,
+                                          GetModuleHandleW(nullptr), 0);
+            if (m_kbdHook && m_spotlightHotkeyRegistered && msgHwnd) {
+                UnregisterHotKey(msgHwnd, kSpotlightHotkeyId);
+                m_spotlightHotkeyRegistered = false;
+            }
+        }
+        registerHotkeys();
+    }
 #endif
 }
 
@@ -464,6 +521,10 @@ bool SystemControlService::nativeEventFilter(const QByteArray& eventType, void* 
             }
             if (id == kTaskbarToggleHotkeyId) {
                 emit taskbarToggleRequested();
+                return true;
+            }
+            if (id == kGameModeHotkeyId) {
+                emit gameModeToggleRequested();
                 return true;
             }
         }
@@ -824,9 +885,10 @@ void SystemControlService::signOut()
 #endif
 }
 
-QString SystemControlService::pickImageFile(const QString& title)
-{
 #ifdef Q_OS_WIN
+static QString openFileDialogWin(const QString& title, const QString& defaultTitle,
+                                 const wchar_t* filter, bool returnFileUrl)
+{
     using FnGetOpenFileNameW = BOOL(WINAPI*)(LPOPENFILENAMEW);
     HMODULE comdlg = LoadLibraryW(L"comdlg32.dll");
     auto pGetOpen = comdlg ? reinterpret_cast<FnGetOpenFileNameW>(GetProcAddress(comdlg, "GetOpenFileNameW")) : nullptr;
@@ -871,11 +933,11 @@ QString SystemControlService::pickImageFile(const QString& title)
     }
 
     wchar_t fileBuf[MAX_PATH * 4]{};
-    const std::wstring wTitle = title.isEmpty() ? std::wstring(L"Select Image") : title.toStdWString();
+    const std::wstring wTitle = title.isEmpty() ? defaultTitle.toStdWString() : title.toStdWString();
     OPENFILENAMEW ofn{};
     ofn.lStructSize = sizeof(ofn);
     ofn.hwndOwner = ownerHwnd;
-    ofn.lpstrFilter = L"Image Files (*.png;*.jpg;*.jpeg;*.webp)\0*.png;*.jpg;*.jpeg;*.webp\0All Files (*.*)\0*.*\0\0";
+    ofn.lpstrFilter = filter;
     ofn.lpstrFile = fileBuf;
     ofn.nMaxFile = static_cast<DWORD>(sizeof(fileBuf) / sizeof(wchar_t));
     ofn.lpstrTitle = wTitle.c_str();
@@ -884,12 +946,37 @@ QString SystemControlService::pickImageFile(const QString& title)
     if (tempOwner)
         DestroyWindow(tempOwner);
     if (ok) {
-        return QUrl::fromLocalFile(QString::fromWCharArray(fileBuf)).toString();
+        const QString path = QString::fromWCharArray(fileBuf);
+        return returnFileUrl ? QUrl::fromLocalFile(path).toString() : path;
     }
+    return {};
+}
+#endif
+
+QString SystemControlService::pickImageFile(const QString& title)
+{
+#ifdef Q_OS_WIN
+    return openFileDialogWin(
+        title, QStringLiteral("Select Image"),
+        L"Image Files (*.png;*.jpg;*.jpeg;*.webp)\0*.png;*.jpg;*.jpeg;*.webp\0All Files (*.*)\0*.*\0\0",
+        true);
 #else
     Q_UNUSED(title);
-#endif
     return {};
+#endif
+}
+
+QString SystemControlService::pickExecutableFile(const QString& title)
+{
+#ifdef Q_OS_WIN
+    return openFileDialogWin(
+        title, QStringLiteral("Select Game Executable"),
+        L"Executables (*.exe)\0*.exe\0All Files (*.*)\0*.*\0\0",
+        false);
+#else
+    Q_UNUSED(title);
+    return {};
+#endif
 }
 
 #ifdef Q_OS_WIN
@@ -1558,7 +1645,8 @@ void SystemControlService::setSuppressStockOsd(bool on)
     if (m_suppressStockOsd == on)
         return;
     m_suppressStockOsd = on;
-    applyStockOsdSuppression(on);
+    if (!m_paused)
+        applyStockOsdSuppression(on);
     emit suppressStockOsdChanged();
 }
 

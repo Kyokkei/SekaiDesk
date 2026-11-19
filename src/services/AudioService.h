@@ -41,6 +41,7 @@ public:
     Q_INVOKABLE void refreshSessions();
     Q_INVOKABLE void refreshOutputDevices();
     Q_INVOKABLE bool setDefaultOutputDevice(const QString& deviceId);
+    void setPaused(bool paused);
 
 signals:
     void masterChanged();

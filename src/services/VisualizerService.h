@@ -24,6 +24,7 @@ class VisualizerService : public QObject {
     Q_PROPERTY(qreal sensitivity READ sensitivity WRITE setSensitivity NOTIFY sensitivityChanged)
     Q_PROPERTY(bool alwaysListen READ alwaysListen WRITE setAlwaysListen NOTIFY alwaysListenChanged)
     Q_PROPERTY(bool stayWhenPaused READ stayWhenPaused WRITE setStayWhenPaused NOTIFY stayWhenPausedChanged)
+    Q_PROPERTY(bool suppressed READ suppressed WRITE setSuppressed NOTIFY suppressedChanged)
     Q_PROPERTY(qreal posX READ posX WRITE setPosX NOTIFY positionChanged)
     Q_PROPERTY(qreal posY READ posY WRITE setPosY NOTIFY positionChanged)
     Q_PROPERTY(int customWidth READ customWidth WRITE setCustomWidth NOTIFY customSizeChanged)
@@ -46,6 +47,7 @@ public:
     qreal sensitivity() const { return m_sensitivity; }
     bool alwaysListen() const { return m_alwaysListen; }
     bool stayWhenPaused() const { return m_stayWhenPaused; }
+    bool suppressed() const { return m_suppressed; }
     qreal posX() const { return m_posX; }
     qreal posY() const { return m_posY; }
     int customWidth() const { return m_customWidth; }
@@ -64,6 +66,7 @@ public:
     void setSensitivity(qreal value);
     void setAlwaysListen(bool always);
     void setStayWhenPaused(bool stay);
+    void setSuppressed(bool suppressed);
     void setPosX(qreal x);
     void setPosY(qreal y);
     void setCustomWidth(int w);
@@ -84,6 +87,7 @@ signals:
     void sensitivityChanged();
     void alwaysListenChanged();
     void stayWhenPausedChanged();
+    void suppressedChanged();
     void configChanged();
     void positionChanged();
     void customSizeChanged();
@@ -107,6 +111,7 @@ private:
     qreal m_sensitivity = 1.0;
     bool m_alwaysListen = true;
     bool m_stayWhenPaused = true;
+    bool m_suppressed = false;
     qreal m_posX = -1.0;
     qreal m_posY = -1.0;
     int m_customWidth = 0;

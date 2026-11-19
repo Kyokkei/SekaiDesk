@@ -15,7 +15,11 @@ import SekaiDesk
 
 PanelWindow {
     id: dockWindow
-    visible: true
+    visible: !GameModeService.active
+
+    readonly property bool needsEdgePolling: themeHub.dockAutoHide || themeHub.barAutoHide
+    onNeedsEdgePollingChanged: WindowTracker.setEdgePollingNeeded(needsEdgePolling)
+    Component.onCompleted: WindowTracker.setEdgePollingNeeded(needsEdgePolling)
 
     readonly property string edge: themeHub.dockEdge
     readonly property bool isVertical: themeHub.dockVertical
@@ -1678,7 +1682,7 @@ PanelWindow {
     // =======================================================================
     PanelWindow {
         id: previewWindow
-        visible: !topBarWindow.fullscreenActive && dockWindow.activePreviewWindows.length > 0
+        visible: !topBarWindow.effectiveFullscreen && dockWindow.activePreviewWindows.length > 0
         clickThrough: false
 
         readonly property int tileW: 216
@@ -1913,7 +1917,7 @@ PanelWindow {
 
     PanelWindow {
         id: contextWindow
-        visible: dockWindow.ctxOpen
+        visible: dockWindow.ctxOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -2117,7 +2121,8 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: topBarWindow
-        visible: true
+        visible: !GameModeService.active
+        readonly property bool effectiveFullscreen: topBarWindow.fullscreenActive || GameModeService.active
 
         readonly property string barEdge: themeHub.barEdge
         readonly property bool barVertical: themeHub.barVertical
@@ -3824,7 +3829,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: mediaPopupWindow
-        visible: topBarWindow.mediaPopupOpen && !topBarWindow.fullscreenActive
+        visible: topBarWindow.mediaPopupOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -4577,7 +4582,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: trayPopupWindow
-        visible: topBarWindow.trayPopupOpen && !topBarWindow.fullscreenActive
+        visible: topBarWindow.trayPopupOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -4742,7 +4747,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: quickPanelWindow
-        visible: !topBarWindow.fullscreenActive && (topBarWindow.quickPanelOpen || stageLift < hiddenLift || notifAlertPeek || themeHub.settingsOpen || flipProgress > 0.001 || flipPrepTimer.running || flipAnim.running || flipRingAnim.running || settingsEnterAnim.running || settingsExitAnim.running)
+        visible: !topBarWindow.effectiveFullscreen && (topBarWindow.quickPanelOpen || stageLift < hiddenLift || notifAlertPeek || themeHub.settingsOpen || flipProgress > 0.001 || flipPrepTimer.running || flipAnim.running || flipRingAnim.running || settingsEnterAnim.running || settingsExitAnim.running)
         clickThrough: !panelWanted && !settingsWanted && !notifAlertPeek
         color: "transparent"
 
@@ -6132,7 +6137,7 @@ PanelWindow {
 
                         // ---- User@Host Identity ----
                         Text {
-                            x: 50; y: 304; width: 260; elide: Text.ElideRight
+                            x: 46; y: 304; width: 222; elide: Text.ElideRight
                             text: (WindowTracker.userName || "user") + "@" + (WindowTracker.machineName || "pc")
                             font.family: "Segoe UI"
                             font.pixelSize: 21
@@ -6140,38 +6145,49 @@ PanelWindow {
                             color: "#1A1B2E"
                         }
 
-                        // ---- 3 Header Square Pill Action Buttons (Settings / Refresh / Edit Desktop) ----
+                        // ---- 4 Header Square Pill Action Buttons (Settings / Refresh / Edit / Game) ----
                         Row {
-                            x: 318; y: 258; spacing: 10
+                            x: 280; y: 258; spacing: 6
                             Repeater {
                                 model: [
-                                    { label: "Settings", icon: "⚙", act: "settings", active: false },
-                                    { label: "Refresh",  icon: "↻", act: "refresh",  active: false },
-                                    { label: "Edit",     icon: "✎", act: "edit",     active: themeHub.editMode }
+                                    { label: "Settings", icon: "⚙",  act: "settings", active: false },
+                                    { label: "Refresh",  icon: "↻",  act: "refresh",  active: false },
+                                    { label: "Edit",     icon: "✎",  act: "edit",     active: themeHub.editMode },
+                                    { label: GameModeService.autoDetect ? "Game ON" : "Game", icon: "🎮", act: "game", active: GameModeService.autoDetect }
                                 ]
                                 delegate: Item {
                                     required property var modelData
-                                    width: 88; height: 70
-                                    Rectangle { x: 4; y: 3; width: 84; height: 66; radius: 22; color: "#1A1B2E" }
+                                    width: 80; height: 68
+                                    Rectangle { x: 3; y: 3; width: 76; height: 64; radius: 20; color: "#1A1B2E" }
                                     Rectangle {
                                         x: hdrActMa.pressed ? 3 : 0
                                         y: hdrActMa.pressed ? 2 : 0
-                                        width: 84; height: 66; radius: 22
+                                        width: 76; height: 64; radius: 20
                                         color: modelData.active || hdrActMa.containsMouse ? themeHub.accentB : "#FFFFFF"
                                         border.width: 3.5; border.color: "#1A1B2E"
                                         Rectangle {
-                                            anchors.fill: parent; anchors.margins: 4; radius: 18
+                                            anchors.fill: parent; anchors.margins: 4; radius: 16
                                             color: "transparent"; border.width: 2; border.color: "#99FFFFFF"
                                         }
                                         Column {
                                             anchors.centerIn: parent; spacing: 0
-                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.icon; font.pixelSize: 24; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.label; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.icon; font.pixelSize: 22; font.weight: Font.Black; color: "#1A1B2E" }
+                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.label; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
                                         }
                                         MouseArea {
                                             id: hdrActMa
                                             anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                            onClicked: {
+                                            acceptedButtons: Qt.LeftButton | Qt.RightButton
+                                            onClicked: function(mouse) {
+                                                if (modelData.act === "game") {
+                                                    if (mouse.button === Qt.RightButton)
+                                                        themeHub.openSettings("system")
+                                                    else
+                                                        GameModeService.autoDetect = !GameModeService.autoDetect
+                                                    return
+                                                }
+                                                if (mouse.button !== Qt.LeftButton)
+                                                    return
                                                 if (modelData.act === "settings") {
                                                     themeHub.openSettings("")
                                                 } else if (modelData.act === "refresh") {
@@ -6180,6 +6196,7 @@ PanelWindow {
                                                     SystemControl.refresh()
                                                     SystemControl.refreshWifi()
                                                     SystemControl.refreshBluetooth()
+                                                    GameModeService.refreshRtssStatus()
                                                 } else if (modelData.act === "edit") {
                                                     topBarWindow.quickPanelOpen = false
                                                     themeHub.setEditMode(true)
@@ -8512,7 +8529,7 @@ PanelWindow {
                                         width: (parent.width - 24) * 0.52; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
                                         Column {
-                                            anchors.fill: parent; anchors.margins: 22; spacing: 10
+                                            anchors.fill: parent; anchors.margins: 22; spacing: 8
                                             Text { text: "GLOBAL SHORTCUTS"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
                                             Repeater {
                                                 model: [
@@ -8520,16 +8537,17 @@ PanelWindow {
                                                     { keys: "CTRL + ALT + V",  desc: "Open Clipboard History & Snippets" },
                                                     { keys: "CTRL + ALT + A",  desc: "Toggle 2.5D QuickPanel Smartphone" },
                                                     { keys: "CTRL + ALT + T",  desc: "Temporarily Show / Hide Windows Taskbar" },
+                                                    { keys: "CTRL + ALT + G",  desc: "Toggle Game Mode (Instant Hibernate)" },
                                                     { keys: "TOPBAR BAND",     desc: "Enter Edit Desktop Mode (Scrapbook)" },
                                                     { keys: "ESC",             desc: "Back out of active overlay / modal" }
                                                 ]
                                                 delegate: Rectangle {
                                                     required property var modelData
-                                                    width: parent.width; height: 54; radius: 14; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    width: parent.width; height: 46; radius: 13; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
                                                     Row {
-                                                        anchors.fill: parent; anchors.margins: 11; spacing: 12
+                                                        anchors.fill: parent; anchors.margins: 8; spacing: 12
                                                         Rectangle {
-                                                            width: 150; height: 30; radius: 9; anchors.verticalCenter: parent.verticalCenter
+                                                            width: 150; height: 28; radius: 8; anchors.verticalCenter: parent.verticalCenter
                                                             color: themeHub.accentA; border.width: 2; border.color: "#1A1B2E"
                                                             Text { anchors.centerIn: parent; text: modelData.keys; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
                                                         }
@@ -8564,6 +8582,395 @@ PanelWindow {
                                                         Text { text: "Uptime: " + (WindowTracker.uptimeText || "--"); font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#475569" }
                                                         Text { text: "CPU: " + WindowTracker.cpuUsage + "%  (" + (WindowTracker.cpuTemp >= 0 ? WindowTracker.cpuTemp + "°C" : "--") + ")   ·   RAM: " + WindowTracker.ramUsage + "%"; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Bold; color: "#0F172A" }
                                                         Text { text: "Display: " + themeHub.screenW + " x " + themeHub.screenH + "   ·   Band: " + themeHub.currentBand.name; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Bold; color: "#0F172A" }
+                                                    }
+                                                }
+                                                Rectangle {
+                                                    id: gmCard
+                                                    width: parent.width
+                                                    height: gmCol.implicitHeight + 24
+                                                    radius: 16
+                                                    color: GameModeService.active ? "#FFF1F2" : "#F8FAFC"
+                                                    border.width: 2.5; border.color: "#1A1B2E"
+
+                                                    property bool runningPickerOpen: false
+                                                    property var runningExes: []
+
+                                                    Column {
+                                                        id: gmCol
+                                                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                                                        spacing: 8
+
+                                                        // Header + Live Status Badge + Manual Toggle
+                                                        Row {
+                                                            width: gmCol.width; height: 32; spacing: 6
+                                                            Column {
+                                                                width: Math.max(80, gmCol.width - 118)
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                spacing: 1
+                                                                Text {
+                                                                    width: parent.width; elide: Text.ElideRight
+                                                                    text: "GAME MODE & PERFORMANCE"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
+                                                                }
+                                                                Text {
+                                                                    width: parent.width; elide: Text.ElideRight
+                                                                    text: GameModeService.active
+                                                                        ? ("ACTIVE · " + (GameModeService.activeGameExe || "Manual"))
+                                                                        : (GameModeService.autoDetect ? "AUTO READY" : "STANDBY")
+                                                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Bold
+                                                                    color: GameModeService.active ? "#BE123C" : (GameModeService.autoDetect ? "#047857" : "#475569")
+                                                                }
+                                                            }
+                                                            Rectangle {
+                                                                width: 112; height: 28; radius: 10
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                color: GameModeService.active
+                                                                    ? (gmToggleMa.containsMouse ? "#FECDD3" : "#FFE4E6")
+                                                                    : (gmToggleMa.containsMouse ? themeHub.accentA : themeHub.accentB)
+                                                                border.width: 2; border.color: "#1A1B2E"
+                                                                Text {
+                                                                    anchors.centerIn: parent
+                                                                    text: GameModeService.active ? "RESUME" : "SLEEP (C+A+G)"
+                                                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                }
+                                                                MouseArea {
+                                                                    id: gmToggleMa
+                                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: {
+                                                                        if (!GameModeService.active) {
+                                                                            themeHub.settingsOpen = false
+                                                                            topBarWindow.quickPanelOpen = false
+                                                                        }
+                                                                        GameModeService.toggleManual()
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Auto-Detect Toggle
+                                                        Rectangle {
+                                                            width: gmCol.width; height: 36; radius: 11
+                                                            color: GameModeService.autoDetect ? "#ECFDF5" : "#FFFFFF"
+                                                            border.width: 2; border.color: "#1A1B2E"
+                                                            Row {
+                                                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                                                Text {
+                                                                    width: Math.max(80, gmCol.width - 80)
+                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                    text: "AUTO-DETECT GAMES"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                }
+                                                                Rectangle {
+                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                    width: 52; height: 22; radius: 11
+                                                                    color: GameModeService.autoDetect ? themeHub.accentB : "#E2E8F0"
+                                                                    border.width: 1.5; border.color: "#1A1B2E"
+                                                                    Text {
+                                                                        anchors.centerIn: parent
+                                                                        text: GameModeService.autoDetect ? "ON" : "OFF"
+                                                                        font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                    }
+                                                                }
+                                                            }
+                                                            MouseArea {
+                                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                                onClicked: GameModeService.autoDetect = !GameModeService.autoDetect
+                                                            }
+                                                        }
+
+                                                        // Mode Selector (Hibernate vs Zero-Footprint)
+                                                        Column {
+                                                            width: gmCol.width; spacing: 4
+                                                            Row {
+                                                                width: gmCol.width; height: 30; spacing: 6
+                                                                Repeater {
+                                                                    model: [
+                                                                        { id: "hibernate", label: "HIBERNATE (INSTANT)" },
+                                                                        { id: "zero",      label: "ZERO-FOOTPRINT (~2MB)" }
+                                                                    ]
+                                                                    delegate: Rectangle {
+                                                                        required property var modelData
+                                                                        width: (gmCol.width - 6) / 2; height: 30; radius: 9
+                                                                        color: GameModeService.mode === modelData.id
+                                                                            ? themeHub.accentB
+                                                                            : (gmModeMa.containsMouse ? "#CBD5E1" : "#E2E8F0")
+                                                                        border.width: 2; border.color: "#1A1B2E"
+                                                                        Text {
+                                                                            anchors.centerIn: parent
+                                                                            text: modelData.label
+                                                                            font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                        }
+                                                                        MouseArea {
+                                                                            id: gmModeMa
+                                                                            anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                            onClicked: GameModeService.mode = modelData.id
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                            Text {
+                                                                width: gmCol.width; wrapMode: Text.WordWrap
+                                                                text: GameModeService.mode === "zero"
+                                                                    ? "Exits GUI into pure-Win32 --wait-game (~2MB, 0% CPU/VRAM) until game closes."
+                                                                    : "Hides all overlays, pauses workers, sets Win11 EcoQoS & trims RAM/VRAM instantly."
+                                                                font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.DemiBold; color: "#475569"
+                                                            }
+                                                        }
+
+                                                        // Restore Taskbar in Zero Mode
+                                                        Rectangle {
+                                                            visible: GameModeService.mode === "zero"
+                                                            width: gmCol.width; height: 34; radius: 11
+                                                            color: GameModeService.restoreTaskbarInZero ? "#EFF6FF" : "#FFFFFF"
+                                                            border.width: 2; border.color: "#1A1B2E"
+                                                            Row {
+                                                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                                                Text {
+                                                                    width: Math.max(80, gmCol.width - 80)
+                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                    text: "RESTORE TASKBAR IN ZERO MODE"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                }
+                                                                Rectangle {
+                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                    width: 52; height: 22; radius: 11
+                                                                    color: GameModeService.restoreTaskbarInZero ? themeHub.accentB : "#E2E8F0"
+                                                                    border.width: 1.5; border.color: "#1A1B2E"
+                                                                    Text {
+                                                                        anchors.centerIn: parent
+                                                                        text: GameModeService.restoreTaskbarInZero ? "ON" : "OFF"
+                                                                        font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                    }
+                                                                }
+                                                            }
+                                                            MouseArea {
+                                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                                onClicked: GameModeService.restoreTaskbarInZero = !GameModeService.restoreTaskbarInZero
+                                                            }
+                                                        }
+
+                                                        // Game List Header + Actions
+                                                        Row {
+                                                            width: gmCol.width; height: 24; spacing: 4
+                                                            Text {
+                                                                width: Math.max(60, gmCol.width - 178)
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                text: "GAME LIST (" + GameModeService.gameList.length + ")"
+                                                                font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                            }
+                                                            Rectangle {
+                                                                width: 68; height: 22; radius: 7
+                                                                color: gmCard.runningPickerOpen ? themeHub.accentA : (gmRunBtnMa.containsMouse ? "#DBEAFE" : "#E0F2FE")
+                                                                border.width: 1.5; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: "+ RUNNING"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea {
+                                                                    id: gmRunBtnMa
+                                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: {
+                                                                        gmCard.runningPickerOpen = !gmCard.runningPickerOpen
+                                                                        if (gmCard.runningPickerOpen)
+                                                                            gmCard.runningExes = WindowTracker.runningExeNames()
+                                                                    }
+                                                                }
+                                                            }
+                                                            Rectangle {
+                                                                width: 50; height: 22; radius: 7
+                                                                color: gmExeBtnMa.containsMouse ? "#FEF08A" : "#FEF9C3"
+                                                                border.width: 1.5; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: "+ .EXE"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea {
+                                                                    id: gmExeBtnMa
+                                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: {
+                                                                        quickPanelWindow.pickingFile = true
+                                                                        const picked = SystemControl.pickExecutableFile("Select Game Executable")
+                                                                        quickPanelWindow.pickingFile = false
+                                                                        if (picked !== "")
+                                                                            GameModeService.addGameExe(picked)
+                                                                        quickPanelWindow.focusActivate()
+                                                                    }
+                                                                }
+                                                            }
+                                                            Rectangle {
+                                                                width: 48; height: 22; radius: 7
+                                                                color: gmResetBtnMa.containsMouse ? "#FCA5A5" : "#FEE2E2"
+                                                                border.width: 1.5; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: "RESET"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea {
+                                                                    id: gmResetBtnMa
+                                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: GameModeService.resetDefaultLists()
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Expandable Running Apps Picker
+                                                        Rectangle {
+                                                            visible: gmCard.runningPickerOpen
+                                                            width: gmCol.width
+                                                            height: runningFlow.implicitHeight + 12
+                                                            radius: 10; color: "#EFF6FF"; border.width: 1.5; border.color: "#1A1B2E"
+                                                            Flow {
+                                                                id: runningFlow
+                                                                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 6 }
+                                                                spacing: 4
+                                                                Text {
+                                                                    visible: gmCard.runningExes.length === 0
+                                                                    text: "No other app windows running."
+                                                                    font.family: "Segoe UI"; font.pixelSize: 10; color: "#64748B"
+                                                                }
+                                                                Repeater {
+                                                                    model: gmCard.runningExes
+                                                                    delegate: Rectangle {
+                                                                        required property var modelData
+                                                                        readonly property bool alreadyAdded: GameModeService.gameList.indexOf(modelData.exe) >= 0
+                                                                        width: runChipTxt.implicitWidth + 12; height: 22; radius: 7
+                                                                        color: alreadyAdded ? "#DCFCE7" : (runChipMa.containsMouse ? themeHub.accentB : "#FFFFFF")
+                                                                        border.width: 1.5; border.color: "#1A1B2E"
+                                                                        Text {
+                                                                            id: runChipTxt
+                                                                            anchors.centerIn: parent
+                                                                            text: (alreadyAdded ? "✓ " : "+ ") + modelData.exe
+                                                                            font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                        }
+                                                                        MouseArea {
+                                                                            id: runChipMa
+                                                                            anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                            onClicked: GameModeService.addGameExe(modelData.exe)
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Game List Chips
+                                                        Flow {
+                                                            width: gmCol.width; spacing: 4
+                                                            Repeater {
+                                                                model: GameModeService.gameList
+                                                                delegate: Rectangle {
+                                                                    required property string modelData
+                                                                    width: gChipTxt.implicitWidth + 12; height: 21; radius: 7
+                                                                    color: gChipMa.containsMouse ? "#FFE4E6" : "#FFFFFF"
+                                                                    border.width: 1.5; border.color: "#1A1B2E"
+                                                                    Text {
+                                                                        id: gChipTxt
+                                                                        anchors.centerIn: parent
+                                                                        text: modelData + " ×"
+                                                                        font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                    }
+                                                                    MouseArea {
+                                                                        id: gChipMa
+                                                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                        onClicked: GameModeService.removeGameExe(modelData)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // Exclude List Header + Chips
+                                                        Row {
+                                                            width: gmCol.width; height: 24; spacing: 4
+                                                            Text {
+                                                                width: Math.max(60, gmCol.width - 54)
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                text: "EXCLUDE LIST (" + GameModeService.excludeList.length + ")"
+                                                                font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                            }
+                                                            Rectangle {
+                                                                width: 50; height: 22; radius: 7
+                                                                color: gmExclBtnMa.containsMouse ? "#E2E8F0" : "#FFFFFF"
+                                                                border.width: 1.5; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: "+ .EXE"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea {
+                                                                    id: gmExclBtnMa
+                                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: {
+                                                                        quickPanelWindow.pickingFile = true
+                                                                        const picked = SystemControl.pickExecutableFile("Select App to Exclude")
+                                                                        quickPanelWindow.pickingFile = false
+                                                                        if (picked !== "")
+                                                                            GameModeService.addExcludeExe(picked)
+                                                                        quickPanelWindow.focusActivate()
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        Flow {
+                                                            width: gmCol.width; spacing: 4
+                                                            Repeater {
+                                                                model: GameModeService.excludeList
+                                                                delegate: Rectangle {
+                                                                    required property string modelData
+                                                                    width: exChipTxt.implicitWidth + 12; height: 21; radius: 7
+                                                                    color: exChipMa.containsMouse ? "#FFE4E6" : "#E2E8F0"
+                                                                    border.width: 1.5; border.color: "#1A1B2E"
+                                                                    Text {
+                                                                        id: exChipTxt
+                                                                        anchors.centerIn: parent
+                                                                        text: modelData + " ×"
+                                                                        font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#334155"
+                                                                    }
+                                                                    MouseArea {
+                                                                        id: exChipMa
+                                                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                        onClicked: GameModeService.removeExcludeExe(modelData)
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        // RTSS Guard
+                                                        Rectangle {
+                                                            width: gmCol.width; height: 34; radius: 10
+                                                            color: GameModeService.rtssExcluded
+                                                                ? "#DCFCE7"
+                                                                : (GameModeService.rtssDetected ? "#FEF3C7" : "#F1F5F9")
+                                                            border.width: 1.5; border.color: "#1A1B2E"
+                                                            Row {
+                                                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 6
+                                                                Text {
+                                                                    width: Math.max(80, gmCol.width - (GameModeService.rtssDetected && !GameModeService.rtssExcluded ? 152 : 76))
+                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                    elide: Text.ElideRight
+                                                                    text: GameModeService.rtssExcluded
+                                                                        ? "RTSS GUARD: Protected (SekaiDesk.exe.cfg)"
+                                                                        : (GameModeService.rtssDetected ? "RTSS Detected — Hooking Active" : "RTSS Not Detected")
+                                                                    font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                }
+                                                                Rectangle {
+                                                                    width: 54; height: 22; radius: 7; anchors.verticalCenter: parent.verticalCenter
+                                                                    color: rtssRescanMa.containsMouse ? "#CBD5E1" : "#FFFFFF"
+                                                                    border.width: 1.5; border.color: "#1A1B2E"
+                                                                    Text { anchors.centerIn: parent; text: "RESCAN"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    MouseArea {
+                                                                        id: rtssRescanMa
+                                                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                        onClicked: GameModeService.refreshRtssStatus()
+                                                                    }
+                                                                }
+                                                                Rectangle {
+                                                                    visible: GameModeService.rtssDetected && !GameModeService.rtssExcluded
+                                                                    width: 74; height: 22; radius: 7; anchors.verticalCenter: parent.verticalCenter
+                                                                    color: rtssBlockMa.containsMouse ? "#FDE047" : themeHub.accentB
+                                                                    border.width: 1.5; border.color: "#1A1B2E"
+                                                                    Text { anchors.centerIn: parent; text: "BLOCK RTSS"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    MouseArea {
+                                                                        id: rtssBlockMa
+                                                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                                        onClicked: GameModeService.applyRtssExclusion()
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+
+                                                        Text {
+                                                            visible: GameModeService.lastStatus !== ""
+                                                            width: gmCol.width; elide: Text.ElideRight
+                                                            text: GameModeService.lastStatus
+                                                            font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#0369A1"
+                                                        }
                                                     }
                                                 }
                                                 Rectangle {
@@ -9158,7 +9565,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: notifPeekWindow
-        readonly property bool quietNow: themeHub.notifyQuietFullscreen && topBarWindow.fullscreenActive
+        readonly property bool quietNow: GameModeService.active || (themeHub.notifyQuietFullscreen && topBarWindow.fullscreenActive)
         readonly property real dockRightEdge: dockWindow.x > 0
                                               ? (dockWindow.x + dockWindow.width)
                                               : ((themeHub.screenW + dockWindow.width) * 0.5)
@@ -9496,7 +9903,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: calendarPopupWindow
-        visible: topBarWindow.calendarOpen && !topBarWindow.fullscreenActive
+        visible: topBarWindow.calendarOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -9960,7 +10367,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: wifiPopupWindow
-        visible: topBarWindow.wifiPopupOpen && !topBarWindow.fullscreenActive
+        visible: topBarWindow.wifiPopupOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -10218,7 +10625,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: btPopupWindow
-        visible: topBarWindow.btPopupOpen && !topBarWindow.fullscreenActive
+        visible: topBarWindow.btPopupOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -10428,7 +10835,7 @@ PanelWindow {
     // =========================================================================
     PanelWindow {
         id: volumePopupWindow
-        visible: topBarWindow.volumePopupOpen && !topBarWindow.fullscreenActive
+        visible: topBarWindow.volumePopupOpen && !topBarWindow.effectiveFullscreen
         clickThrough: false
         color: "transparent"
 
@@ -10792,24 +11199,32 @@ PanelWindow {
     // =========================================================================
     VisualizerOverlay {
         themeHub: themeHub
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
+    }
+
+    Binding {
+        target: VisualizerService
+        property: "suppressed"
+        value: GameModeService.active
+               || topBarWindow.fullscreenActive
+               || (WindowTracker.desktopOccluded && !themeHub.editMode)
     }
 
     SekaiOsd {
         themeHub: themeHub
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
     }
 
     ScreenRound {
         themeHub: themeHub
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
         scrW: themeHub.screenW
         scrH: themeHub.screenH
     }
 
     PowerTools {
         themeHub: themeHub
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
         onQuickPanelRequested: topBarWindow.quickPanelOpen = true
         onDismissQuickPanelRequested: quickPanelWindow.dismissImmediatelyForLauncher()
     }
@@ -10820,25 +11235,25 @@ PanelWindow {
 
     DesktopImageWidgets {
         themeHub: themeHub
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
     }
 
     BarExtraPopups {
         id: barExtraPopups
         themeHub: themeHub
         topBarWindow: topBarWindow
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
     }
 
     DockExtraCards {
         id: dockExtraCards
         themeHub: themeHub
         dockWindow: dockWindow
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
     }
 
     DesktopWidgets {
         themeHub: themeHub
-        fullscreenActive: topBarWindow.fullscreenActive
+        fullscreenActive: topBarWindow.effectiveFullscreen
     }
 }

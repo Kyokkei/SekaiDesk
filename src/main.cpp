@@ -22,6 +22,7 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QUrl>
+#include <cstdlib>
 #include <cstring>
 
 #ifdef Q_OS_WIN
@@ -53,6 +54,7 @@
 #include "services/VisualizerService.h"
 #include "services/WallpaperService.h"
 #include "services/TaskbarManager.h"
+#include "services/GameModeService.h"
 
 namespace {
 QFile* g_logFile = nullptr;
@@ -101,8 +103,10 @@ int main(int argc, char* argv[])
     }
 
 #ifdef Q_OS_WIN
-    SetUnhandledExceptionFilter(sekaiUnhandledExceptionFilter);
     std::wstring instanceTag;
+    bool hasWaitGame = false;
+    unsigned long waitGamePid = 0;
+    std::string waitExeArg;
     for (int i = 1; i < argc; ++i) {
         if (!argv[i])
             continue;
@@ -112,6 +116,16 @@ int main(int argc, char* argv[])
             rawVal = argv[++i];
         } else if (std::strncmp(arg, "--instance=", 11) == 0) {
             rawVal = arg + 11;
+        } else if (std::strcmp(arg, "--wait-game") == 0 && (i + 1) < argc && argv[i + 1]) {
+            hasWaitGame = true;
+            waitGamePid = std::strtoul(argv[++i], nullptr, 10);
+        } else if (std::strncmp(arg, "--wait-game=", 12) == 0) {
+            hasWaitGame = true;
+            waitGamePid = std::strtoul(arg + 12, nullptr, 10);
+        } else if (std::strcmp(arg, "--wait-exe") == 0 && (i + 1) < argc && argv[i + 1]) {
+            waitExeArg = argv[++i];
+        } else if (std::strncmp(arg, "--wait-exe=", 11) == 0) {
+            waitExeArg = arg + 11;
         }
         if (rawVal) {
             instanceTag.clear();
@@ -122,6 +136,14 @@ int main(int argc, char* argv[])
             }
         }
     }
+    if (hasWaitGame) {
+        return GameModeService::runWaitGameWatchdog(
+            waitGamePid,
+            QString::fromLocal8Bit(waitExeArg.c_str()),
+            QString::fromStdWString(instanceTag));
+    }
+
+    SetUnhandledExceptionFilter(sekaiUnhandledExceptionFilter);
     const std::wstring mutexName = instanceTag.empty()
         ? std::wstring(L"Local\\SekaiDesk_SingleInstance_v1")
         : (std::wstring(L"Local\\SekaiDesk_SingleInstance_") + instanceTag);
@@ -190,14 +212,45 @@ int main(int argc, char* argv[])
     static VisualizerService visualizerService(&settings, &mediaService);
     static WallpaperService wallpaperService(&settings);
     static TaskbarManager taskbarManager(&settings);
+    static GameModeService gameModeService;
+#ifdef Q_OS_WIN
+    if (!instanceTag.empty())
+        gameModeService.setInstanceTag(QString::fromStdWString(instanceTag));
+#endif
+    static bool s_skipTaskbarRestoreOnQuit = false;
     systemControl.setBeforeQuitCallback([]() {
         taskbarManager.prepareForExit();
     });
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
-        taskbarManager.prepareForExit();
+        if (!s_skipTaskbarRestoreOnQuit)
+            taskbarManager.prepareForExit();
     });
     QObject::connect(&systemControl, &SystemControlService::taskbarToggleRequested,
                      &taskbarManager, &TaskbarManager::toggleTemporary);
+    QObject::connect(&systemControl, &SystemControlService::gameModeToggleRequested,
+                     &gameModeService, &GameModeService::toggleManual);
+    QObject::connect(&gameModeService, &GameModeService::hibernateChanged,
+                     &app, [](bool hibernated, const QString&) {
+                         PanelWindow::setGlobalHibernated(hibernated);
+                         windowTracker.setPaused(hibernated);
+                         audioService.setPaused(hibernated);
+                         lyricsService.setPaused(hibernated);
+                         mediaService.setPaused(hibernated);
+                         notificationService.setPaused(hibernated);
+                         systemControl.setPaused(hibernated);
+                     });
+    QObject::connect(&gameModeService, &GameModeService::zeroFootprintRequested,
+                     &app, []() {
+                         if (gameModeService.restoreTaskbarInZero())
+                             taskbarManager.prepareForExit();
+                         else
+                             s_skipTaskbarRestoreOnQuit = true;
+                         QCoreApplication::quit();
+                     });
+    QObject::connect(&gameModeService, &GameModeService::spotlightHiddenWhileHibernated,
+                     &app, []() {
+                         PanelWindow::scheduleHiddenResourceRelease();
+                     });
 
     // --- Quickshell compat registrations -----------------------------------
     // Unversioned imports (`import Quickshell`) resolve to the highest
@@ -252,6 +305,8 @@ int main(int argc, char* argv[])
                                  "WallpaperService", &wallpaperService);
     qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
                                  "TaskbarManager", &taskbarManager);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "GameModeService", &gameModeService);
     qmlRegisterType<DwmThumbnailItem>("SekaiDesk", 1, 0,
                                       "DwmThumbnail");
 

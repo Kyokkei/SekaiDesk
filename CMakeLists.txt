@@ -31,6 +31,7 @@ qt_add_executable(SekaiDesk WIN32
     src/services/VisualizerService.h src/services/VisualizerService.cpp
     src/services/WallpaperService.h src/services/WallpaperService.cpp
     src/services/TaskbarManager.h   src/services/TaskbarManager.cpp
+    src/services/GameModeService.h  src/services/GameModeService.cpp
     src/SekaiDesk.rc
 )
 

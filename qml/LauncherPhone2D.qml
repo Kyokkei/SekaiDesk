@@ -67,7 +67,8 @@ PanelWindow {
         NumberAnimation { duration: 120; easing.type: Easing.OutCubic }
     }
 
-    readonly property bool wanted: !!themeHub.spotlightOpen && !fullscreenActive
+    property bool allowOverFullscreen: false
+    readonly property bool wanted: !!themeHub.spotlightOpen && (!fullscreenActive || allowOverFullscreen)
 
     function applyInitialQuery(initialQ) {
         const txt = String(initialQ || "")
@@ -94,6 +95,7 @@ PanelWindow {
 
     onWantedChanged: {
         if (wanted) {
+            GameModeService.setSpotlightOverride(true)
             exitAnim.stop()
             openedAt = Date.now()
             applyInitialQuery(themeHub.launcherInitialQuery || "")
@@ -108,6 +110,9 @@ PanelWindow {
             enterAnim.stop()
             ctxOpen = false
             exitAnim.restart()
+        } else {
+            allowOverFullscreen = false
+            GameModeService.setSpotlightOverride(false)
         }
     }
 
@@ -115,8 +120,10 @@ PanelWindow {
         id: focusTimer
         interval: 35
         onTriggered: {
-            if (phoneWin.wanted)
+            if (phoneWin.wanted) {
+                phoneWin.focusActivate()
                 searchInput.forceActiveFocus()
+            }
         }
     }
 
@@ -176,12 +183,20 @@ PanelWindow {
                     phoneWin.lift = phoneWin.hiddenLift
                     phoneWin.query = ""
                     searchInput.text = ""
+                    phoneWin.allowOverFullscreen = false
+                    GameModeService.setSpotlightOverride(false)
                 }
             }
         }
     }
 
-    visible: shown && !fullscreenActive
+    visible: shown && (!fullscreenActive || allowOverFullscreen)
+    onVisibleChanged: {
+        if (!visible && !wanted) {
+            allowOverFullscreen = false
+            GameModeService.setSpotlightOverride(false)
+        }
+    }
     clickThrough: false
     color: "transparent"
 

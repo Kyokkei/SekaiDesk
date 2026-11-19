@@ -28,6 +28,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 static constexpr UINT kAppBarCallbackMsg = WM_APP + 0x55;
@@ -125,6 +126,9 @@ namespace {
 QSet<HWND> s_desktopHwnds;
 QSet<HWND> s_overlayTopmostHwnds;
 QList<PanelWindow*> s_desktopWindows;
+QList<PanelWindow*> s_allPanels;
+bool s_globalHibernated = false;
+uint64_t s_hibGeneration = 0;
 HWINEVENTHOOK s_fgHook = nullptr;
 HWINEVENTHOOK s_minHook = nullptr;
 HWINEVENTHOOK s_reorderHook = nullptr;
@@ -376,7 +380,7 @@ void restackAllDesktopWindows()
 void CALLBACK desktopWinEventProc(HWINEVENTHOOK, DWORD event, HWND hwnd, LONG idObject,
                                   LONG idChild, DWORD, DWORD)
 {
-    if (s_desktopWindows.isEmpty())
+    if (s_desktopWindows.isEmpty() || s_globalHibernated)
         return;
     if (event == EVENT_SYSTEM_FOREGROUND && idObject == OBJID_WINDOW && hwnd) {
         if (!IsWindow(hwnd) || GetAncestor(hwnd, GA_ROOT) != hwnd)
@@ -435,9 +439,9 @@ void ensureDesktopHooksInstalled()
     }
     if (!s_showDesktopWatchTimer) {
         s_showDesktopWatchTimer = new QTimer(QCoreApplication::instance());
-        s_showDesktopWatchTimer->setInterval(120);
+        s_showDesktopWatchTimer->setInterval(350);
         QObject::connect(s_showDesktopWatchTimer, &QTimer::timeout, []() {
-            if (s_inRestack || s_desktopWindows.isEmpty())
+            if (s_inRestack || s_desktopWindows.isEmpty() || s_globalHibernated)
                 return;
             const HWND host = findDesktopHostHwnd();
             const bool showDesk = isShowDesktopActive(host);
@@ -471,7 +475,7 @@ void ensureDesktopHooksInstalled()
                 restackAllDesktopWindows();
         });
     }
-    if (!s_showDesktopWatchTimer->isActive())
+    if (!s_globalHibernated && !s_showDesktopWatchTimer->isActive())
         s_showDesktopWatchTimer->start();
 
     if (!s_fgHook) {
@@ -927,6 +931,7 @@ PanelWindow::PanelWindow(QWindow* parent)
     : QQuickWindow(parent)
     , m_anchors(new WindowAnchors(this))
 {
+    s_allPanels.append(this);
     setFlags(flags() | Qt::Tool | Qt::FramelessWindowHint | Qt::WindowStaysOnTopHint);
     setColor(Qt::transparent);
 
@@ -966,7 +971,8 @@ PanelWindow::PanelWindow(QWindow* parent)
                 scheduleAppBarSync();
             if (!m_desktopLayer) {
                 verifyFullscreenState();
-                m_fsGuardTimer.start();
+                if (!s_globalHibernated)
+                    m_fsGuardTimer.start();
             }
         } else {
 #ifdef Q_OS_WIN
@@ -981,7 +987,7 @@ PanelWindow::PanelWindow(QWindow* parent)
             unregisterAppBar();
         }
     });
-    m_fsGuardTimer.setInterval(200);
+    m_fsGuardTimer.setInterval(500);
     connect(&m_fsGuardTimer, &QTimer::timeout, this, &PanelWindow::verifyFullscreenState);
     m_appBarDebounceTimer.setSingleShot(true);
     m_appBarDebounceTimer.setInterval(40);
@@ -1004,6 +1010,7 @@ PanelWindow::PanelWindow(QWindow* parent)
 
 PanelWindow::~PanelWindow()
 {
+    s_allPanels.removeOne(this);
     m_fsGuardTimer.stop();
     m_inNativeDrag = false;
 #ifdef Q_OS_WIN
@@ -1275,7 +1282,7 @@ void PanelWindow::applyBlurBehind()
     static auto fnSetWCA = reinterpret_cast<FnSetWindowCompositionAttribute>(
         GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowCompositionAttribute"));
 
-    if (m_blurBehind) {
+    if (m_blurBehind && !s_globalHibernated) {
         const bool overshotBothAxes = (width() > 300 && height() > 300);
         if (overshotBothAxes) {
             if (fnSetWCA) {
@@ -1316,6 +1323,70 @@ void PanelWindow::applyBlurBehind()
         fnSetWCA(hwnd, &data);
         m_hasAppliedMask = false;
     }
+#endif
+}
+
+void PanelWindow::setGlobalHibernated(bool hibernated)
+{
+    if (s_globalHibernated == hibernated)
+        return;
+    s_globalHibernated = hibernated;
+    ++s_hibGeneration;
+
+#ifdef Q_OS_WIN
+    if (hibernated) {
+        if (s_showDesktopWatchTimer)
+            s_showDesktopWatchTimer->stop();
+        if (s_restackTimer)
+            s_restackTimer->stop();
+        if (s_followupRestackTimer)
+            s_followupRestackTimer->stop();
+
+        for (PanelWindow* p : std::as_const(s_allPanels)) {
+            if (!p)
+                continue;
+            p->m_fsGuardTimer.stop();
+            p->applyBlurBehind();
+        }
+
+        scheduleHiddenResourceRelease();
+    } else {
+        if (s_showDesktopWatchTimer && !s_desktopWindows.isEmpty())
+            s_showDesktopWatchTimer->start();
+
+        for (PanelWindow* p : std::as_const(s_allPanels)) {
+            if (!p || !p->isVisible())
+                continue;
+            p->applyBlurBehind();
+            if (!p->m_desktopLayer) {
+                p->verifyFullscreenState();
+                if (!p->m_fsGuardTimer.isActive())
+                    p->m_fsGuardTimer.start();
+            }
+        }
+    }
+#endif
+}
+
+void PanelWindow::scheduleHiddenResourceRelease()
+{
+#ifdef Q_OS_WIN
+    if (!s_globalHibernated)
+        return;
+    const int gen = ++s_hibGeneration;
+    QTimer::singleShot(180, QCoreApplication::instance(), [gen]() {
+        if (!s_globalHibernated || s_hibGeneration != gen)
+            return;
+        for (QWindow* w : QGuiApplication::topLevelWindows()) {
+            if (auto* qw = qobject_cast<QQuickWindow*>(w)) {
+                if (!qw->isVisible())
+                    qw->releaseResources();
+            }
+        }
+        SetProcessWorkingSetSize(GetCurrentProcess(),
+                                 static_cast<SIZE_T>(-1),
+                                 static_cast<SIZE_T>(-1));
+    });
 #endif
 }
 
@@ -1727,7 +1798,8 @@ void PanelWindow::setDesktopLayer(bool on)
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
             verifyFullscreenState();
-            m_fsGuardTimer.start();
+            if (!s_globalHibernated)
+                m_fsGuardTimer.start();
         }
 #endif
     }
@@ -1866,10 +1938,20 @@ void PanelWindow::applyFileDrops()
 void PanelWindow::focusActivate()
 {
 #ifdef Q_OS_WIN
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (hwnd) {
-        SetForegroundWindow(hwnd);
+    HWND hwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
+    if (hwnd && IsWindow(hwnd)) {
+        HWND fg = GetForegroundWindow();
+        const DWORD fgTid = fg ? GetWindowThreadProcessId(fg, nullptr) : 0;
+        const DWORD curTid = GetCurrentThreadId();
+        const bool attached = (fgTid != 0 && fgTid != curTid)
+                              && (AttachThreadInput(fgTid, curTid, TRUE) != FALSE);
+        SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                     SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
         BringWindowToTop(hwnd);
+        SetForegroundWindow(hwnd);
+        SetActiveWindow(hwnd);
+        if (attached)
+            AttachThreadInput(fgTid, curTid, FALSE);
     }
 #endif
     requestActivate();

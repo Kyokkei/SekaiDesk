@@ -212,6 +212,8 @@ public:
     Q_INVOKABLE void recompute();
     Q_INVOKABLE void setPanelGeometry(int x, int y, int width, int height);
     Q_INVOKABLE bool isPointerOutsideAndPressed() const;
+    static void setGlobalHibernated(bool hibernated);
+    static void scheduleHiddenResourceRelease();
 
 signals:
     void exclusiveZoneChanged();

@@ -21,6 +21,7 @@ Item {
             }
             if ((Date.now() - themeHub.spotlightClosedAt) < 80)
                 return
+            launcherPhone.allowOverFullscreen = true
             powerToolsRoot.dismissQuickPanelRequested()
             themeHub.clipboardOpen = false
             themeHub.settingsOpen = false
@@ -32,12 +33,15 @@ Item {
         }
 
         function onClipboardToggleRequested() {
+            if (powerToolsRoot.fullscreenActive)
+                return
             if (launcherPhone.visible && launcherPhone.isClipMode) {
                 launcherPhone.closePhone()
                 return
             }
             if ((Date.now() - themeHub.spotlightClosedAt) < 80)
                 return
+            launcherPhone.allowOverFullscreen = false
             powerToolsRoot.dismissQuickPanelRequested()
             themeHub.clipboardOpen = false
             themeHub.settingsOpen = false
@@ -55,9 +59,12 @@ Item {
             if (!themeHub.clipboardOpen)
                 return
             themeHub.clipboardOpen = false
+            if (powerToolsRoot.fullscreenActive)
+                return
             if (launcherPhone.visible && launcherPhone.isClipMode) {
                 launcherPhone.closePhone()
             } else {
+                launcherPhone.allowOverFullscreen = false
                 powerToolsRoot.dismissQuickPanelRequested()
                 themeHub.settingsOpen = false
                 themeHub.launcherInitialQuery = "clip"

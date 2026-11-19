@@ -221,6 +221,15 @@ void VisualizerService::setStayWhenPaused(bool stay)
     emit configChanged();
 }
 
+void VisualizerService::setSuppressed(bool suppressed)
+{
+    if (m_suppressed == suppressed)
+        return;
+    m_suppressed = suppressed;
+    emit suppressedChanged();
+    syncCaptureState();
+}
+
 void VisualizerService::setPosX(qreal x)
 {
     if (qFuzzyCompare(m_posX, x))
@@ -326,7 +335,7 @@ void VisualizerService::resetPosition()
 void VisualizerService::syncCaptureState()
 {
     const bool mediaPlaying = m_media && m_media->isPlaying();
-    const bool shouldRun = m_enabled && (m_alwaysListen || mediaPlaying);
+    const bool shouldRun = m_enabled && !m_suppressed && (m_alwaysListen || mediaPlaying);
     if (shouldRun) {
         startWorker();
         if (!m_frameTimer.isActive())

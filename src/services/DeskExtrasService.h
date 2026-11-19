@@ -35,6 +35,7 @@ public:
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE void searchManual(const QString& query);
+    void setPaused(bool paused);
 
 signals:
     void lyricsChanged();
@@ -51,6 +52,7 @@ private:
 
     MediaService* m_media = nullptr;
     QTimer m_tickTimer;
+    bool m_paused = false;
     bool m_loading = false;
     bool m_synced = false;
     QVariantList m_lines;
