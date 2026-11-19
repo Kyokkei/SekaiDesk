@@ -165,8 +165,10 @@ public:
 
     Q_INVOKABLE void addUrls(const QVariantList& urls);
     Q_INVOKABLE void addPaths(const QStringList& paths);
+    Q_INVOKABLE void addText(const QString& text);
     Q_INVOKABLE void pickFiles();
     Q_INVOKABLE int pasteFromClipboard();
+    Q_INVOKABLE void copyItem(int index);
     Q_INVOKABLE void openItem(int index);
     Q_INVOKABLE void revealItem(int index);
     Q_INVOKABLE void copyAllPaths();
@@ -179,4 +181,5 @@ signals:
 private:
     void appendSinglePath(const QString& rawPath);
     QVariantList m_items;
+    quint64 m_nextId = 0;
 };

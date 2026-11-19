@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QTimer>
 #include <QVariantList>
+#include <functional>
 
 class SystemControlService : public QObject, public QAbstractNativeEventFilter {
     Q_OBJECT
@@ -76,6 +77,8 @@ public:
     Q_INVOKABLE void hideStockOsdIfActive();
     Q_INVOKABLE void setLaunchAtStartup(bool on);
     Q_INVOKABLE void toggleLaunchAtStartup();
+    Q_INVOKABLE void quitApp();
+    void setBeforeQuitCallback(std::function<void()> cb);
 
     bool nativeEventFilter(const QByteArray& eventType, void* message, qintptr* result) override;
 
@@ -94,6 +97,7 @@ signals:
     void darkModeOsdRequested(bool darkMode);
     void volumeStepRequested(int delta);
     void volumeMuteToggleRequested();
+    void taskbarToggleRequested();
 
 private:
     void readBrightness();
@@ -130,6 +134,7 @@ private:
     bool m_hotkeyRegistered = false;
     bool m_spotlightHotkeyRegistered = false;
     bool m_clipboardHotkeyRegistered = false;
+    bool m_taskbarHotkeyRegistered = false;
     void* m_kbdHook = nullptr;
     void* m_hotkeyMsgHwnd = nullptr;
     QTimer m_hotkeyRetryTimer;
@@ -139,4 +144,6 @@ private:
     qint64 m_lastSelfBrightnessMs = 0;
     bool m_suppressStockOsd = false;
     bool m_launchAtStartup = false;
+    bool m_startupChecked = false;
+    std::function<void()> m_beforeQuitCallback;
 };

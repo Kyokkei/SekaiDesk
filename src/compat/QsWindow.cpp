@@ -1,9 +1,11 @@
 #include "QsWindow.h"
+#include "services/TaskbarManager.h"
 
 #include <QCoreApplication>
 #include <QEvent>
 #include <QGuiApplication>
 #include <QList>
+#include <QPointer>
 #include <QQuickItem>
 #include <QSet>
 #include <QVector>
@@ -21,7 +23,16 @@
 #include <ole2.h>
 #include <shellapi.h>
 
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <unordered_map>
+#include <vector>
+
 static constexpr UINT kAppBarCallbackMsg = WM_APP + 0x55;
+static constexpr UINT kAppBarWorkerSyncMsg = WM_APP + 0x56;
+static constexpr UINT kAppBarWorkerQuitMsg = WM_APP + 0x57;
 #endif
 
 // ---------------------------------------------------------------------------
@@ -523,6 +534,389 @@ void cleanupDesktopHooksIfEmpty()
     }
 }
 } // namespace
+
+// Dedicated Win32 worker thread for SHAppBarMessage so blocking Explorer/broadcast
+// IPC (ABM_NEW / ABM_QUERYPOS / ABM_SETPOS / ABM_REMOVE) never freezes the Qt GUI thread.
+class AppBarWorker {
+public:
+    struct PendingReq {
+        PanelWindow* owner = nullptr;
+        QPointer<PanelWindow> safeOwner;
+        HMONITOR mon = nullptr;
+        bool reserve = false;
+        UINT edge = ABE_TOP;
+        int physThickness = 30;
+    };
+
+    static AppBarWorker& instance()
+    {
+        static AppBarWorker s_worker;
+        return s_worker;
+    }
+
+    ~AppBarWorker()
+    {
+        HWND ctrl = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_stopping = true;
+            ctrl = m_ctrlHwnd;
+        }
+        if (ctrl && IsWindow(ctrl))
+            PostMessageW(ctrl, kAppBarWorkerQuitMsg, 0, 0);
+        if (m_thread.joinable())
+            m_thread.detach();
+    }
+
+    void enqueue(const PendingReq& req)
+    {
+        if (!ensureStarted())
+            return;
+        HWND ctrl = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            if (m_stopping)
+                return;
+            m_pending[req.owner] = req;
+            ctrl = m_ctrlHwnd;
+        }
+        if (ctrl)
+            PostMessageW(ctrl, kAppBarWorkerSyncMsg, 0, 0);
+    }
+
+    void shutdown()
+    {
+        HWND ctrl = nullptr;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            if (m_stopping && !m_started)
+                return;
+            m_stopping = true;
+            ctrl = m_ctrlHwnd;
+        }
+        if (ctrl)
+            PostMessageW(ctrl, kAppBarWorkerQuitMsg, 0, 0);
+        if (m_thread.joinable())
+            m_thread.join();
+    }
+
+private:
+    struct WorkerSlot {
+        QPointer<PanelWindow> safeOwner;
+        HWND barHwnd = nullptr;
+        HMONITOR mon = nullptr;
+        bool registered = false;
+        bool inUpdate = false;
+        UINT edge = ABE_TOP;
+        int physThickness = 30;
+        int lastEdge = -1;
+        RECT lastRc{};
+    };
+
+    AppBarWorker() = default;
+
+    bool ensureStarted()
+    {
+        std::unique_lock<std::mutex> lk(m_mutex);
+        if (m_stopping)
+            return false;
+        if (m_started && m_ctrlHwnd)
+            return true;
+        if (!m_thread.joinable()) {
+            m_ready = false;
+            m_thread = std::thread(&AppBarWorker::threadMain, this);
+        }
+        m_cv.wait(lk, [this]() { return m_ready || m_stopping; });
+        return m_started && m_ctrlHwnd != nullptr && !m_stopping;
+    }
+
+    void threadMain()
+    {
+        HINSTANCE hInst = GetModuleHandleW(nullptr);
+        WNDCLASSEXW wc{};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = &AppBarWorker::proxyWndProc;
+        wc.hInstance = hInst;
+        wc.lpszClassName = L"SekaiDesk_AppBarProxy";
+        RegisterClassExW(&wc);
+
+        HWND ctrl = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            L"SekaiDesk_AppBarProxy",
+            L"SekaiDeskAppBarCtrl",
+            WS_POPUP,
+            -32000, -32000, 0, 0,
+            nullptr, nullptr, hInst, this);
+
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            m_ctrlHwnd = ctrl;
+            m_started = (ctrl != nullptr);
+            m_ready = true;
+        }
+        m_cv.notify_all();
+
+        if (!ctrl)
+            return;
+
+        MSG msg{};
+        while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+
+        // Belt-and-suspenders cleanup if loop ended externally
+        cleanupAllSlotsWorker();
+        std::lock_guard<std::mutex> lk(m_mutex);
+        m_ctrlHwnd = nullptr;
+        m_started = false;
+    }
+
+    void updateBottomReservedFlag() const
+    {
+        bool anyBottom = false;
+        for (const auto& kv : m_slots) {
+            if (kv.second.registered && kv.second.edge == ABE_BOTTOM) {
+                anyBottom = true;
+                break;
+            }
+        }
+        TaskbarManager::setBottomAppBarReserved(anyBottom);
+    }
+
+    static RECT computeEdgeRect(const MONITORINFO& mi, UINT uEdge, int physT)
+    {
+        RECT rc = mi.rcMonitor;
+        const int clampedT = qMax(24, physT);
+        switch (uEdge) {
+        case ABE_BOTTOM: rc.top = rc.bottom - clampedT; break;
+        case ABE_LEFT:   rc.right = rc.left + clampedT; break;
+        case ABE_RIGHT:  rc.left = rc.right - clampedT; break;
+        case ABE_TOP:
+        default:         rc.bottom = rc.top + clampedT; break;
+        }
+        return rc;
+    }
+
+    static void clampQueryRect(RECT& rc, UINT uEdge, int physT)
+    {
+        const int clampedT = qMax(24, physT);
+        switch (uEdge) {
+        case ABE_BOTTOM: rc.top = rc.bottom - clampedT; break;
+        case ABE_LEFT:   rc.right = rc.left + clampedT; break;
+        case ABE_RIGHT:  rc.left = rc.right - clampedT; break;
+        case ABE_TOP:
+        default:         rc.bottom = rc.top + clampedT; break;
+        }
+    }
+
+    void processSyncWorker()
+    {
+        std::vector<PendingReq> batch;
+        {
+            std::lock_guard<std::mutex> lk(m_mutex);
+            if (m_pending.empty())
+                return;
+            batch.reserve(m_pending.size());
+            for (const auto& kv : m_pending)
+                batch.push_back(kv.second);
+            m_pending.clear();
+        }
+
+        HINSTANCE hInst = GetModuleHandleW(nullptr);
+        for (const PendingReq& req : batch) {
+            if (!req.reserve) {
+                auto it = m_slots.find(req.owner);
+                if (it != m_slots.end()) {
+                    WorkerSlot& slot = it->second;
+                    if (slot.registered && slot.barHwnd && IsWindow(slot.barHwnd)) {
+                        APPBARDATA abd{};
+                        abd.cbSize = sizeof(abd);
+                        abd.hWnd = slot.barHwnd;
+                        SHAppBarMessage(ABM_REMOVE, &abd);
+                    }
+                    if (slot.barHwnd && IsWindow(slot.barHwnd))
+                        DestroyWindow(slot.barHwnd);
+                    m_slots.erase(it);
+                }
+                updateBottomReservedFlag();
+                continue;
+            }
+
+            WorkerSlot& slot = m_slots[req.owner];
+            slot.safeOwner = req.safeOwner;
+            slot.mon = req.mon;
+            slot.edge = req.edge;
+            slot.physThickness = req.physThickness;
+
+            if (!slot.barHwnd || !IsWindow(slot.barHwnd)) {
+                slot.barHwnd = CreateWindowExW(
+                    WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                    L"SekaiDesk_AppBarProxy",
+                    L"SekaiDeskAppBarSlot",
+                    WS_POPUP,
+                    -32000, -32000, 0, 0,
+                    nullptr, nullptr, hInst, this);
+                if (slot.barHwnd) {
+                    SetWindowLongPtrW(slot.barHwnd, GWLP_USERDATA,
+                                      reinterpret_cast<LONG_PTR>(req.owner));
+                }
+            }
+            if (!slot.barHwnd)
+                continue;
+
+            MONITORINFO mi{};
+            mi.cbSize = sizeof(mi);
+            if (!slot.mon || !GetMonitorInfoW(slot.mon, &mi)) {
+                HMONITOR pri = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+                if (!GetMonitorInfoW(pri, &mi))
+                    continue;
+            }
+
+            APPBARDATA abd{};
+            abd.cbSize = sizeof(abd);
+            abd.hWnd = slot.barHwnd;
+            abd.uCallbackMessage = kAppBarCallbackMsg;
+            abd.uEdge = slot.edge;
+            abd.rc = computeEdgeRect(mi, slot.edge, slot.physThickness);
+
+            const bool newlyRegistered = !slot.registered;
+            if (!slot.registered) {
+                SHAppBarMessage(ABM_NEW, &abd);
+                slot.registered = true;
+            }
+
+            // Publish edge state before ABM_SETPOS triggers WM_SETTINGCHANGE in TaskbarManager
+            updateBottomReservedFlag();
+
+            slot.inUpdate = true;
+            SHAppBarMessage(ABM_QUERYPOS, &abd);
+            clampQueryRect(abd.rc, slot.edge, slot.physThickness);
+
+            const bool rectChanged = newlyRegistered
+                || slot.lastEdge != static_cast<int>(slot.edge)
+                || !EqualRect(&slot.lastRc, &abd.rc);
+            if (rectChanged) {
+                slot.lastEdge = static_cast<int>(slot.edge);
+                slot.lastRc = abd.rc;
+                SHAppBarMessage(ABM_SETPOS, &abd);
+            }
+            slot.inUpdate = false;
+        }
+        updateBottomReservedFlag();
+    }
+
+    void cleanupAllSlotsWorker()
+    {
+        for (auto& kv : m_slots) {
+            WorkerSlot& slot = kv.second;
+            if (slot.registered && slot.barHwnd && IsWindow(slot.barHwnd)) {
+                APPBARDATA abd{};
+                abd.cbSize = sizeof(abd);
+                abd.hWnd = slot.barHwnd;
+                SHAppBarMessage(ABM_REMOVE, &abd);
+            }
+            if (slot.barHwnd && IsWindow(slot.barHwnd))
+                DestroyWindow(slot.barHwnd);
+        }
+        m_slots.clear();
+        TaskbarManager::setBottomAppBarReserved(false);
+    }
+
+    static LRESULT CALLBACK proxyWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+    {
+        if (msg == WM_NCCREATE) {
+            auto* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
+            if (cs && cs->lpCreateParams)
+                SetPropW(hwnd, L"AppBarWorkerPtr", cs->lpCreateParams);
+            return TRUE;
+        }
+
+        auto* worker = reinterpret_cast<AppBarWorker*>(GetPropW(hwnd, L"AppBarWorkerPtr"));
+        if (!worker)
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
+
+        if (msg == kAppBarWorkerSyncMsg) {
+            worker->processSyncWorker();
+            return 0;
+        }
+
+        if (msg == kAppBarWorkerQuitMsg) {
+            worker->cleanupAllSlotsWorker();
+            HWND ctrl = nullptr;
+            {
+                std::lock_guard<std::mutex> lk(worker->m_mutex);
+                ctrl = worker->m_ctrlHwnd;
+                worker->m_ctrlHwnd = nullptr;
+            }
+            if (ctrl && IsWindow(ctrl))
+                DestroyWindow(ctrl);
+            PostQuitMessage(0);
+            return 0;
+        }
+
+        if (msg == kAppBarCallbackMsg) {
+            auto* ownerKey = reinterpret_cast<PanelWindow*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+            auto it = worker->m_slots.find(ownerKey);
+            if (it == worker->m_slots.end())
+                return 0;
+            WorkerSlot& slot = it->second;
+
+            if (wParam == ABN_POSCHANGED && slot.registered && !slot.inUpdate) {
+                MONITORINFO mi{};
+                mi.cbSize = sizeof(mi);
+                if (slot.mon && GetMonitorInfoW(slot.mon, &mi)) {
+                    APPBARDATA abd{};
+                    abd.cbSize = sizeof(abd);
+                    abd.hWnd = slot.barHwnd;
+                    abd.uCallbackMessage = kAppBarCallbackMsg;
+                    abd.uEdge = slot.edge;
+                    abd.rc = computeEdgeRect(mi, slot.edge, slot.physThickness);
+                    slot.inUpdate = true;
+                    SHAppBarMessage(ABM_QUERYPOS, &abd);
+                    clampQueryRect(abd.rc, slot.edge, slot.physThickness);
+                    if (!EqualRect(&slot.lastRc, &abd.rc)) {
+                        slot.lastRc = abd.rc;
+                        SHAppBarMessage(ABM_SETPOS, &abd);
+                    }
+                    slot.inUpdate = false;
+                }
+                if (auto* app = QCoreApplication::instance()) {
+                    const QPointer<PanelWindow> safeOwner = slot.safeOwner;
+                    QMetaObject::invokeMethod(app, [safeOwner]() {
+                        if (safeOwner)
+                            safeOwner->handleAppBarPosChanged();
+                    }, Qt::QueuedConnection);
+                }
+            } else if (wParam == ABN_FULLSCREENAPP) {
+                const bool fsHint = (lParam != 0);
+                if (auto* app = QCoreApplication::instance()) {
+                    const QPointer<PanelWindow> safeOwner = slot.safeOwner;
+                    QMetaObject::invokeMethod(app, [safeOwner, fsHint]() {
+                        if (safeOwner)
+                            safeOwner->handleAppBarFullscreenHint(fsHint);
+                    }, Qt::QueuedConnection);
+                }
+            }
+            return 0;
+        }
+
+        if (msg == WM_NCDESTROY)
+            RemovePropW(hwnd, L"AppBarWorkerPtr");
+
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    }
+
+    std::mutex m_mutex;
+    std::condition_variable m_cv;
+    std::thread m_thread;
+    HWND m_ctrlHwnd = nullptr;
+    bool m_ready = false;
+    bool m_started = false;
+    bool m_stopping = false;
+    std::unordered_map<PanelWindow*, PendingReq> m_pending;
+    std::unordered_map<PanelWindow*, WorkerSlot> m_slots;
+};
 #endif
 
 // ---------------------------------------------------------------------------
@@ -569,7 +963,7 @@ PanelWindow::PanelWindow(QWindow* parent)
             }
 #endif
             if (m_reserveTopBar)
-                registerOrUpdateAppBar();
+                scheduleAppBarSync();
             if (!m_desktopLayer) {
                 verifyFullscreenState();
                 m_fsGuardTimer.start();
@@ -589,14 +983,22 @@ PanelWindow::PanelWindow(QWindow* parent)
     });
     m_fsGuardTimer.setInterval(200);
     connect(&m_fsGuardTimer, &QTimer::timeout, this, &PanelWindow::verifyFullscreenState);
+    m_appBarDebounceTimer.setSingleShot(true);
+    m_appBarDebounceTimer.setInterval(40);
+    connect(&m_appBarDebounceTimer, &QTimer::timeout, this, &PanelWindow::syncAppBarNow);
     connect(this, &QWindow::screenChanged, this, [this](QScreen*) {
         recomputeGeometry();
         updateMask();
         if (m_reserveTopBar && isVisible())
-            registerOrUpdateAppBar();
+            scheduleAppBarSync();
     });
     if (auto* app = QCoreApplication::instance()) {
-        connect(app, &QCoreApplication::aboutToQuit, this, &PanelWindow::unregisterAppBar);
+        connect(app, &QCoreApplication::aboutToQuit, this, [this]() {
+            unregisterAppBar();
+#ifdef Q_OS_WIN
+            AppBarWorker::instance().shutdown();
+#endif
+        });
     }
 }
 
@@ -620,6 +1022,44 @@ void PanelWindow::recompute()
         applyBlurBehind();
 }
 
+void PanelWindow::setPanelGeometry(int gx, int gy, int gw, int gh)
+{
+    const int w = qMax(1, gw);
+    const int h = qMax(1, gh);
+    QScreen* pri = QGuiApplication::primaryScreen();
+    if (pri && screen() != pri)
+        setScreen(pri);
+
+    if (x() != gx || y() != gy || width() != w || height() != h)
+        setGeometry(gx, gy, w, h);
+
+#ifdef Q_OS_WIN
+    if (isVisible() && handle()) {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd && IsWindow(hwnd)) {
+            const HMONITOR mon = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+            MONITORINFO mi{};
+            mi.cbSize = sizeof(mi);
+            if (GetMonitorInfoW(mon, &mi)) {
+                const qreal dpr = (pri && pri->devicePixelRatio() > 0.0)
+                    ? pri->devicePixelRatio()
+                    : ((devicePixelRatio() > 0.0) ? devicePixelRatio() : 1.0);
+                const int px = mi.rcMonitor.left + qRound(gx * dpr);
+                const int py = mi.rcMonitor.top + qRound(gy * dpr);
+                const int pw = qMax(1, qRound(w * dpr));
+                const int ph = qMax(1, qRound(h * dpr));
+                SetWindowPos(hwnd, nullptr, px, py, pw, ph,
+                             SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOSENDCHANGING);
+            }
+        }
+    }
+#endif
+
+    updateMask();
+    if (m_blurBehind && isVisible())
+        applyBlurBehind();
+}
+
 void PanelWindow::recomputeGeometry()
 {
     QScreen* scr = screen();
@@ -635,37 +1075,43 @@ void PanelWindow::recomputeGeometry()
     const int mR = mg->right();
     const int mB = mg->bottom();
 
+    int nx = x();
+    int ny = y();
+    int nw = qMax(1, width());
+    int nh = qMax(1, height());
+
     // Horizontal placement. If both edges anchored, we own the width.
     if (m_anchors->left() && m_anchors->right()) {
-        const int w = qMax(1, geo.width() - mL - mR);
-        setX(geo.left() + mL);
-        setWidth(w);
+        nw = qMax(1, geo.width() - mL - mR);
+        nx = geo.left() + mL;
         m_geometryOwned = true;
     } else if (m_anchors->left()) {
-        setX(geo.left() + mL);
+        nx = geo.left() + mL;
         m_geometryOwned = true;
     } else if (m_anchors->right()) {
-        setX(geo.right() + 1 - mR - width());
+        nx = geo.right() + 1 - mR - nw;
         m_geometryOwned = true;
     } else if (m_geometryOwned) {
-        setX(geo.center().x() - width() / 2);
+        nx = geo.center().x() - nw / 2;
     }
 
     // Vertical placement.
     if (m_anchors->top() && m_anchors->bottom()) {
-        const int h = qMax(1, geo.height() - mT - mB);
-        setY(geo.top() + mT);
-        setHeight(h);
+        nh = qMax(1, geo.height() - mT - mB);
+        ny = geo.top() + mT;
         m_geometryOwned = true;
     } else if (m_anchors->top()) {
-        setY(geo.top() + mT);
+        ny = geo.top() + mT;
         m_geometryOwned = true;
     } else if (m_anchors->bottom()) {
-        setY(geo.bottom() + 1 - mB - height());
+        ny = geo.bottom() + 1 - mB - nh;
         m_geometryOwned = true;
     } else if (m_geometryOwned) {
-        setY(geo.center().y() - height() / 2);
+        ny = geo.center().y() - nh / 2;
     }
+
+    if (x() != nx || y() != ny || width() != nw || height() != nh)
+        setGeometry(nx, ny, nw, nh);
 }
 
 void PanelWindow::setClickThrough(bool on)
@@ -880,7 +1326,7 @@ void PanelWindow::setReserveTopBar(bool on)
     m_reserveTopBar = on;
     emit reserveTopBarChanged();
     if (m_reserveTopBar && isVisible())
-        registerOrUpdateAppBar();
+        scheduleAppBarSync();
     else if (!m_reserveTopBar)
         unregisterAppBar();
 }
@@ -892,7 +1338,7 @@ void PanelWindow::setReserveHeight(int h)
     m_reserveHeight = h;
     emit reserveHeightChanged();
     if (m_reserveTopBar && isVisible())
-        registerOrUpdateAppBar();
+        scheduleAppBarSync();
 }
 
 void PanelWindow::setReserveEdge(const QString& edge)
@@ -904,30 +1350,35 @@ void PanelWindow::setReserveEdge(const QString& edge)
         return;
     m_reserveEdge = norm;
     emit reserveEdgeChanged();
-    if (m_appBarRegistered)
-        unregisterAppBar();
+    // Never call ABM_REMOVE on edge switch; AppBarWorker swaps uEdge smoothly off-thread.
     if (m_reserveTopBar && isVisible())
-        registerOrUpdateAppBar();
+        scheduleAppBarSync();
+}
+
+void PanelWindow::scheduleAppBarSync()
+{
+    if (!m_reserveTopBar || !isVisible()) {
+        unregisterAppBar();
+        return;
+    }
+    m_appBarDebounceTimer.start();
+}
+
+void PanelWindow::syncAppBarNow()
+{
+    registerOrUpdateAppBar();
 }
 
 void PanelWindow::registerOrUpdateAppBar()
 {
 #ifdef Q_OS_WIN
-    if (!m_reserveTopBar || !isVisible() || m_inAppBarUpdate)
+    if (!m_reserveTopBar || !isVisible())
         return;
-    HWND hwnd = reinterpret_cast<HWND>(winId());
+    HWND hwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
     if (!hwnd || !IsWindow(hwnd))
         return;
 
-    m_inAppBarUpdate = true;
     const HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY);
-    MONITORINFO mi{};
-    mi.cbSize = sizeof(mi);
-    if (!GetMonitorInfoW(mon, &mi)) {
-        m_inAppBarUpdate = false;
-        return;
-    }
-
     const int physT = qMax(24, qRound(m_reserveHeight * devicePixelRatio()));
     UINT uEdge = ABE_TOP;
     if (m_reserveEdge == QLatin1String("bottom"))
@@ -937,69 +1388,32 @@ void PanelWindow::registerOrUpdateAppBar()
     else if (m_reserveEdge == QLatin1String("right"))
         uEdge = ABE_RIGHT;
 
-    auto applyEdgeRect = [uEdge, physT, &mi](RECT& rc) {
-        rc = mi.rcMonitor;
-        switch (uEdge) {
-        case ABE_BOTTOM: rc.top = rc.bottom - physT; break;
-        case ABE_LEFT:   rc.right = rc.left + physT; break;
-        case ABE_RIGHT:  rc.left = rc.right - physT; break;
-        case ABE_TOP:
-        default:         rc.bottom = rc.top + physT; break;
-        }
-    };
-
-    APPBARDATA abd{};
-    abd.cbSize = sizeof(abd);
-    abd.hWnd = hwnd;
-    abd.uCallbackMessage = kAppBarCallbackMsg;
-    abd.uEdge = uEdge;
-    applyEdgeRect(abd.rc);
-
-    const bool newlyRegistered = !m_appBarRegistered;
-    if (!m_appBarRegistered) {
-        SHAppBarMessage(ABM_NEW, &abd);
-        m_appBarRegistered = true;
-    }
-    SHAppBarMessage(ABM_QUERYPOS, &abd);
-    switch (uEdge) {
-    case ABE_BOTTOM: abd.rc.top = abd.rc.bottom - physT; break;
-    case ABE_LEFT:   abd.rc.right = abd.rc.left + physT; break;
-    case ABE_RIGHT:  abd.rc.left = abd.rc.right - physT; break;
-    case ABE_TOP:
-    default:         abd.rc.bottom = abd.rc.top + physT; break;
-    }
-    const bool rectChanged = newlyRegistered
-        || m_lastAppBarEdge != static_cast<int>(uEdge)
-        || m_lastAppBarLeft != abd.rc.left
-        || m_lastAppBarTop != abd.rc.top
-        || m_lastAppBarRight != abd.rc.right
-        || m_lastAppBarBottom != abd.rc.bottom;
-    if (rectChanged) {
-        m_lastAppBarEdge = static_cast<int>(uEdge);
-        m_lastAppBarLeft = abd.rc.left;
-        m_lastAppBarTop = abd.rc.top;
-        m_lastAppBarRight = abd.rc.right;
-        m_lastAppBarBottom = abd.rc.bottom;
-        SHAppBarMessage(ABM_SETPOS, &abd);
-    }
-    m_inAppBarUpdate = false;
+    AppBarWorker::PendingReq req;
+    req.owner = this;
+    req.safeOwner = QPointer<PanelWindow>(this);
+    req.mon = mon;
+    req.reserve = true;
+    req.edge = uEdge;
+    req.physThickness = physT;
+    m_appBarRegistered = true;
+    AppBarWorker::instance().enqueue(req);
 #endif
 }
 
 void PanelWindow::unregisterAppBar()
 {
+    m_appBarDebounceTimer.stop();
 #ifdef Q_OS_WIN
     if (!m_appBarRegistered)
         return;
     m_appBarRegistered = false;
     m_lastAppBarEdge = -1;
-    HWND hwnd = reinterpret_cast<HWND>(winId());
-    if (!hwnd)
-        return;
-    APPBARDATA abd{};
-    abd.cbSize = sizeof(abd);
-    abd.hWnd = hwnd;
-    SHAppBarMessage(ABM_REMOVE, &abd);
+
+    AppBarWorker::PendingReq req;
+    req.owner = this;
+    req.safeOwner = QPointer<PanelWindow>(this);
+    req.reserve = false;
+    AppBarWorker::instance().enqueue(req);
 #endif
 }
 
@@ -1115,6 +1529,38 @@ void PanelWindow::verifyFullscreenState()
 #endif
 }
 
+void PanelWindow::handleAppBarPosChanged()
+{
+#ifdef Q_OS_WIN
+    if (!m_fullscreenActive && !m_desktopLayer && isVisible() && handle()) {
+        HWND hwnd = reinterpret_cast<HWND>(winId());
+        if (hwnd && IsWindow(hwnd)) {
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+#endif
+}
+
+void PanelWindow::handleAppBarFullscreenHint(bool fsHint)
+{
+#ifdef Q_OS_WIN
+    HWND selfHwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
+    const bool fs = fsHint && !m_desktopLayer && isVisible() && selfHwnd
+                        && isGenuineFullscreenForeground(selfHwnd);
+    if (m_fullscreenActive != fs) {
+        m_fullscreenActive = fs;
+        emit fullscreenActiveChanged();
+        if (!fs && !m_desktopLayer && isVisible() && selfHwnd) {
+            SetWindowPos(selfHwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+    }
+#else
+    Q_UNUSED(fsHint);
+#endif
+}
+
 bool PanelWindow::event(QEvent* e)
 {
     const bool res = QQuickWindow::event(e);
@@ -1205,30 +1651,6 @@ bool PanelWindow::nativeEvent(const QByteArray& eventType, void* message, qintpt
             if (result)
                 *result = 0;
             return true;
-        }
-        if (msg && msg->message == kAppBarCallbackMsg) {
-            if (msg->wParam == ABN_POSCHANGED && m_reserveTopBar && isVisible() && !m_inAppBarUpdate) {
-                QMetaObject::invokeMethod(this, [this]() {
-                    registerOrUpdateAppBar();
-                    if (!m_fullscreenActive && !m_desktopLayer && handle()) {
-                        HWND hwnd = reinterpret_cast<HWND>(winId());
-                        if (hwnd)
-                            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                    }
-                }, Qt::QueuedConnection);
-            } else if (msg->wParam == ABN_FULLSCREENAPP) {
-                HWND selfHwnd = handle() ? reinterpret_cast<HWND>(winId()) : nullptr;
-                const bool fs = (msg->lParam != 0) && isGenuineFullscreenForeground(selfHwnd);
-                if (m_fullscreenActive != fs) {
-                    m_fullscreenActive = fs;
-                    emit fullscreenActiveChanged();
-                    if (!fs && !m_desktopLayer && isVisible() && selfHwnd) {
-                        SetWindowPos(selfHwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                     SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                    }
-                }
-            }
         }
     }
 #else

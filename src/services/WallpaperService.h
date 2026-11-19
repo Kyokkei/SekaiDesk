@@ -21,6 +21,7 @@ class WallpaperService : public QObject {
     Q_PROPERTY(QString sortBy READ sortBy WRITE setSortBy NOTIFY sortByChanged)
     Q_PROPERTY(bool slideshowEnabled READ slideshowEnabled WRITE setSlideshowEnabled NOTIFY slideshowChanged)
     Q_PROPERTY(int slideshowMinutes READ slideshowMinutes WRITE setSlideshowMinutes NOTIFY slideshowChanged)
+    Q_PROPERTY(QString transitionStyle READ transitionStyle WRITE setTransitionStyle NOTIFY transitionStyleChanged)
 
 public:
     explicit WallpaperService(SettingsStore* settings, QObject* parent = nullptr);
@@ -34,13 +35,17 @@ public:
     QString sortBy() const { return m_sortBy; }
     bool slideshowEnabled() const { return m_slideshowEnabled; }
     int slideshowMinutes() const { return m_slideshowMinutes; }
+    QString transitionStyle() const { return m_transitionStyle; }
 
     void setSortBy(const QString& sortBy);
     void setSlideshowEnabled(bool enabled);
     void setSlideshowMinutes(int minutes);
+    void setTransitionStyle(const QString& style);
 
     Q_INVOKABLE void refresh();
     Q_INVOKABLE bool applyWallpaper(const QString& filePath);
+    Q_INVOKABLE void requestWallpaperChange(const QString& filePath);
+    Q_INVOKABLE QString toFileUrl(const QString& filePath) const;
     Q_INVOKABLE QString syncSystemWallpaper();
     Q_INVOKABLE QVariantMap extractCurrentPalette();
     Q_INVOKABLE QVariantMap extractPalette(const QString& filePath) const;
@@ -54,6 +59,8 @@ signals:
     void wallpapersChanged();
     void sortByChanged();
     void slideshowChanged();
+    void transitionStyleChanged();
+    void transitionRequested(const QString& fromPath, const QString& toPath, const QString& style);
 
 private:
     QString defaultPicturesFolder() const;
@@ -74,6 +81,8 @@ private:
     QString m_sortBy = QStringLiteral("newest");
     bool m_slideshowEnabled = false;
     int m_slideshowMinutes = 15;
+    QString m_transitionStyle = QStringLiteral("sekaiRing");
+    QString m_lastRolledStyle;
 
     QFileSystemWatcher m_watcher;
     QTimer m_watchDebounce;

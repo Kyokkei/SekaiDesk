@@ -130,6 +130,7 @@ private:
 // ---------------------------------------------------------------------------
 class PanelWindow : public QQuickWindow {
     Q_OBJECT
+    friend class AppBarWorker;
     Q_PROPERTY(WindowAnchors* anchors READ anchors CONSTANT)
     Q_PROPERTY(int exclusiveZone READ exclusiveZone WRITE setExclusiveZone NOTIFY exclusiveZoneChanged)
     Q_PROPERTY(bool clickThrough READ clickThrough WRITE setClickThrough NOTIFY clickThroughChanged)
@@ -209,6 +210,7 @@ public:
     void setBlurTint(const QColor& c);
 
     Q_INVOKABLE void recompute();
+    Q_INVOKABLE void setPanelGeometry(int x, int y, int width, int height);
     Q_INVOKABLE bool isPointerOutsideAndPressed() const;
 
 signals:
@@ -242,6 +244,10 @@ private:
     void updateMask();
     void registerOrUpdateAppBar();
     void unregisterAppBar();
+    void scheduleAppBarSync();
+    void syncAppBarNow();
+    void handleAppBarPosChanged();
+    void handleAppBarFullscreenHint(bool fsHint);
 
     WindowAnchors* m_anchors;
     int m_exclusiveZone = -1;
@@ -282,5 +288,6 @@ private:
     int m_dragMaxPxY = 0;
     void* m_desktopHwnd = nullptr;
     QTimer m_fsGuardTimer;
+    QTimer m_appBarDebounceTimer;
     QMetaObject::Connection m_screenGeoConn;
 };

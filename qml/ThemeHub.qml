@@ -178,6 +178,18 @@ Item {
     property bool screenRoundEnabled: ConfigStore.boolValue("ui.screenRound", true)
     property bool dockAutoHide: ConfigStore.boolValue("dock.autoHide", true)
     property bool phoneMode: ConfigStore.boolValue("quickPanel.phoneMode", true)
+    property string taskbarHideMode: ConfigStore.stringValue("taskbar.hideMode", "primary")
+    property bool taskbarWin11Strict: ConfigStore.boolValue("taskbar.win11StrictHide", true)
+
+    Connections {
+        target: TaskbarManager
+        function onHideModeChanged() {
+            hub.taskbarHideMode = TaskbarManager.hideMode
+        }
+        function onWin11StrictHideChanged() {
+            hub.taskbarWin11Strict = TaskbarManager.win11StrictHide
+        }
+    }
 
     // Notifications & OSD
     property string notifyStyle: ConfigStore.stringValue("notifications.style", "peek")
@@ -210,19 +222,80 @@ Item {
     property bool barShowStats: ConfigStore.boolValue("bar.showStats", true)
     property bool barShowClock: ConfigStore.boolValue("bar.showClock", true)
     property bool barShowTray: ConfigStore.boolValue("bar.showTray", true)
+    property string barMediaVizStyle: {
+        const s = ConfigStore.stringValue("bar.mediaVizStyle", "bars")
+        return (s === "wave" || s === "off") ? s : "bars"
+    }
+    property bool barShowBattery: ConfigStore.boolValue("bar.showBattery", true)
     readonly property int barStripThickness: barVertical
         ? ((barStyle === "float" || barStyle === "capsule") ? 50 : 44)
         : ((barStyle === "float" || barStyle === "capsule") ? 36 : 30)
 
+    // PresetMotion-style 3-beat choreography (slide out -> swap style/edge -> bounce in)
+    property bool motionBarOut: false
+    property bool motionDockOut: false
+    readonly property int motionOutMs: 190
+    readonly property int motionInMs: 380
+    property string _targetBarEdge: barEdge
+    property string _targetBarStyle: barStyle
+    property string _targetDockEdge: dockEdge
+    property string _targetDockStyle: dockStyle
+
+    Timer {
+        id: barMotionSwapTimer
+        interval: 210
+        onTriggered: {
+            hub.barEdge = hub._targetBarEdge
+            hub.barStyle = hub._targetBarStyle
+            barMotionReleaseTimer.restart()
+        }
+    }
+    Timer {
+        id: barMotionReleaseTimer
+        interval: 30
+        onTriggered: hub.motionBarOut = false
+    }
+    Timer {
+        id: dockMotionSwapTimer
+        interval: 210
+        onTriggered: {
+            hub.dockEdge = hub._targetDockEdge
+            hub.dockStyle = hub._targetDockStyle
+            dockMotionReleaseTimer.restart()
+        }
+    }
+    Timer {
+        id: dockMotionReleaseTimer
+        interval: 30
+        onTriggered: hub.motionDockOut = false
+    }
+
+    function scheduleBarTransition() {
+        barMotionReleaseTimer.stop()
+        hub.motionBarOut = true
+        barMotionSwapTimer.restart()
+    }
+    function scheduleDockTransition() {
+        dockMotionReleaseTimer.stop()
+        hub.motionDockOut = true
+        dockMotionSwapTimer.restart()
+    }
+
     function setBarEdge(v) {
         const s = (v === "bottom" || v === "left" || v === "right") ? v : "top"
-        barEdge = s
+        if (s === _targetBarEdge && s === barEdge)
+            return
+        _targetBarEdge = s
         ConfigStore.set("bar.edge", s)
+        scheduleBarTransition()
     }
     function setBarStyle(v) {
         const s = (v === "float" || v === "straight" || v === "capsule" || v === "transparent") ? v : "transparent"
-        barStyle = s
+        if (s === _targetBarStyle && s === barStyle)
+            return
+        _targetBarStyle = s
         ConfigStore.set("bar.style", s)
+        scheduleBarTransition()
     }
     function setBarAutoHide(v) { barAutoHide = !!v; ConfigStore.set("bar.autoHide", barAutoHide) }
     function setBarShowActiveWindow(v) { barShowActiveWindow = !!v; ConfigStore.set("bar.showActiveWindow", barShowActiveWindow) }
@@ -231,6 +304,12 @@ Item {
     function setBarShowStats(v) { barShowStats = !!v; ConfigStore.set("bar.showStats", barShowStats) }
     function setBarShowClock(v) { barShowClock = !!v; ConfigStore.set("bar.showClock", barShowClock) }
     function setBarShowTray(v) { barShowTray = !!v; ConfigStore.set("bar.showTray", barShowTray) }
+    function setBarMediaVizStyle(v) {
+        const s = (v === "wave" || v === "off") ? v : "bars"
+        barMediaVizStyle = s
+        ConfigStore.set("bar.mediaVizStyle", s)
+    }
+    function setBarShowBattery(v) { barShowBattery = !!v; ConfigStore.set("bar.showBattery", barShowBattery) }
 
     // Dock customization
     property string dockEdge: ConfigStore.stringValue("dock.edge", "bottom")
@@ -243,12 +322,17 @@ Item {
     property bool dockShowClipboard: ConfigStore.boolValue("dock.showClipboard", false)
     property bool dockShowDropShelf: ConfigStore.boolValue("dock.showDropShelf", false)
     property bool dockShowTrash: ConfigStore.boolValue("dock.showTrash", false)
+    property bool dockShowTimer: ConfigStore.boolValue("dock.showTimer", true)
+    property bool dockShowFiles: ConfigStore.boolValue("dock.showFiles", true)
     property bool dockShowMedia: ConfigStore.boolValue("dock.showMedia", true)
 
     function setDockEdge(v) {
         const s = (v === "top" || v === "left" || v === "right") ? v : "bottom"
-        dockEdge = s
+        if (s === _targetDockEdge && s === dockEdge)
+            return
+        _targetDockEdge = s
         ConfigStore.set("dock.edge", s)
+        scheduleDockTransition()
     }
 
     Component.onCompleted: {
@@ -264,12 +348,18 @@ Item {
             ConfigStore.set("dock.autoHideMigratedV8", true)
         }
         SystemControl.setSuppressStockOsd(osdEnabled)
+        taskbarHideMode = TaskbarManager.hideMode
+        taskbarWin11Strict = TaskbarManager.win11StrictHide
+        _loadImageFrames()
     }
 
     function setDockStyle(v) {
         const s = (v === "float" || v === "capsule" || v === "transparent") ? v : "capsule"
-        dockStyle = s
+        if (s === _targetDockStyle && s === dockStyle)
+            return
+        _targetDockStyle = s
         ConfigStore.set("dock.style", s)
+        scheduleDockTransition()
     }
     function setDockIconShape(v) {
         const s = (v === "circle" || v === "square") ? v : "auto"
@@ -287,6 +377,8 @@ Item {
     function setDockShowClipboard(v) { dockShowClipboard = !!v; ConfigStore.set("dock.showClipboard", dockShowClipboard) }
     function setDockShowDropShelf(v) { dockShowDropShelf = !!v; ConfigStore.set("dock.showDropShelf", dockShowDropShelf) }
     function setDockShowTrash(v) { dockShowTrash = !!v; ConfigStore.set("dock.showTrash", dockShowTrash) }
+    function setDockShowTimer(v) { dockShowTimer = !!v; ConfigStore.set("dock.showTimer", dockShowTimer) }
+    function setDockShowFiles(v) { dockShowFiles = !!v; ConfigStore.set("dock.showFiles", dockShowFiles) }
     function setDockShowMedia(v) { dockShowMedia = !!v; ConfigStore.set("dock.showMedia", dockShowMedia) }
 
     // Edit Desktop mode state
@@ -302,6 +394,16 @@ Item {
     function setDockAutoHide(v) {
         dockAutoHide = !!v
         ConfigStore.set("dock.autoHide", dockAutoHide)
+    }
+
+    function setTaskbarHideMode(v) {
+        TaskbarManager.setHideMode(String(v || "primary"))
+        taskbarHideMode = TaskbarManager.hideMode
+    }
+
+    function setTaskbarWin11Strict(v) {
+        TaskbarManager.setWin11StrictHide(!!v)
+        taskbarWin11Strict = TaskbarManager.win11StrictHide
     }
 
     function setPhoneMode(v) {
@@ -324,21 +426,38 @@ Item {
     property bool settingsOpen: false
     property double settingsClosedAt: 0
     property string settingsSection: ""
+    property string landscapeContent: "settings" // "settings" | "wallpapers"
     property bool wallpaperSelectorOpen: false
     property double wallpaperSelectorClosedAt: 0
     property bool spotlightOpen: false
     property double spotlightClosedAt: 0
+    property string launcherInitialQuery: ""
     property bool clipboardOpen: false
     property double clipboardClosedAt: 0
     property bool dropShelfOpen: false
     property double dropShelfClosedAt: 0
+
+    onWallpaperSelectorOpenChanged: {
+        if (wallpaperSelectorOpen)
+            openWallpapers()
+    }
 
     function openSettings(section) {
         spotlightOpen = false
         clipboardOpen = false
         dropShelfOpen = false
         wallpaperSelectorOpen = false
+        landscapeContent = "settings"
         settingsSection = section || ""
+        settingsOpen = true
+    }
+
+    function openWallpapers() {
+        spotlightOpen = false
+        clipboardOpen = false
+        dropShelfOpen = false
+        wallpaperSelectorOpen = false
+        landscapeContent = "wallpapers"
         settingsOpen = true
     }
 
@@ -371,14 +490,18 @@ Item {
             dockShowClipboard: dockShowClipboard,
             dockShowDropShelf: dockShowDropShelf,
             dockShowTrash: dockShowTrash,
+            dockShowTimer: dockShowTimer,
+            dockShowFiles: dockShowFiles,
             dockShowMedia: dockShowMedia,
             barEdge: barEdge,
             barStyle: barStyle,
             barAutoHide: barAutoHide,
             barShowActiveWindow: barShowActiveWindow,
             barShowMedia: barShowMedia,
+            barMediaVizStyle: barMediaVizStyle,
             barShowWeather: barShowWeather,
             barShowStats: barShowStats,
+            barShowBattery: barShowBattery,
             barShowClock: barShowClock,
             barShowTray: barShowTray,
             phoneMode: phoneMode,
@@ -418,7 +541,9 @@ Item {
                 sizeIndex: VisualizerService.sizeIndex,
                 colorMode: VisualizerService.colorMode
             },
-            wallpaper: WallpaperService.currentWallpaper || ""
+            wallpaper: WallpaperService.currentWallpaper || "",
+            taskbarHideMode: taskbarHideMode,
+            taskbarWin11Strict: taskbarWin11Strict
         }
     }
 
@@ -446,14 +571,18 @@ Item {
         if (data.dockShowClipboard !== undefined) setDockShowClipboard(data.dockShowClipboard)
         if (data.dockShowDropShelf !== undefined) setDockShowDropShelf(data.dockShowDropShelf)
         if (data.dockShowTrash !== undefined) setDockShowTrash(data.dockShowTrash)
+        if (data.dockShowTimer !== undefined) setDockShowTimer(data.dockShowTimer)
+        if (data.dockShowFiles !== undefined) setDockShowFiles(data.dockShowFiles)
         if (data.dockShowMedia !== undefined) setDockShowMedia(data.dockShowMedia)
         if (data.barEdge !== undefined) setBarEdge(data.barEdge)
         if (data.barStyle !== undefined) setBarStyle(data.barStyle)
         if (data.barAutoHide !== undefined) setBarAutoHide(data.barAutoHide)
         if (data.barShowActiveWindow !== undefined) setBarShowActiveWindow(data.barShowActiveWindow)
         if (data.barShowMedia !== undefined) setBarShowMedia(data.barShowMedia)
+        if (data.barMediaVizStyle !== undefined) setBarMediaVizStyle(data.barMediaVizStyle)
         if (data.barShowWeather !== undefined) setBarShowWeather(data.barShowWeather)
         if (data.barShowStats !== undefined) setBarShowStats(data.barShowStats)
+        if (data.barShowBattery !== undefined) setBarShowBattery(data.barShowBattery)
         if (data.barShowClock !== undefined) setBarShowClock(data.barShowClock)
         if (data.barShowTray !== undefined) setBarShowTray(data.barShowTray)
         if (data.phoneMode !== undefined) setPhoneMode(data.phoneMode)
@@ -494,6 +623,8 @@ Item {
         }
         if (data.wallpaper && String(data.wallpaper) !== "")
             WallpaperService.applyWallpaper(String(data.wallpaper))
+        if (data.taskbarHideMode !== undefined) setTaskbarHideMode(data.taskbarHideMode)
+        if (data.taskbarWin11Strict !== undefined) setTaskbarWin11Strict(data.taskbarWin11Strict)
     }
 
     // Desktop widgets visibility (persisted)
@@ -952,5 +1083,80 @@ Item {
 
     function deleteCalendarEvent(id) {
         saveCalendarEvents(calendarEvents.filter(e => e.id !== id))
+    }
+
+    // Desktop Image Frames (#6 Polaroid / Washi-Tape ImageWidget)
+    property var imageFrames: []
+
+    function _loadImageFrames() {
+        const rawJson = ConfigStore.stringValue("widgets.imageFrames", "")
+        if (rawJson !== "") {
+            try {
+                const parsed = JSON.parse(rawJson)
+                if (Array.isArray(parsed)) {
+                    imageFrames = parsed
+                    return
+                }
+            } catch (e) {}
+        }
+        imageFrames = []
+    }
+
+    function _saveImageFrames(list) {
+        const clean = Array.isArray(list) ? list : []
+        imageFrames = clean
+        ConfigStore.set("widgets.imageFrames", JSON.stringify(clean))
+    }
+
+    function addImageFrame(path) {
+        const clean = String(path || "").trim()
+        const n = imageFrames.length
+        const baseX = Math.max(virtMinX + 24, Math.round((screenW - 260) * 0.5) + ((n % 4) - 1) * 36)
+        const baseY = Math.max(64, Math.round((screenH - 300) * 0.45) + ((n % 3) - 1) * 28)
+        const tilts = [-2.5, 2.0, -1.5, 3.0]
+        const entry = {
+            id: "img_" + Date.now() + "_" + Math.floor(Math.random() * 10000),
+            path: clean,
+            x: clampWidgetX(baseX, 140),
+            y: clampWidgetY(baseX, baseY, 120),
+            w: 260,
+            h: 300,
+            fitMode: "crop",
+            showTape: true,
+            showFrame: true,
+            pinned: false,
+            tilt: tilts[n % tilts.length]
+        }
+        const next = imageFrames.slice()
+        next.push(entry)
+        _saveImageFrames(next)
+        return entry.id
+    }
+
+    function updateImageFrame(id, patch) {
+        if (!id || !patch)
+            return
+        const next = imageFrames.slice()
+        let changed = false
+        for (let i = 0; i < next.length; ++i) {
+            if (next[i].id === id) {
+                const merged = Object.assign({}, next[i], patch)
+                merged.w = Math.max(140, Math.min(720, Math.round(Number(merged.w) || 260)))
+                merged.h = Math.max(140, Math.min(720, Math.round(Number(merged.h) || 300)))
+                if (patch.x !== undefined || patch.y !== undefined) {
+                    merged.x = clampWidgetX(merged.x, 80)
+                    merged.y = clampWidgetY(merged.x, merged.y, 80)
+                }
+                next[i] = merged
+                changed = true
+                break
+            }
+        }
+        if (changed)
+            _saveImageFrames(next)
+    }
+
+    function removeImageFrame(id) {
+        _saveImageFrames(imageFrames.filter(it => it.id !== id))
     }
 }

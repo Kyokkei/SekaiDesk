@@ -78,12 +78,20 @@ void fftRadix2(std::array<std::complex<float>, kFftSize>& buf)
 QString sanitizeStyle(const QString& raw)
 {
     const QString s = raw.trimmed().toLower();
-    if (s == QStringLiteral("sekai") || s == QStringLiteral("bars")
-        || s == QStringLiteral("ring") || s == QStringLiteral("dots")
+    if (s == QStringLiteral("tide")
+        || s == QStringLiteral("ribbons")
+        || s == QStringLiteral("aurora")
+        || s == QStringLiteral("pulse")
+        || s == QStringLiteral("scope")
+        || s == QStringLiteral("mirror")
+        || s == QStringLiteral("ring")
+        || s == QStringLiteral("dots")
+        || s == QStringLiteral("sekai")
+        || s == QStringLiteral("bars")
         || s == QStringLiteral("wave")) {
         return s;
     }
-    return QStringLiteral("bars");
+    return QStringLiteral("tide");
 }
 } // namespace
 
@@ -98,7 +106,7 @@ VisualizerService::VisualizerService(SettingsStore* settings, MediaService* medi
 
     if (m_settings) {
         m_enabled = m_settings->boolValue(QStringLiteral("visualizer.enabled"), false);
-        m_style = sanitizeStyle(m_settings->stringValue(QStringLiteral("visualizer.style"), QStringLiteral("bars")));
+        m_style = sanitizeStyle(m_settings->stringValue(QStringLiteral("visualizer.style"), QStringLiteral("tide")));
         m_sizeIndex = qBound(0, m_settings->intValue(QStringLiteral("visualizer.sizeIndex"), 1), 3);
         m_colorMode = qBound(0, m_settings->intValue(QStringLiteral("visualizer.colorMode"), 0), 2);
         const QVariant sensVar = m_settings->get(QStringLiteral("visualizer.sensitivity"), 1.0);
@@ -107,6 +115,11 @@ VisualizerService::VisualizerService(SettingsStore* settings, MediaService* medi
         m_stayWhenPaused = m_settings->boolValue(QStringLiteral("visualizer.stayWhenPaused"), true);
         m_posX = m_settings->get(QStringLiteral("visualizer.posX"), -1.0).toDouble();
         m_posY = m_settings->get(QStringLiteral("visualizer.posY"), -1.0).toDouble();
+        const int rawW = m_settings->intValue(QStringLiteral("visualizer.customWidth"), 0);
+        const int rawH = m_settings->intValue(QStringLiteral("visualizer.customHeight"), 0);
+        m_customWidth = (rawW > 0) ? qBound(160, rawW, 3840) : 0;
+        m_customHeight = (rawH > 0) ? qBound(80, rawH, 1440) : 0;
+        m_transparentBg = m_settings->boolValue(QStringLiteral("visualizer.transparentBg"), true);
     }
     m_atomicSensitivity.store(static_cast<float>(m_sensitivity), std::memory_order_relaxed);
 
@@ -228,8 +241,62 @@ void VisualizerService::setPosY(qreal y)
     emit positionChanged();
 }
 
+void VisualizerService::setCustomWidth(int w)
+{
+    const int clamped = (w > 0) ? qBound(160, w, 3840) : 0;
+    if (m_customWidth == clamped)
+        return;
+    m_customWidth = clamped;
+    if (m_settings)
+        m_settings->set(QStringLiteral("visualizer.customWidth"), m_customWidth);
+    emit customSizeChanged();
+    emit configChanged();
+}
+
+void VisualizerService::setCustomHeight(int h)
+{
+    const int clamped = (h > 0) ? qBound(80, h, 1440) : 0;
+    if (m_customHeight == clamped)
+        return;
+    m_customHeight = clamped;
+    if (m_settings)
+        m_settings->set(QStringLiteral("visualizer.customHeight"), m_customHeight);
+    emit customSizeChanged();
+    emit configChanged();
+}
+
+void VisualizerService::setCustomSize(int w, int h)
+{
+    const int cw = (w > 0) ? qBound(160, w, 3840) : 0;
+    const int ch = (h > 0) ? qBound(80, h, 1440) : 0;
+    const bool changed = (m_customWidth != cw || m_customHeight != ch);
+    m_customWidth = cw;
+    m_customHeight = ch;
+    if (m_settings) {
+        m_settings->set(QStringLiteral("visualizer.customWidth"), m_customWidth);
+        m_settings->set(QStringLiteral("visualizer.customHeight"), m_customHeight);
+    }
+    if (changed) {
+        emit customSizeChanged();
+        emit configChanged();
+    }
+}
+
+void VisualizerService::setTransparentBg(bool transparent)
+{
+    if (m_transparentBg == transparent)
+        return;
+    m_transparentBg = transparent;
+    if (m_settings)
+        m_settings->set(QStringLiteral("visualizer.transparentBg"), m_transparentBg);
+    emit transparentBgChanged();
+    emit configChanged();
+}
+
 void VisualizerService::cycleSize()
 {
+    if (m_customWidth != 0 || m_customHeight != 0)
+        setCustomSize(0, 0);
     setSizeIndex((m_sizeIndex + 1) % 4);
 }
 

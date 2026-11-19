@@ -30,6 +30,7 @@ qt_add_executable(SekaiDesk WIN32
     src/services/NotificationService.h src/services/NotificationService.cpp
     src/services/VisualizerService.h src/services/VisualizerService.cpp
     src/services/WallpaperService.h src/services/WallpaperService.cpp
+    src/services/TaskbarManager.h   src/services/TaskbarManager.cpp
     src/SekaiDesk.rc
 )
 
@@ -45,9 +46,47 @@ qt_add_resources(SekaiDesk "qml"
         qml/SettingsModal.qml
         qml/PowerTools.qml
         qml/DesktopWidgets.qml
+        qml/DesktopImageWidgets.qml
         qml/VisualizerOverlay.qml
+        qml/ShaderVisualizerEngine.qml
+        qml/ShaderVisualizerLayer.qml
+        qml/TideVisualizer.qml
+        qml/ScopeMath.js
+        qml/PillVisualizer.qml
+        qml/BarExtraPopups.qml
+        qml/DockExtraCards.qml
+        qml/WallpaperTransitionOverlay.qml
+        qml/PhoneWallpaperGallery.qml
         qml/SekaiOsd.qml
         qml/WallpaperSelector.qml
+        qml/LauncherPhone2D.qml
+        qml/DropShelfBookshelf.qml
+        qml/SekaiWashiTape.qml
+        qml/SekaiDotField.qml
+        qml/ShelfMath.js
+        qml/shaders/visualizer/aurora.frag.qsb
+        qml/shaders/visualizer/dots.frag.qsb
+        qml/shaders/visualizer/mirror.frag.qsb
+        qml/shaders/visualizer/pulse.frag.qsb
+        qml/shaders/visualizer/ribbons.frag.qsb
+        qml/shaders/visualizer/ring.frag.qsb
+        qml/shaders/visualizer/scope.frag.qsb
+        qml/shaders/visualizer/tide.frag.qsb
+        qml/shaders/wallpaper/fade.vert.qsb
+        qml/shaders/wallpaper/fade.frag.qsb
+        qml/shaders/wallpaper/sekai_blocks.vert.qsb
+        qml/shaders/wallpaper/sekai_blocks.frag.qsb
+        qml/shaders/wallpaper/sekai_flash.vert.qsb
+        qml/shaders/wallpaper/sekai_flash.frag.qsb
+        qml/shaders/wallpaper/sekai_iris.vert.qsb
+        qml/shaders/wallpaper/sekai_iris.frag.qsb
+        qml/shaders/wallpaper/sekai_ring.vert.qsb
+        qml/shaders/wallpaper/sekai_ring.frag.qsb
+        qml/shaders/wallpaper/sekai_star.vert.qsb
+        qml/shaders/wallpaper/sekai_star.frag.qsb
+        qml/assets/phone-shadow.png
+        qml/assets/lcd-mesh.png
+        qml/assets/lock-dots.png
         qml/icons/alt-arrow-down-dark.svg
         qml/icons/alt-arrow-down-light.svg
         qml/icons/alt-arrow-up-dark.svg
@@ -125,6 +164,30 @@ qt_add_resources(SekaiDesk "qml"
         qml/icons/wifi-light.svg
         qml/icons/wind-dark.svg
         qml/icons/wonderhoy.png
+        qml/icons/archive-dark.svg
+        qml/icons/arrow-down-light.svg
+        qml/icons/arrow-up-light.svg
+        qml/icons/calculator-dark.svg
+        qml/icons/camera-dark.svg
+        qml/icons/check-read-dark.svg
+        qml/icons/clapperboard-play-dark.svg
+        qml/icons/clipboard-add-dark.svg
+        qml/icons/code-file-dark.svg
+        qml/icons/document-text-dark.svg
+        qml/icons/folder-2-dark.svg
+        qml/icons/folder-open-dark.svg
+        qml/icons/gallery-dark.svg
+        qml/icons/global-dark.svg
+        qml/icons/lock-dark.svg
+        qml/icons/logout-dark.svg
+        qml/icons/monitor-dark.svg
+        qml/icons/moon-sleep-dark.svg
+        qml/icons/power-dark.svg
+        qml/icons/command-dark.svg
+        qml/icons/restart-dark.svg
+        qml/icons/rocket-dark.svg
+        qml/icons/smartphone-dark.svg
+        qml/icons/snowflake-dark.svg
 )
 
 target_link_libraries(SekaiDesk PRIVATE
@@ -133,7 +196,7 @@ target_link_libraries(SekaiDesk PRIVATE
 
 if(WIN32)
     target_link_libraries(SekaiDesk PRIVATE
-        dwmapi user32 shell32 ole32 oleaut32 ws2_32 winhttp iphlpapi
+        dwmapi user32 gdi32 shell32 ole32 oleaut32 ws2_32 winhttp iphlpapi psapi
     )
 endif()
 

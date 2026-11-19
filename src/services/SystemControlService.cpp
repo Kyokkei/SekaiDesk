@@ -3,11 +3,14 @@
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QHash>
 #include <QHostAddress>
 #include <QNetworkInterface>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
@@ -43,6 +46,7 @@ namespace {
 constexpr int kQuickPanelHotkeyId = 0x534B;
 constexpr int kSpotlightHotkeyId = 0x534C;
 constexpr int kClipboardHotkeyId = 0x5343;
+constexpr int kTaskbarToggleHotkeyId = 0x534D;
 constexpr UINT kLlAltSpaceMsg = WM_APP + 0x51;
 constexpr UINT kLlQuickPanelMsg = WM_APP + 0x52;
 constexpr UINT kLlVolMuteMsg = WM_APP + 0x53;
@@ -348,6 +352,8 @@ SystemControlService::~SystemControlService()
         UnregisterHotKey(msgHwnd, kSpotlightHotkeyId);
     if (m_clipboardHotkeyRegistered)
         UnregisterHotKey(msgHwnd, kClipboardHotkeyId);
+    if (m_taskbarHotkeyRegistered)
+        UnregisterHotKey(msgHwnd, kTaskbarToggleHotkeyId);
     if (msgHwnd) {
         DestroyWindow(msgHwnd);
         m_hotkeyMsgHwnd = nullptr;
@@ -373,18 +379,37 @@ void SystemControlService::registerHotkeys()
         qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+V %s",
               m_clipboardHotkeyRegistered ? "ok" : "pending");
     }
+    if (!m_taskbarHotkeyRegistered) {
+        m_taskbarHotkeyRegistered = (RegisterHotKey(msgHwnd, kTaskbarToggleHotkeyId,
+                                                    MOD_CONTROL | MOD_ALT | MOD_NOREPEAT, 'T') != FALSE);
+        qInfo("SystemControlService: RegisterHotKey Ctrl+Alt+T %s",
+              m_taskbarHotkeyRegistered ? "ok" : "pending");
+    }
     if (!m_kbdHook && !m_spotlightHotkeyRegistered) {
         m_spotlightHotkeyRegistered = (RegisterHotKey(msgHwnd, kSpotlightHotkeyId,
                                                       MOD_ALT | MOD_NOREPEAT, VK_SPACE) != FALSE);
     }
 
     const bool needRetry = !m_hotkeyRegistered || !m_clipboardHotkeyRegistered
+                           || !m_taskbarHotkeyRegistered
                            || (!m_kbdHook && !m_spotlightHotkeyRegistered);
     if (needRetry && !m_hotkeyRetryTimer.isActive())
         m_hotkeyRetryTimer.start();
     else if (!needRetry && m_hotkeyRetryTimer.isActive())
         m_hotkeyRetryTimer.stop();
 #endif
+}
+
+void SystemControlService::setBeforeQuitCallback(std::function<void()> cb)
+{
+    m_beforeQuitCallback = std::move(cb);
+}
+
+void SystemControlService::quitApp()
+{
+    if (m_beforeQuitCallback)
+        m_beforeQuitCallback();
+    QCoreApplication::quit();
 }
 
 void SystemControlService::triggerQuickPanelToggle()
@@ -435,6 +460,10 @@ bool SystemControlService::nativeEventFilter(const QByteArray& eventType, void* 
             }
             if (id == kClipboardHotkeyId) {
                 emit clipboardToggleRequested();
+                return true;
+            }
+            if (id == kTaskbarToggleHotkeyId) {
+                emit taskbarToggleRequested();
                 return true;
             }
         }
@@ -1541,21 +1570,335 @@ void SystemControlService::hideStockOsdIfActive()
 #endif
 }
 
-void SystemControlService::readLaunchAtStartup()
-{
 #ifdef Q_OS_WIN
+namespace {
+QString quoteWinArg(const QString& arg)
+{
+    if (!arg.isEmpty() && !arg.contains(QLatin1Char(' ')) && !arg.contains(QLatin1Char('\t'))
+        && !arg.contains(QLatin1Char('"'))) {
+        return arg;
+    }
+    QString out = QStringLiteral("\"");
+    int bs = 0;
+    for (QChar ch : arg) {
+        if (ch == QLatin1Char('\\')) {
+            ++bs;
+        } else if (ch == QLatin1Char('"')) {
+            out.append(QString(bs * 2 + 1, QLatin1Char('\\')));
+            out.append(QLatin1Char('"'));
+            bs = 0;
+        } else {
+            out.append(QString(bs, QLatin1Char('\\')));
+            out.append(ch);
+            bs = 0;
+        }
+    }
+    out.append(QString(bs * 2, QLatin1Char('\\')));
+    out.append(QLatin1Char('"'));
+    return out;
+}
+
+int runSchtasksHidden(const QStringList& args, QByteArray* stdOut = nullptr, int timeoutMs = 4000)
+{
+    QString cmdLine = QStringLiteral("schtasks.exe");
+    for (const QString& a : args)
+        cmdLine += QLatin1Char(' ') + quoteWinArg(a);
+
+    HANDLE readPipe = nullptr;
+    HANDLE writePipe = nullptr;
+    SECURITY_ATTRIBUTES sa{};
+    sa.nLength = sizeof(sa);
+    sa.bInheritHandle = TRUE;
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+
+    if (stdOut) {
+        stdOut->clear();
+        if (CreatePipe(&readPipe, &writePipe, &sa, 0)) {
+            SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
+            si.dwFlags |= STARTF_USESTDHANDLES;
+            si.hStdOutput = writePipe;
+            si.hStdError = writePipe;
+            si.hStdInput = nullptr;
+        }
+    }
+
+    PROCESS_INFORMATION pi{};
+    std::wstring cmdBuf = cmdLine.toStdWString();
+    const BOOL ok = CreateProcessW(
+        nullptr,
+        cmdBuf.data(),
+        nullptr,
+        nullptr,
+        stdOut && writePipe ? TRUE : FALSE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        nullptr,
+        &si,
+        &pi);
+
+    if (writePipe) {
+        CloseHandle(writePipe);
+        writePipe = nullptr;
+    }
+
+    if (!ok) {
+        if (readPipe)
+            CloseHandle(readPipe);
+        return -1;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    DWORD exitCode = 1;
+    bool exited = false;
+    while (true) {
+        if (readPipe) {
+            DWORD avail = 0;
+            while (PeekNamedPipe(readPipe, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+                char buf[2048];
+                DWORD got = 0;
+                if (!ReadFile(readPipe, buf, sizeof(buf), &got, nullptr) || got == 0)
+                    break;
+                if (stdOut)
+                    stdOut->append(buf, static_cast<int>(got));
+            }
+        }
+        const DWORD waitRes = WaitForSingleObject(pi.hProcess, 40);
+        if (waitRes == WAIT_OBJECT_0) {
+            exited = true;
+            break;
+        }
+        if (timer.elapsed() >= timeoutMs)
+            break;
+    }
+
+    if (readPipe) {
+        DWORD avail = 0;
+        while (PeekNamedPipe(readPipe, nullptr, 0, nullptr, &avail, nullptr) && avail > 0) {
+            char buf[2048];
+            DWORD got = 0;
+            if (!ReadFile(readPipe, buf, sizeof(buf), &got, nullptr) || got == 0)
+                break;
+            if (stdOut)
+                stdOut->append(buf, static_cast<int>(got));
+        }
+        CloseHandle(readPipe);
+    }
+
+    if (exited) {
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+    } else {
+        TerminateProcess(pi.hProcess, 1);
+        exitCode = 1;
+    }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return static_cast<int>(exitCode);
+}
+
+QString decodeSchtasksXml(const QByteArray& raw)
+{
+    if (raw.size() >= 2 && static_cast<unsigned char>(raw.at(0)) == 0xFF
+        && static_cast<unsigned char>(raw.at(1)) == 0xFE) {
+        const int chars = (raw.size() - 2) / 2;
+        return QString::fromUtf16(reinterpret_cast<const char16_t*>(raw.constData() + 2), chars);
+    }
+    if (raw.size() >= 4 && raw.at(1) == '\0' && raw.at(3) == '\0') {
+        return QString::fromUtf16(reinterpret_cast<const char16_t*>(raw.constData()), raw.size() / 2);
+    }
+    return QString::fromUtf8(raw);
+}
+
+QString escapeXmlText(const QString& s)
+{
+    QString out = s;
+    out.replace(QLatin1Char('&'), QStringLiteral("&amp;"));
+    out.replace(QLatin1Char('<'), QStringLiteral("&lt;"));
+    out.replace(QLatin1Char('>'), QStringLiteral("&gt;"));
+    out.replace(QLatin1Char('"'), QStringLiteral("&quot;"));
+    out.replace(QLatin1Char('\''), QStringLiteral("&apos;"));
+    return out;
+}
+
+QString unescapeXmlText(const QString& s)
+{
+    QString out = s;
+    out.replace(QStringLiteral("&apos;"), QStringLiteral("'"));
+    out.replace(QStringLiteral("&quot;"), QStringLiteral("\""));
+    out.replace(QStringLiteral("&gt;"), QStringLiteral(">"));
+    out.replace(QStringLiteral("&lt;"), QStringLiteral("<"));
+    out.replace(QStringLiteral("&amp;"), QStringLiteral("&"));
+    return out;
+}
+
+bool createStartupScheduledTask(const QString& exeNative, bool highestLevel)
+{
+    const QString workDir = QDir::toNativeSeparators(QFileInfo(exeNative).absolutePath());
+    const QString runLevel = highestLevel
+        ? QStringLiteral("HighestAvailable")
+        : QStringLiteral("LeastPrivilege");
+
+    const QString xml = QStringLiteral(
+        "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\r\n"
+        "<Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\r\n"
+        "  <Triggers>\r\n"
+        "    <LogonTrigger>\r\n"
+        "      <Enabled>true</Enabled>\r\n"
+        "      <Delay>PT2S</Delay>\r\n"
+        "    </LogonTrigger>\r\n"
+        "  </Triggers>\r\n"
+        "  <Principals>\r\n"
+        "    <Principal id=\"Author\">\r\n"
+        "      <LogonType>InteractiveToken</LogonType>\r\n"
+        "      <RunLevel>%1</RunLevel>\r\n"
+        "    </Principal>\r\n"
+        "  </Principals>\r\n"
+        "  <Settings>\r\n"
+        "    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\r\n"
+        "    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\r\n"
+        "    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>\r\n"
+        "    <AllowHardTerminate>false</AllowHardTerminate>\r\n"
+        "    <StartWhenAvailable>true</StartWhenAvailable>\r\n"
+        "    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>\r\n"
+        "    <AllowStartOnDemand>true</AllowStartOnDemand>\r\n"
+        "    <Enabled>true</Enabled>\r\n"
+        "    <Hidden>false</Hidden>\r\n"
+        "    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\r\n"
+        "    <Priority>7</Priority>\r\n"
+        "  </Settings>\r\n"
+        "  <Actions Context=\"Author\">\r\n"
+        "    <Exec>\r\n"
+        "      <Command>%2</Command>\r\n"
+        "      <WorkingDirectory>%3</WorkingDirectory>\r\n"
+        "    </Exec>\r\n"
+        "  </Actions>\r\n"
+        "</Task>\r\n")
+        .arg(runLevel, escapeXmlText(exeNative), escapeXmlText(workDir));
+
+    const QString xmlPath = QDir::toNativeSeparators(
+        QDir::tempPath() + QStringLiteral("/sekaidesk_autostart.xml"));
+    {
+        QFile f(xmlPath);
+        if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return false;
+        const quint16 bom = 0xFEFF;
+        f.write(reinterpret_cast<const char*>(&bom), sizeof(bom));
+        f.write(reinterpret_cast<const char*>(xml.utf16()),
+                static_cast<qint64>(xml.size()) * sizeof(char16_t));
+        f.close();
+    }
+
+    const int rc = runSchtasksHidden({
+        QStringLiteral("/Create"),
+        QStringLiteral("/TN"), QStringLiteral("SekaiDesk"),
+        QStringLiteral("/XML"), xmlPath,
+        QStringLiteral("/F")
+    });
+    QFile::remove(xmlPath);
+    return rc == 0;
+}
+
+bool registerStartupTaskWithFallback(const QString& exeNative)
+{
+    if (createStartupScheduledTask(exeNative, true))
+        return true;
+    return createStartupScheduledTask(exeNative, false);
+}
+
+bool hasLegacyRunEntry()
+{
     HKEY hKey = nullptr;
-    bool enabled = false;
+    bool exists = false;
     if (RegOpenKeyExW(HKEY_CURRENT_USER,
                       L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
                       0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS) {
         DWORD type = 0;
         DWORD bytes = 0;
         const LONG rc = RegQueryValueExW(hKey, L"SekaiDesk", nullptr, &type, nullptr, &bytes);
-        enabled = (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)
-                   && bytes > sizeof(wchar_t));
+        exists = (rc == ERROR_SUCCESS && (type == REG_SZ || type == REG_EXPAND_SZ)
+                  && bytes > sizeof(wchar_t));
         RegCloseKey(hKey);
     }
+    return exists;
+}
+
+void deleteLegacyRunEntry()
+{
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+                      L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                      0, KEY_SET_VALUE, &hKey) == ERROR_SUCCESS) {
+        RegDeleteValueW(hKey, L"SekaiDesk");
+        RegCloseKey(hKey);
+    }
+}
+
+void writeLegacyRunEntry(const QString& exeNative)
+{
+    HKEY hKey = nullptr;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER,
+                        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                        0, nullptr, REG_OPTION_NON_VOLATILE,
+                        KEY_SET_VALUE,
+                        nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
+        const std::wstring cmd = L"\"" + exeNative.toStdWString() + L"\"";
+        RegSetValueExW(hKey, L"SekaiDesk", 0, REG_SZ,
+                       reinterpret_cast<const BYTE*>(cmd.c_str()),
+                       static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
+        RegCloseKey(hKey);
+    }
+}
+} // namespace
+#endif
+
+void SystemControlService::readLaunchAtStartup()
+{
+#ifdef Q_OS_WIN
+    if (m_startupChecked)
+        return;
+    m_startupChecked = true;
+
+    const QString curExe = QDir::toNativeSeparators(
+        QCoreApplication::applicationFilePath());
+
+    QByteArray xmlRaw;
+    const int taskRc = runSchtasksHidden({
+        QStringLiteral("/Query"),
+        QStringLiteral("/TN"), QStringLiteral("SekaiDesk"),
+        QStringLiteral("/XML")
+    }, &xmlRaw);
+    const bool taskExists = (taskRc == 0);
+    const bool legacyRun = hasLegacyRunEntry();
+
+    bool enabled = false;
+    if (taskExists) {
+        const QString xmlText = decodeSchtasksXml(xmlRaw);
+        const QRegularExpression re(QStringLiteral("<Command>([^<]+)</Command>"),
+                                    QRegularExpression::CaseInsensitiveOption);
+        const QRegularExpressionMatch m = re.match(xmlText);
+        if (m.hasMatch()) {
+            QString cmd = unescapeXmlText(m.captured(1)).trimmed();
+            if (cmd.size() >= 2 && cmd.startsWith(QLatin1Char('"')) && cmd.endsWith(QLatin1Char('"')))
+                cmd = cmd.mid(1, cmd.size() - 2).trimmed();
+            if (!cmd.isEmpty() && QDir::toNativeSeparators(cmd).compare(curExe, Qt::CaseInsensitive) != 0)
+                registerStartupTaskWithFallback(curExe);
+        }
+        if (legacyRun)
+            deleteLegacyRunEntry();
+        enabled = true;
+    } else if (legacyRun) {
+        // Auto-migrate stale HKCU\...\Run entry (blocked by UAC on HighestAvailable apps) to Task Scheduler
+        if (registerStartupTaskWithFallback(curExe))
+            deleteLegacyRunEntry();
+        else
+            writeLegacyRunEntry(curExe);
+        enabled = true;
+    }
+
     if (m_launchAtStartup != enabled) {
         m_launchAtStartup = enabled;
         emit launchAtStartupChanged();
@@ -1566,24 +1909,22 @@ void SystemControlService::readLaunchAtStartup()
 void SystemControlService::setLaunchAtStartup(bool on)
 {
 #ifdef Q_OS_WIN
-    HKEY hKey = nullptr;
-    if (RegCreateKeyExW(HKEY_CURRENT_USER,
-                        L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
-                        0, nullptr, REG_OPTION_NON_VOLATILE,
-                        KEY_SET_VALUE | KEY_QUERY_VALUE,
-                        nullptr, &hKey, nullptr) == ERROR_SUCCESS) {
-        if (on) {
-            const QString exeNative = QDir::toNativeSeparators(
-                QCoreApplication::applicationFilePath());
-            const std::wstring cmd = L"\"" + exeNative.toStdWString() + L"\"";
-            RegSetValueExW(hKey, L"SekaiDesk", 0, REG_SZ,
-                           reinterpret_cast<const BYTE*>(cmd.c_str()),
-                           static_cast<DWORD>((cmd.size() + 1) * sizeof(wchar_t)));
-        } else {
-            RegDeleteValueW(hKey, L"SekaiDesk");
-        }
-        RegCloseKey(hKey);
+    deleteLegacyRunEntry();
+    const QString curExe = QDir::toNativeSeparators(
+        QCoreApplication::applicationFilePath());
+
+    if (on) {
+        if (!registerStartupTaskWithFallback(curExe))
+            writeLegacyRunEntry(curExe);
+    } else {
+        runSchtasksHidden({
+            QStringLiteral("/Delete"),
+            QStringLiteral("/TN"), QStringLiteral("SekaiDesk"),
+            QStringLiteral("/F")
+        });
     }
+
+    m_startupChecked = false;
     readLaunchAtStartup();
 #else
     Q_UNUSED(on);

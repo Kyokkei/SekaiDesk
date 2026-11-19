@@ -4949,6 +4949,53 @@ Item {
                                     }
                                 }
                             }
+                            // Add Photo Frame (#6 ImageWidget) slot
+                            Item {
+                                id: addPhotoSlot
+                                width: 102; height: 120
+                                readonly property bool hot: addPhotoMa.containsMouse
+
+                                Item {
+                                    anchors.fill: parent
+                                    y: addPhotoSlot.hot ? -4 : 0
+                                    rotation: addPhotoSlot.hot ? 0 : -1.4
+                                    Behavior on y { NumberAnimation { duration: 170; easing.type: Easing.OutBack } }
+                                    Behavior on rotation { NumberAnimation { duration: 170; easing.type: Easing.OutCubic } }
+
+                                    Rectangle { x: 3; y: 7; width: parent.width - 4; height: parent.height - 10; radius: 14; color: themeHub.darkInk }
+                                    Rectangle {
+                                        x: 0; y: 4; width: parent.width - 4; height: parent.height - 10; radius: 14
+                                        color: "#FFFDF7"; border.width: 2.5; border.color: themeHub.darkInk
+                                        Rectangle {
+                                            x: 6; y: 6; width: parent.width - 12; height: 68; radius: 9
+                                            color: "#1B1E32"; border.width: 1.5; border.color: themeHub.darkInk
+                                            Rectangle {
+                                                anchors.centerIn: parent; width: 46; height: 50; radius: 6; color: "#FFFDF7"; rotation: -4
+                                                Rectangle { x: 4; y: 4; width: 38; height: 32; radius: 4; color: themeHub.accentB }
+                                            }
+                                        }
+                                        Text {
+                                            anchors.bottom: parent.bottom; anchors.bottomMargin: 8; anchors.horizontalCenter: parent.horizontalCenter
+                                            text: "Photo (" + (widgetsRoot.themeHub.imageFrames ? widgetsRoot.themeHub.imageFrames.length : 0) + ")"
+                                            font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: themeHub.darkInk
+                                        }
+                                    }
+                                    Rectangle {
+                                        x: parent.width - width; y: 0; width: 24; height: 24; radius: 12
+                                        color: themeHub.accentA; border.width: 2; border.color: themeHub.darkInk
+                                        Text { anchors.centerIn: parent; text: "+"; font.pixelSize: 13; font.weight: Font.Black; color: themeHub.darkInk }
+                                    }
+                                    MouseArea {
+                                        id: addPhotoMa
+                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            const picked = SystemControl.pickImageFile("Add Polaroid Photo Frame")
+                                            if (picked !== "")
+                                                widgetsRoot.themeHub.addImageFrame(picked)
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -5212,24 +5259,26 @@ Item {
 
                             // Card 3: Dock Tools
                             SekaiPill {
-                                width: 320; height: 118; radius: 16; color: "#FFFFFF"; inkColor: themeHub.darkInk; borderWidth: 2; shadowShift: 3; showInnerRing: false
+                                width: 416; height: 118; radius: 16; color: "#FFFFFF"; inkColor: themeHub.darkInk; borderWidth: 2; shadowShift: 3; showInnerRing: false
                                 Column {
                                     anchors.fill: parent; anchors.margins: 10; spacing: 8
                                     Text { text: "DOCK UTILITY KEYS"; font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#64748B" }
                                     Grid {
-                                        columns: 3; spacing: 6
+                                        columns: 4; spacing: 6
                                         Repeater {
                                             model: [
                                                 { key: "finder",    label: "Spotlight",  on: widgetsRoot.themeHub.dockShowFinder },
                                                 { key: "clipboard", label: "Clipboard",  on: widgetsRoot.themeHub.dockShowClipboard },
                                                 { key: "dropshelf", label: "Drop Shelf", on: widgetsRoot.themeHub.dockShowDropShelf },
                                                 { key: "trash",     label: "Trash Bin",  on: widgetsRoot.themeHub.dockShowTrash },
+                                                { key: "timer",     label: "Timer",      on: widgetsRoot.themeHub.dockShowTimer },
+                                                { key: "files",     label: "Files",      on: widgetsRoot.themeHub.dockShowFiles },
                                                 { key: "media",     label: "Media Pill", on: widgetsRoot.themeHub.dockShowMedia },
                                                 { key: "iconshape", label: "Icons: " + (widgetsRoot.themeHub.dockIconShape === "circle" ? "Round" : (widgetsRoot.themeHub.dockIconShape === "square" ? "Square" : "Auto")), on: widgetsRoot.themeHub.dockIconShape !== "auto" }
                                             ]
                                             delegate: Rectangle {
                                                 required property var modelData
-                                                width: 96; height: 34; radius: 9
+                                                width: 94; height: 34; radius: 9
                                                 color: modelData.on ? themeHub.accentB : "#F1F5F9"
                                                 border.width: modelData.on ? 2 : 1.5; border.color: themeHub.darkInk
                                                 Text { anchors.centerIn: parent; text: modelData.key === "iconshape" ? modelData.label : ((modelData.on ? "✓ " : "○ ") + modelData.label); font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: themeHub.darkInk }
@@ -5241,6 +5290,8 @@ Item {
                                                         else if (k === "clipboard") widgetsRoot.themeHub.setDockShowClipboard(!modelData.on)
                                                         else if (k === "dropshelf") widgetsRoot.themeHub.setDockShowDropShelf(!modelData.on)
                                                         else if (k === "trash") widgetsRoot.themeHub.setDockShowTrash(!modelData.on)
+                                                        else if (k === "timer") widgetsRoot.themeHub.setDockShowTimer(!modelData.on)
+                                                        else if (k === "files") widgetsRoot.themeHub.setDockShowFiles(!modelData.on)
                                                         else if (k === "media") widgetsRoot.themeHub.setDockShowMedia(!modelData.on)
                                                         else if (k === "iconshape") {
                                                             const cur = widgetsRoot.themeHub.dockIconShape
@@ -5380,7 +5431,7 @@ Item {
                                             MouseArea {
                                                 anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                                                 onClicked: {
-                                                    const order = ["bars", "sekai", "ring", "dots", "wave"]
+                                                    const order = ["tide", "ribbons", "aurora", "pulse", "scope", "mirror", "ring", "dots", "sekai", "bars", "wave"]
                                                     const i = order.indexOf(VisualizerService.style)
                                                     VisualizerService.style = order[(i + 1) % order.length]
                                                 }

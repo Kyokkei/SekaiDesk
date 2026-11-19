@@ -26,6 +26,9 @@ class VisualizerService : public QObject {
     Q_PROPERTY(bool stayWhenPaused READ stayWhenPaused WRITE setStayWhenPaused NOTIFY stayWhenPausedChanged)
     Q_PROPERTY(qreal posX READ posX WRITE setPosX NOTIFY positionChanged)
     Q_PROPERTY(qreal posY READ posY WRITE setPosY NOTIFY positionChanged)
+    Q_PROPERTY(int customWidth READ customWidth WRITE setCustomWidth NOTIFY customSizeChanged)
+    Q_PROPERTY(int customHeight READ customHeight WRITE setCustomHeight NOTIFY customSizeChanged)
+    Q_PROPERTY(bool transparentBg READ transparentBg WRITE setTransparentBg NOTIFY transparentBgChanged)
 
     Q_PROPERTY(QVariantList bands READ bands NOTIFY frameChanged)
     Q_PROPERTY(qreal level READ level NOTIFY frameChanged)
@@ -45,6 +48,9 @@ public:
     bool stayWhenPaused() const { return m_stayWhenPaused; }
     qreal posX() const { return m_posX; }
     qreal posY() const { return m_posY; }
+    int customWidth() const { return m_customWidth; }
+    int customHeight() const { return m_customHeight; }
+    bool transparentBg() const { return m_transparentBg; }
 
     QVariantList bands() const { return m_bands; }
     qreal level() const { return m_level; }
@@ -60,10 +66,14 @@ public:
     void setStayWhenPaused(bool stay);
     void setPosX(qreal x);
     void setPosY(qreal y);
+    void setCustomWidth(int w);
+    void setCustomHeight(int h);
+    void setTransparentBg(bool transparent);
 
     Q_INVOKABLE void cycleSize();
     Q_INVOKABLE void cycleColorMode();
     Q_INVOKABLE void setPosition(qreal x, qreal y);
+    Q_INVOKABLE void setCustomSize(int w, int h);
     Q_INVOKABLE void resetPosition();
 
 signals:
@@ -76,6 +86,8 @@ signals:
     void stayWhenPausedChanged();
     void configChanged();
     void positionChanged();
+    void customSizeChanged();
+    void transparentBgChanged();
     void frameChanged();
 
 private:
@@ -97,6 +109,9 @@ private:
     bool m_stayWhenPaused = true;
     qreal m_posX = -1.0;
     qreal m_posY = -1.0;
+    int m_customWidth = 0;
+    int m_customHeight = 0;
+    bool m_transparentBg = true;
 
     QVariantList m_bands;
     qreal m_level = 0.0;

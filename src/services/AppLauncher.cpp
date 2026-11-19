@@ -17,6 +17,7 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <shobjidl.h>
+#include <propsys.h>
 #include <objbase.h>
 
 namespace {
@@ -287,14 +288,33 @@ void AppLauncher::recordUsage(const QString& target)
 
 bool AppLauncher::launch(const QString& target, const QString& args)
 {
-    if (target.trimmed().isEmpty())
+    const QString cleanTarget = target.trimmed();
+    if (cleanTarget.isEmpty())
         return false;
 
 #ifdef Q_OS_WIN
+    if (cleanTarget.startsWith(QStringLiteral("shell:"), Qt::CaseInsensitive)) {
+        const HINSTANCE res = ShellExecuteW(
+            nullptr,
+            L"open",
+            L"explorer.exe",
+            reinterpret_cast<const wchar_t*>(cleanTarget.utf16()),
+            nullptr,
+            SW_SHOWNORMAL);
+        const auto code = reinterpret_cast<INT_PTR>(res);
+        if (code <= 32) {
+            qWarning("AppLauncher: explorer launch(%s) failed with code %lld",
+                     qPrintable(cleanTarget), static_cast<long long>(code));
+            return false;
+        }
+        recordUsage(target);
+        return true;
+    }
+
     const HINSTANCE res = ShellExecuteW(
         nullptr,
         L"open",
-        reinterpret_cast<const wchar_t*>(target.utf16()),
+        reinterpret_cast<const wchar_t*>(cleanTarget.utf16()),
         args.isEmpty() ? nullptr : reinterpret_cast<const wchar_t*>(args.utf16()),
         nullptr,
         SW_SHOWNORMAL);
@@ -677,29 +697,139 @@ void AppLauncher::refreshInstalledApps()
 
     const QString progData = qEnvironmentVariable("ProgramData");
     const QString appData = qEnvironmentVariable("AppData");
-    QStringList roots;
-    if (!progData.isEmpty())
-        roots << (progData + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs"));
-    if (!appData.isEmpty())
-        roots << (appData + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs"));
+    const QString publicDir = qEnvironmentVariable("PUBLIC");
+    const QString userDesktop = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
 
-    for (const QString& root : roots) {
-        QDirIterator it(root, QStringList() << QStringLiteral("*.lnk"),
-                        QDir::Files, QDirIterator::Subdirectories);
+    auto isNoiseName = [](const QString& low) {
+        return low.contains(QStringLiteral("uninstall"))
+            || low.contains(QStringLiteral("readme"))
+            || low.contains(QStringLiteral("help"))
+            || low.contains(QStringLiteral("manual"))
+            || low.contains(QStringLiteral("website"));
+    };
+
+    auto scanShortcutDir = [&](const QString& root, bool recursive) {
+        if (root.isEmpty() || !QFileInfo::exists(root))
+            return;
+        const QDirIterator::IteratorFlags flags = recursive
+            ? QDirIterator::Subdirectories
+            : QDirIterator::NoIteratorFlags;
+        QDirIterator it(root,
+                        QStringList() << QStringLiteral("*.lnk") << QStringLiteral("*.url"),
+                        QDir::Files, flags);
         while (it.hasNext()) {
             const QString filePath = QDir::toNativeSeparators(it.next());
             const QFileInfo fi(filePath);
             const QString base = fi.completeBaseName();
-            const QString low = base.toLower();
-            if (low.contains(QStringLiteral("uninstall"))
-                || low.contains(QStringLiteral("readme"))
-                || low.contains(QStringLiteral("help"))
-                || low.contains(QStringLiteral("manual"))
-                || low.contains(QStringLiteral("website"))) {
+            if (isNoiseName(base.toLower()))
                 continue;
-            }
             addItem(base, filePath, QStringLiteral("App"));
         }
+    };
+
+    if (!progData.isEmpty()) {
+        scanShortcutDir(progData + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs"), true);
+        scanShortcutDir(progData + QStringLiteral("\\Microsoft\\Windows\\Start Menu"), false);
+    }
+    if (!appData.isEmpty()) {
+        scanShortcutDir(appData + QStringLiteral("\\Microsoft\\Windows\\Start Menu\\Programs"), true);
+        scanShortcutDir(appData + QStringLiteral("\\Microsoft\\Windows\\Start Menu"), false);
+    }
+
+    // Enumerate shell:AppsFolder (MSIX / Store / UWP apps like Windows Terminal)
+    {
+        static constexpr GUID kFOLDERID_AppsFolder = {
+            0x1E87508D, 0x89C2, 0x42F0, {0x8A, 0x7E, 0x64, 0x5A, 0x0F, 0x50, 0xCA, 0x58}
+        };
+        static constexpr GUID kBHID_EnumItems = {
+            0x94F60519, 0x2850, 0x4924, {0xAA, 0x5A, 0xD1, 0x5E, 0x84, 0x86, 0x80, 0x39}
+        };
+        static constexpr IID kIID_IShellItem = {
+            0x43826D1E, 0xE718, 0x42EE, {0xBC, 0x55, 0xA1, 0xE2, 0x61, 0xC3, 0x7B, 0xFE}
+        };
+        static constexpr IID kIID_IShellItem2 = {
+            0x7E9FB0D3, 0x919F, 0x4307, {0xAB, 0x2E, 0x9B, 0x18, 0x60, 0x31, 0x0C, 0x93}
+        };
+        static constexpr IID kIID_IEnumShellItems = {
+            0x70629033, 0xE363, 0x4A28, {0xA5, 0x67, 0x0D, 0xB7, 0x80, 0x06, 0xE6, 0xD7}
+        };
+        static constexpr PROPERTYKEY kPKEY_AppUserModel_ID = {
+            {0x9F4C2855, 0x9F79, 0x4B39, {0xA8, 0xD0, 0xE1, 0xD4, 0x2D, 0xE1, 0xD5, 0xF3}},
+            5
+        };
+
+        using FnSHGetKnownFolderItem = HRESULT(WINAPI*)(const GUID&, DWORD, HANDLE, REFIID, void**);
+        HMODULE shell32 = GetModuleHandleW(L"shell32.dll");
+        auto fnKnownFolderItem = shell32
+            ? reinterpret_cast<FnSHGetKnownFolderItem>(GetProcAddress(shell32, "SHGetKnownFolderItem"))
+            : nullptr;
+        if (fnKnownFolderItem) {
+            const HRESULT hrCom = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+            IShellItem* appsFolder = nullptr;
+            if (SUCCEEDED(fnKnownFolderItem(kFOLDERID_AppsFolder, 0, nullptr,
+                                            kIID_IShellItem, reinterpret_cast<void**>(&appsFolder)))
+                && appsFolder) {
+                IEnumShellItems* enumItems = nullptr;
+                if (SUCCEEDED(appsFolder->BindToHandler(nullptr, kBHID_EnumItems,
+                                                        kIID_IEnumShellItems,
+                                                        reinterpret_cast<void**>(&enumItems)))
+                    && enumItems) {
+                    IShellItem* child = nullptr;
+                    ULONG fetched = 0;
+                    while (enumItems->Next(1, &child, &fetched) == S_OK && child) {
+                        QString appName;
+                        PWSTR dispRaw = nullptr;
+                        if (SUCCEEDED(child->GetDisplayName(SIGDN_NORMALDISPLAY, &dispRaw)) && dispRaw) {
+                            appName = QString::fromWCharArray(dispRaw).trimmed();
+                            CoTaskMemFree(dispRaw);
+                        }
+
+                        QString aumid;
+                        IShellItem2* child2 = nullptr;
+                        if (SUCCEEDED(child->QueryInterface(kIID_IShellItem2,
+                                                            reinterpret_cast<void**>(&child2)))
+                            && child2) {
+                            PWSTR aumidRaw = nullptr;
+                            if (SUCCEEDED(child2->GetString(kPKEY_AppUserModel_ID, &aumidRaw)) && aumidRaw) {
+                                aumid = QString::fromWCharArray(aumidRaw).trimmed();
+                                CoTaskMemFree(aumidRaw);
+                            }
+                            child2->Release();
+                        }
+                        if (aumid.isEmpty()) {
+                            PWSTR relRaw = nullptr;
+                            if (SUCCEEDED(child->GetDisplayName(SIGDN_PARENTRELATIVEPARSING, &relRaw)) && relRaw) {
+                                aumid = QString::fromWCharArray(relRaw).trimmed();
+                                CoTaskMemFree(relRaw);
+                            }
+                        }
+
+                        child->Release();
+                        if (!appName.isEmpty() && !aumid.isEmpty() && !isNoiseName(appName.toLower())) {
+                            addItem(appName, QStringLiteral("shell:AppsFolder\\") + aumid, QStringLiteral("App"));
+                        }
+                    }
+                    enumItems->Release();
+                }
+                appsFolder->Release();
+            }
+            if (SUCCEEDED(hrCom))
+                CoUninitialize();
+        }
+    }
+
+    // Desktop shortcuts (.lnk and Steam/game .url shortcuts)
+    if (!userDesktop.isEmpty())
+        scanShortcutDir(QDir::toNativeSeparators(userDesktop), false);
+    if (!publicDir.isEmpty())
+        scanShortcutDir(publicDir + QStringLiteral("\\Desktop"), false);
+
+    // Explicit Windows Terminal fallback if not already indexed
+    if (!seenNames.contains(QStringLiteral("terminal"))
+        && !seenNames.contains(QStringLiteral("windows terminal"))) {
+        wchar_t wtPath[MAX_PATH * 2] = {};
+        if (SearchPathW(nullptr, L"wt.exe", nullptr, MAX_PATH * 2, wtPath, nullptr) > 0)
+            addItem(QStringLiteral("Terminal"), QString::fromWCharArray(wtPath), QStringLiteral("System"));
     }
 #endif
 
@@ -802,7 +932,7 @@ QVariantList AppLauncher::searchApps(const QString& query) const
     });
 
     QVariantList res;
-    for (int i = 0; i < matches.size() && i < 12; ++i)
+    for (int i = 0; i < matches.size() && i < 32; ++i)
         res.append(matches.at(i).item);
     return res;
 }

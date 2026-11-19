@@ -49,6 +49,11 @@ Section "SekaiDesk" SecMain
     SetOutPath "$INSTDIR"
     File /r "stage/*"
 
+    ; Ensure native Windows taskbar is restored cleanly after force-stopping an old instance
+    nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --restore'
+    Pop $0
+    Pop $1
+
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
     ; Start Menu & Desktop shortcuts
@@ -82,6 +87,11 @@ Section "Uninstall"
     Pop $0
     Pop $1
     Sleep 600
+    IfFileExists "$INSTDIR\${APP_EXE}" 0 done_uninst_restore
+        nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --restore'
+        Pop $0
+        Pop $1
+    done_uninst_restore:
 
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
     Delete "$DESKTOP\${APP_NAME}.lnk"

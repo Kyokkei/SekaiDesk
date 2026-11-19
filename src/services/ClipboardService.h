@@ -29,9 +29,13 @@ signals:
 
 private:
     void captureClipboard(bool initial = false);
+    static void removeBackingFile(const QVariantMap& item);
 
     QVariantList m_history;
     QString m_suppressText;
+    QString m_suppressImageHash;
+    QString m_tempDir;
+    quint64 m_nextId = 0;
 #ifdef Q_OS_WIN
     void* m_hwnd = nullptr;
 #endif

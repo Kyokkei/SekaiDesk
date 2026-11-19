@@ -56,6 +56,22 @@ QString sanitizeSortBy(const QString& raw)
     return QStringLiteral("newest");
 }
 
+QString sanitizeTransitionStyle(const QString& raw)
+{
+    const QString s = raw.trimmed();
+    if (s == QStringLiteral("sekaiRing")
+        || s == QStringLiteral("star")
+        || s == QStringLiteral("diagonalBlocks")
+        || s == QStringLiteral("sekaiIris")
+        || s == QStringLiteral("sekaiFlash")
+        || s == QStringLiteral("fade")
+        || s == QStringLiteral("random")
+        || s == QStringLiteral("none")) {
+        return s;
+    }
+    return QStringLiteral("sekaiRing");
+}
+
 #ifdef Q_OS_WIN
 const CLSID kClsidFileOpenDialog = {
     0xDC1C5A9C, 0xE88A, 0x4DDE, {0xA5, 0xA1, 0x60, 0xF8, 0x2A, 0x20, 0xAE, 0xF7}
@@ -113,6 +129,7 @@ WallpaperService::WallpaperService(SettingsStore* settings, QObject* parent)
         m_sortBy = sanitizeSortBy(m_settings->stringValue(QStringLiteral("wallpaper.sortBy"), QStringLiteral("newest")));
         m_slideshowEnabled = m_settings->boolValue(QStringLiteral("wallpaper.slideshowEnabled"), false);
         m_slideshowMinutes = qBound(1, m_settings->intValue(QStringLiteral("wallpaper.slideshowMinutes"), 15), 1440);
+        m_transitionStyle = sanitizeTransitionStyle(m_settings->stringValue(QStringLiteral("wallpaper.transitionStyle"), QStringLiteral("sekaiRing")));
         m_currentWallpaper = normalizeLocalPath(m_settings->stringValue(QStringLiteral("wallpaper.currentPath")));
 
         if (m_customFolder && !savedDir.isEmpty() && QFileInfo::exists(savedDir)) {
@@ -277,6 +294,62 @@ void WallpaperService::setSlideshowMinutes(int minutes)
         m_settings->set(QStringLiteral("wallpaper.slideshowMinutes"), m_slideshowMinutes);
     syncSlideshowTimer();
     emit slideshowChanged();
+}
+
+void WallpaperService::setTransitionStyle(const QString& style)
+{
+    const QString next = sanitizeTransitionStyle(style);
+    if (m_transitionStyle == next)
+        return;
+    m_transitionStyle = next;
+    if (m_settings)
+        m_settings->set(QStringLiteral("wallpaper.transitionStyle"), m_transitionStyle);
+    emit transitionStyleChanged();
+}
+
+QString WallpaperService::toFileUrl(const QString& filePath) const
+{
+    const QString clean = normalizeLocalPath(filePath);
+    if (clean.isEmpty())
+        return {};
+    return QUrl::fromLocalFile(clean).toString();
+}
+
+void WallpaperService::requestWallpaperChange(const QString& filePath)
+{
+    const QString clean = normalizeLocalPath(filePath);
+    if (clean.isEmpty() || !QFileInfo::exists(clean))
+        return;
+    if (clean.compare(m_currentWallpaper, Qt::CaseInsensitive) == 0)
+        return;
+
+    if (m_transitionStyle == QStringLiteral("none")
+        || m_currentWallpaper.isEmpty()
+        || !QFileInfo::exists(m_currentWallpaper)) {
+        applyWallpaper(clean);
+        return;
+    }
+
+    QString chosen = m_transitionStyle;
+    if (chosen == QStringLiteral("random")) {
+        static const QStringList kPool = {
+            QStringLiteral("sekaiRing"),
+            QStringLiteral("star"),
+            QStringLiteral("diagonalBlocks"),
+            QStringLiteral("sekaiIris"),
+            QStringLiteral("sekaiFlash")
+        };
+        QStringList filtered;
+        for (const QString& s : kPool) {
+            if (s != m_lastRolledStyle)
+                filtered.append(s);
+        }
+        const QStringList& src = filtered.isEmpty() ? kPool : filtered;
+        chosen = src.at(static_cast<int>(QRandomGenerator::global()->bounded(static_cast<quint32>(src.size()))));
+        m_lastRolledStyle = chosen;
+    }
+
+    emit transitionRequested(m_currentWallpaper, clean, chosen);
 }
 
 void WallpaperService::refresh()
@@ -540,7 +613,7 @@ void WallpaperService::nextRandomWallpaper()
     if (m_wallpapers.isEmpty())
         return;
     if (m_wallpapers.size() == 1) {
-        applyWallpaper(m_wallpapers.first().toMap().value(QStringLiteral("path")).toString());
+        requestWallpaperChange(m_wallpapers.first().toMap().value(QStringLiteral("path")).toString());
         return;
     }
 
@@ -555,5 +628,5 @@ void WallpaperService::nextRandomWallpaper()
         return;
 
     const quint32 idx = QRandomGenerator::global()->bounded(static_cast<quint32>(candidates.size()));
-    applyWallpaper(candidates[idx]);
+    requestWallpaperChange(candidates[idx]);
 }

@@ -975,15 +975,22 @@ void DropShelfService::appendSinglePath(const QString& rawPath)
 
     const QString path = QDir::toNativeSeparators(rawPath.trimmed());
     for (const QVariant& existing : m_items) {
-        if (existing.toMap().value(QStringLiteral("path")).toString().compare(path, Qt::CaseInsensitive) == 0)
+        const QVariantMap m = existing.toMap();
+        if (m.value(QStringLiteral("kind"), QStringLiteral("file")).toString() == QLatin1String("file") &&
+            m.value(QStringLiteral("path")).toString().compare(path, Qt::CaseInsensitive) == 0) {
             return;
+        }
     }
 
     const QFileInfo fi(path);
     QVariantMap entry;
+    entry[QStringLiteral("id")] = QStringLiteral("f_%1").arg(++m_nextId);
+    entry[QStringLiteral("kind")] = QStringLiteral("file");
     entry[QStringLiteral("path")] = path;
+    entry[QStringLiteral("value")] = path;
     entry[QStringLiteral("name")] = fi.fileName().isEmpty() ? path : fi.fileName();
     entry[QStringLiteral("isDir")] = fi.isDir();
+    entry[QStringLiteral("dir")] = fi.isDir();
 
     if (fi.exists() && !fi.isDir()) {
         const qint64 sz = fi.size();
@@ -1029,6 +1036,38 @@ void DropShelfService::addPaths(const QStringList& paths)
         appendSinglePath(p);
     if (m_items.size() != before)
         emit itemsChanged();
+}
+
+void DropShelfService::addText(const QString& text)
+{
+    const QString trimmed = text.trimmed();
+    if (trimmed.isEmpty())
+        return;
+
+    for (const QVariant& existing : m_items) {
+        const QVariantMap m = existing.toMap();
+        if (m.value(QStringLiteral("kind")).toString() == QLatin1String("text") &&
+            m.value(QStringLiteral("value")).toString() == trimmed) {
+            return;
+        }
+    }
+
+    QString firstLine = trimmed.section(QLatin1Char('\n'), 0, 0).simplified();
+    if (firstLine.size() > 60)
+        firstLine = firstLine.left(57) + QStringLiteral("...");
+
+    QVariantMap entry;
+    entry[QStringLiteral("id")] = QStringLiteral("t_%1").arg(++m_nextId);
+    entry[QStringLiteral("kind")] = QStringLiteral("text");
+    entry[QStringLiteral("path")] = trimmed;
+    entry[QStringLiteral("value")] = trimmed;
+    entry[QStringLiteral("name")] = firstLine;
+    entry[QStringLiteral("isDir")] = false;
+    entry[QStringLiteral("dir")] = false;
+    entry[QStringLiteral("sizeText")] = QStringLiteral("Note");
+
+    m_items.prepend(entry);
+    emit itemsChanged();
 }
 
 void DropShelfService::pickFiles()
@@ -1167,27 +1206,72 @@ int DropShelfService::pasteFromClipboard()
         }
     }
 
-    if (paths.isEmpty())
+    if (paths.isEmpty()) {
+        if (const auto* cb = QGuiApplication::clipboard()) {
+            const QString txt = cb->text().trimmed();
+            if (!txt.isEmpty()) {
+                const int before = m_items.size();
+                addText(txt);
+                return m_items.size() - before;
+            }
+        }
         return 0;
+    }
     const int before = m_items.size();
     addPaths(paths);
     return m_items.size() - before;
+}
+
+void DropShelfService::copyItem(int index)
+{
+    if (index < 0 || index >= m_items.size())
+        return;
+    QClipboard* cb = QGuiApplication::clipboard();
+    if (!cb)
+        return;
+    const QVariantMap item = m_items.at(index).toMap();
+    const QString val = item.value(QStringLiteral("value"), item.value(QStringLiteral("path"))).toString();
+    if (val.isEmpty())
+        return;
+    if (item.value(QStringLiteral("kind")).toString() == QLatin1String("text")) {
+        cb->setText(val);
+        return;
+    }
+    auto* md = new QMimeData();
+    md->setUrls({ QUrl::fromLocalFile(val) });
+    md->setText(val);
+    cb->setMimeData(md);
 }
 
 void DropShelfService::openItem(int index)
 {
     if (index < 0 || index >= m_items.size())
         return;
-    const QString path = m_items.at(index).toMap().value(QStringLiteral("path")).toString();
-    if (!path.isEmpty())
-        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    const QVariantMap item = m_items.at(index).toMap();
+    const QString kind = item.value(QStringLiteral("kind"), QStringLiteral("file")).toString();
+    const QString val = item.value(QStringLiteral("value"), item.value(QStringLiteral("path"))).toString();
+    if (val.isEmpty())
+        return;
+    if (kind == QLatin1String("text")) {
+        if (val.startsWith(QStringLiteral("http://"), Qt::CaseInsensitive) ||
+            val.startsWith(QStringLiteral("https://"), Qt::CaseInsensitive)) {
+            QDesktopServices::openUrl(QUrl(val));
+        } else if (auto* cb = QGuiApplication::clipboard()) {
+            cb->setText(val);
+        }
+        return;
+    }
+    QDesktopServices::openUrl(QUrl::fromLocalFile(val));
 }
 
 void DropShelfService::revealItem(int index)
 {
     if (index < 0 || index >= m_items.size())
         return;
-    const QString path = m_items.at(index).toMap().value(QStringLiteral("path")).toString();
+    const QVariantMap item = m_items.at(index).toMap();
+    if (item.value(QStringLiteral("kind"), QStringLiteral("file")).toString() == QLatin1String("text"))
+        return;
+    const QString path = item.value(QStringLiteral("path")).toString();
     if (path.isEmpty())
         return;
     QProcess::startDetached(QStringLiteral("explorer.exe"), { QStringLiteral("/select,"), QDir::toNativeSeparators(path) });
@@ -1195,11 +1279,27 @@ void DropShelfService::revealItem(int index)
 
 void DropShelfService::copyAllPaths()
 {
+    QList<QUrl> fileUrls;
     QStringList list;
-    for (const QVariant& item : m_items)
-        list.append(item.toMap().value(QStringLiteral("path")).toString());
-    if (auto* cb = QGuiApplication::clipboard())
-        cb->setText(list.join(QLatin1Char('\n')));
+    for (const QVariant& itemVar : m_items) {
+        const QVariantMap item = itemVar.toMap();
+        const QString val = item.value(QStringLiteral("value"), item.value(QStringLiteral("path"))).toString();
+        if (val.isEmpty())
+            continue;
+        list.append(val);
+        if (item.value(QStringLiteral("kind"), QStringLiteral("file")).toString() == QLatin1String("file"))
+            fileUrls.append(QUrl::fromLocalFile(val));
+    }
+    if (auto* cb = QGuiApplication::clipboard()) {
+        if (!fileUrls.isEmpty()) {
+            auto* md = new QMimeData();
+            md->setUrls(fileUrls);
+            md->setText(list.join(QLatin1Char('\n')));
+            cb->setMimeData(md);
+        } else if (!list.isEmpty()) {
+            cb->setText(list.join(QLatin1Char('\n')));
+        }
+    }
 }
 
 void DropShelfService::removeIndex(int index)

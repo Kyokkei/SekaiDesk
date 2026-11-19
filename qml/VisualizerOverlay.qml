@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Effects
 import Quickshell
 import SekaiDesk
 
@@ -9,48 +10,64 @@ PanelWindow {
     required property bool fullscreenActive
 
     readonly property var sizeLabels: ["S", "M", "L", "XL"]
-    readonly property var styleOrder: ["sekai", "bars", "ring", "dots", "wave"]
+    readonly property var styleOrder: ["tide", "ribbons", "aurora", "pulse", "scope", "mirror", "ring", "dots", "sekai", "bars", "wave"]
     readonly property var attrPalette: ["#FF5E7E", "#4BC7FF", "#FFE14D", "#C08CFF", "#4AE3B5"]
 
     readonly property int sizeIdx: Math.max(0, Math.min(3, VisualizerService.sizeIndex))
-    readonly property string curStyle: VisualizerService.style || "bars"
+    readonly property string curStyle: VisualizerService.style || "tide"
+    readonly property bool isTideStyle: curStyle === "tide"
+    readonly property bool isShaderStyle: curStyle === "ribbons" || curStyle === "aurora" || curStyle === "pulse"
+        || curStyle === "scope" || curStyle === "mirror" || curStyle === "ring" || curStyle === "dots"
+    readonly property bool isCanvasStyle: !isTideStyle && !isShaderStyle
+    readonly property bool isFrameless: VisualizerService.transparentBg && curStyle !== "sekai"
 
-    readonly property int cardW: {
+    readonly property int presetW: {
         if (curStyle === "ring")
-            return [204, 248, 300, 356][sizeIdx]
-        return [300, 364, 436, 512][sizeIdx]
+            return [220, 270, 330, 400][sizeIdx]
+        if (curStyle === "sekai")
+            return [300, 364, 436, 512][sizeIdx]
+        return [380, 520, 720, 960][sizeIdx]
     }
-    readonly property int cardH: {
+    readonly property int presetH: {
         if (curStyle === "ring")
-            return [216, 260, 312, 368][sizeIdx]
+            return [220, 270, 330, 400][sizeIdx]
         if (curStyle === "sekai")
             return [192, 224, 264, 308][sizeIdx]
-        return [154, 184, 220, 258][sizeIdx]
+        return [140, 180, 220, 270][sizeIdx]
     }
 
-    readonly property int shadowPad: 12
+    property bool resizing: false
+    property int liveW: 0
+    property int liveH: 0
+    property bool winHovered: false
+
+    readonly property int cardW: resizing ? Math.max(160, liveW) : (VisualizerService.customWidth >= 160 ? Math.min(themeHub.screenW, VisualizerService.customWidth) : presetW)
+    readonly property int cardH: resizing ? Math.max(80, liveH) : (VisualizerService.customHeight >= 80 ? Math.min(themeHub.screenH, VisualizerService.customHeight) : presetH)
+
+    readonly property int shadowPad: isFrameless ? 0 : 12
+    readonly property int extraH: isFrameless ? 0 : (shadowPad + 4)
     width: cardW + shadowPad
-    height: cardH + shadowPad + 4
+    height: cardH + extraH
 
     readonly property int defaultX: 28
     readonly property int defaultY: Math.max(48, themeHub.screenH - height - (themeHub.screenW < 1280 ? 148 : 38))
     readonly property int clampedX: {
         const unset = (VisualizerService.posX === -1 && VisualizerService.posY === -1)
         const raw = unset ? defaultX : Math.round(VisualizerService.posX)
-        const minX = themeHub.virtMinX + 8
-        return Math.max(minX, Math.min(Math.max(minX, themeHub.virtMaxX - width - 8), raw))
+        const minX = themeHub.virtMinX
+        return Math.max(minX, Math.min(Math.max(minX, themeHub.virtMaxX - width), raw))
     }
     readonly property int clampedY: {
         const unset = (VisualizerService.posX === -1 && VisualizerService.posY === -1)
         const raw = unset ? defaultY : Math.round(VisualizerService.posY)
         const minY = themeHub.widgetMinYAt(clampedX, raw)
-        return Math.max(minY, Math.min(Math.max(minY, themeHub.virtMaxY - height - 8), raw))
+        return Math.max(minY, Math.min(Math.max(minY, themeHub.virtMaxY - height), raw))
     }
 
     property bool nativeDragging: false
 
-    onClampedXChanged: if (!nativeDragging) x = clampedX
-    onClampedYChanged: if (!nativeDragging) y = clampedY
+    onClampedXChanged: if (!nativeDragging && !resizing) x = clampedX
+    onClampedYChanged: if (!nativeDragging && !resizing) y = clampedY
     Component.onCompleted: {
         x = clampedX
         y = clampedY
@@ -77,18 +94,37 @@ PanelWindow {
         ? []
         : [{ x: 0, y: 0, width: width, height: height }]
 
-    // Gentle demo pulse in Edit Mode when audio is silent
+    readonly property color shaderColor1: {
+        if (VisualizerService.colorMode === 1) return "#8EE3EF"
+        return VisualizerService.colorMode === 2 ? extractedA : themeHub.accentA
+    }
+    readonly property color shaderColor2: {
+        if (VisualizerService.colorMode === 1) return "#A5E6A5"
+        return VisualizerService.colorMode === 2 ? extractedB : themeHub.accentB
+    }
+    readonly property color shaderColor3: {
+        if (VisualizerService.colorMode === 1) return "#FF9ECB"
+        return Qt.lighter(shaderColor2, 1.18)
+    }
+
+    ShaderVisualizerEngine {
+        id: shaderEngine
+        active: visWin.visible && (visWin.isTideStyle || visWin.isShaderStyle)
+        demo: visWin.demoActive
+        sensitivity: VisualizerService.sensitivity
+        raw: VisualizerService.bands
+    }
+
+    // Gentle demo pulse in Edit Mode when audio is silent (Canvas styles only)
     property real demoPhase: 0.0
     readonly property bool demoActive: visible && themeHub.editMode && !VisualizerService.audioActive
     Timer {
         interval: 40
         repeat: true
-        running: visWin.demoActive
+        running: visWin.demoActive && visWin.isCanvasStyle
         onTriggered: {
             visWin.demoPhase = (visWin.demoPhase + 0.16) % (Math.PI * 200)
-            if (visWin.curStyle === "ring")
-                ringCanvas.requestPaint()
-            else if (visWin.curStyle === "wave")
+            if (visWin.curStyle === "wave")
                 waveCanvas.requestPaint()
         }
     }
@@ -122,9 +158,7 @@ PanelWindow {
         function onAccentAChanged() {
             if (!visWin.visible)
                 return
-            if (visWin.curStyle === "ring")
-                ringCanvas.requestPaint()
-            else if (visWin.curStyle === "wave")
+            if (visWin.curStyle === "wave")
                 waveCanvas.requestPaint()
         }
     }
@@ -134,23 +168,17 @@ PanelWindow {
         function onFrameChanged() {
             if (!visWin.visible)
                 return
-            if (visWin.curStyle === "ring")
-                ringCanvas.requestPaint()
-            else if (visWin.curStyle === "wave")
+            if (visWin.curStyle === "wave")
                 waveCanvas.requestPaint()
         }
         function onStyleChanged() {
-            if (visWin.curStyle === "ring")
-                ringCanvas.requestPaint()
-            else if (visWin.curStyle === "wave")
+            if (visWin.curStyle === "wave")
                 waveCanvas.requestPaint()
         }
         function onColorModeChanged() {
             if (!visWin.visible)
                 return
-            if (visWin.curStyle === "ring")
-                ringCanvas.requestPaint()
-            else if (visWin.curStyle === "wave")
+            if (visWin.curStyle === "wave")
                 waveCanvas.requestPaint()
         }
     }
@@ -190,8 +218,8 @@ PanelWindow {
     }
 
     function startDrag() {
-        const minX = themeHub.virtMinX + 8
-        const minY = themeHub.virtMinY + 8
+        const minX = themeHub.virtMinX
+        const minY = themeHub.virtMinY
         const maxW = Math.max(minX + 100, themeHub.virtMaxX - 80)
         const maxH = Math.max(minY + 100, themeHub.virtMaxY - 60)
         nativeDragging = true
@@ -206,19 +234,66 @@ PanelWindow {
         VisualizerService.setPosition(x, y)
     }
 
+    function applyResize(edgeL, edgeR, edgeT, edgeB, startGX, startGY, curGX, curGY, startWinX, startWinY, startW, startH) {
+        const dx = curGX - startGX
+        const dy = curGY - startGY
+        const minX = themeHub.virtMinX
+        const maxRight = themeHub.virtMaxX
+        const minY = themeHub.virtMinY
+        const maxBottom = themeHub.virtMaxY
+
+        let nx = startWinX
+        let nw = startW
+        if (edgeL) {
+            nx = Math.max(minX, Math.min(startWinX + startW - 160, Math.round(startWinX + dx)))
+            nw = startWinX + startW - nx
+        } else if (edgeR) {
+            nw = Math.max(160, Math.min(maxRight - startWinX - shadowPad, Math.round(startW + dx)))
+        }
+
+        let ny = startWinY
+        let nh = startH
+        if (edgeT) {
+            ny = Math.max(minY, Math.min(startWinY + startH - 80, Math.round(startWinY + dy)))
+            nh = startWinY + startH - ny
+        } else if (edgeB) {
+            nh = Math.max(80, Math.min(maxBottom - startWinY - extraH, Math.round(startH + dy)))
+        }
+
+        liveW = nw
+        liveH = nh
+        setPanelGeometry(nx, ny, nw + shadowPad, nh + extraH)
+    }
+
+    function toggleFullWidth() {
+        const targetW = Math.max(160, themeHub.screenW - shadowPad)
+        if (cardW >= targetW - 16) {
+            VisualizerService.setCustomSize(0, 0)
+        } else {
+            const targetH = VisualizerService.customHeight >= 80 ? VisualizerService.customHeight : presetH
+            VisualizerService.setPosition(themeHub.virtMinX, y)
+            VisualizerService.setCustomSize(targetW, targetH)
+        }
+    }
+
     // Main Card Container
     Item {
         id: stage
-        x: 4
-        y: 6
+        x: visWin.isFrameless ? 0 : 4
+        y: visWin.isFrameless ? 0 : 6
         width: visWin.cardW
         height: visWin.cardH
         opacity: visWin.revealP
         scale: 0.90 + 0.10 * visWin.revealP
         transformOrigin: Item.Center
 
-        // Hard SekaiPop Drop Shadow
+        HoverHandler {
+            onHoveredChanged: visWin.winHovered = hovered
+        }
+
+        // Hard SekaiPop Drop Shadow (Card mode only)
         Rectangle {
+            visible: !visWin.isFrameless
             x: 4
             y: 5
             width: parent.width
@@ -227,17 +302,67 @@ PanelWindow {
             color: themeHub.darkInk
         }
 
-        // Card Housing (Ring uses circular housing; others use rounded comic card)
+        // Card Housing (Frameless transparent by default; optional rounded comic Card)
         Rectangle {
             id: cardFace
             anchors.fill: parent
-            radius: visWin.curStyle === "ring" ? Math.round(Math.min(width, height) * 0.5) : 22
-            color: visWin.curStyle === "sekai" ? "#FFFFFF" : "#F6F9FF"
+            radius: visWin.isFrameless ? 0 : (visWin.curStyle === "ring" ? Math.round(Math.min(width, height) * 0.5) : 22)
+            color: visWin.isFrameless
+                ? "transparent"
+                : ((visWin.curStyle === "sekai" || visWin.curStyle === "tide")
+                    ? "#FFFFFF"
+                    : (visWin.isShaderStyle ? "#151828" : "#F6F9FF"))
             border.color: themeHub.darkInk
-            border.width: 3
+            border.width: visWin.isFrameless ? 0 : 3
             clip: true
 
-            // Unlocked desktop drag surface (behind interactive buttons)
+            // Mask texture for rounded Card mode (zero corner overflow)
+            Rectangle {
+                id: cardMaskItem
+                anchors.fill: shaderWrap
+                radius: visWin.isFrameless ? 0 : Math.max(0, cardFace.radius - 3)
+                color: "#FFFFFF"
+                visible: false
+                layer.enabled: !visWin.isFrameless && width > 4 && height > 4
+                layer.smooth: true
+            }
+
+            Item {
+                id: shaderWrap
+                anchors.fill: parent
+                anchors.margins: visWin.isFrameless ? 0 : 3
+                layer.enabled: !visWin.isFrameless && width > 4 && height > 4
+                layer.smooth: true
+                layer.effect: MultiEffect {
+                    maskEnabled: true
+                    maskSource: cardMaskItem
+                }
+
+                // #7 GPU SHADER STYLES ("tide" + 7 SekaiPop .frag.qsb effects)
+                TideVisualizer {
+                    anchors.fill: parent
+                    visible: visWin.isTideStyle
+                    engine: shaderEngine
+                    color1: visWin.shaderColor1
+                    color2: visWin.shaderColor2
+                    color3: visWin.shaderColor3
+                    ink: themeHub.darkInk
+                }
+
+                ShaderVisualizerLayer {
+                    anchors.fill: parent
+                    visible: visWin.isShaderStyle
+                    style: visWin.isShaderStyle ? visWin.curStyle : "aurora"
+                    engine: shaderEngine
+                    color1: visWin.shaderColor1
+                    color2: visWin.shaderColor2
+                    color3: visWin.shaderColor3
+                    ink: themeHub.darkInk
+                    artUrl: MediaService.hasSession ? MediaService.artUrl : ""
+                }
+            }
+
+            // Unlocked desktop drag surface (behind interactive buttons & resize handles)
             MouseArea {
                 anchors.fill: parent
                 z: 0
@@ -528,16 +653,17 @@ PanelWindow {
             }
 
             // =================================================================
-            // STYLE 2: "bars" — 32 Smooth Vertical SekaiPop Comic Bars
+            // STYLE 2: "bars" — Smooth Vertical SekaiPop Comic Bars
             // =================================================================
             Item {
                 anchors.fill: parent
-                anchors.margins: 12
+                anchors.margins: visWin.isFrameless ? 8 : 12
                 visible: visWin.curStyle === "bars"
 
-                // Top Micro Header
+                // Top Micro Header (Card mode only)
                 Row {
                     id: barsHeader
+                    visible: !visWin.isFrameless
                     x: 0
                     y: 0
                     width: parent.width
@@ -576,9 +702,9 @@ PanelWindow {
                 // 32 Bars Area
                 Item {
                     x: 0
-                    y: barsHeader.height + 8
+                    y: visWin.isFrameless ? 0 : (barsHeader.height + 8)
                     width: parent.width
-                    height: Math.max(40, parent.height - barsHeader.height - 8)
+                    height: visWin.isFrameless ? parent.height : Math.max(40, parent.height - barsHeader.height - 8)
 
                     readonly property int barCount: 32
                     readonly property real gap: 3
@@ -596,11 +722,11 @@ PanelWindow {
                             readonly property real val: visWin.bandValue(index)
                             readonly property int barH: Math.max(6, Math.round(height * val))
 
-                            // Dim track slot
+                            // Dim track slot (Card mode only)
                             Rectangle {
                                 anchors.fill: parent
                                 radius: Math.max(2, Math.floor(width * 0.5))
-                                color: "#E4EAF6"
+                                color: visWin.isFrameless ? "transparent" : "#E4EAF6"
                             }
 
                             // Active filled bar
@@ -623,147 +749,11 @@ PanelWindow {
             }
 
             // =================================================================
-            // STYLE 3: "ring" — Radial Equalizer Bars Around Rotating Disc
-            // =================================================================
-            Item {
-                anchors.fill: parent
-                visible: visWin.curStyle === "ring"
-
-                Canvas {
-                    id: ringCanvas
-                    anchors.fill: parent
-                    onPaint: {
-                        const ctx = getContext("2d")
-                        ctx.clearRect(0, 0, width, height)
-                        const cx = width * 0.5
-                        const cy = height * 0.5
-                        const outerMax = Math.min(width, height) * 0.44
-                        const innerR = Math.min(width, height) * 0.25
-                        const count = 32
-                        for (let i = 0; i < count; ++i) {
-                            const angle = (i / count) * Math.PI * 2 - Math.PI * 0.5
-                            const val = visWin.bandValue(i)
-                            const len = 5 + (outerMax - innerR - 4) * val
-                            const x1 = cx + Math.cos(angle) * innerR
-                            const y1 = cy + Math.sin(angle) * innerR
-                            const x2 = cx + Math.cos(angle) * (innerR + len)
-                            const y2 = cy + Math.sin(angle) * (innerR + len)
-                            const col = visWin.bandColor(i, count)
-                            ctx.strokeStyle = Qt.rgba(col.r, col.g, col.b, 1.0)
-                            ctx.lineWidth = Math.max(3, Math.round(width / 54))
-                            ctx.lineCap = "round"
-                            ctx.beginPath()
-                            ctx.moveTo(x1, y1)
-                            ctx.lineTo(x2, y2)
-                            ctx.stroke()
-                        }
-                    }
-                }
-
-                // Rotating Vinyl Disc Center
-                Rectangle {
-                    id: vinylDisc
-                    anchors.centerIn: parent
-                    width: Math.round(Math.min(parent.width, parent.height) * 0.44)
-                    height: width
-                    radius: Math.round(width * 0.5)
-                    color: themeHub.darkInk
-                    border.color: themeHub.accentA
-                    border.width: 3
-
-                    NumberAnimation on rotation {
-                        from: 0
-                        to: 360
-                        duration: 5500
-                        loops: Animation.Infinite
-                        running: visWin.visible && visWin.curStyle === "ring" && (MediaService.isPlaying || visWin.demoActive)
-                    }
-
-                    // Inner vinyl groove ring
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: Math.round(parent.width * 0.72)
-                        height: width
-                        radius: Math.round(width * 0.5)
-                        color: "transparent"
-                        border.color: "#333759"
-                        border.width: 2
-                    }
-
-                    // Center label sticker
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: Math.round(parent.width * 0.46)
-                        height: width
-                        radius: Math.round(width * 0.5)
-                        color: themeHub.accentB
-                        border.color: "#FFFFFF"
-                        border.width: 2
-
-                        Image {
-                            anchors.centerIn: parent
-                            width: Math.round(parent.width * 0.54)
-                            height: width
-                            source: "qrc:/qml/icons/music-note-dark.svg"
-                            sourceSize.width: 32
-                            sourceSize.height: 32
-                        }
-                    }
-                }
-            }
-
-            // =================================================================
-            // STYLE 4: "dots" — 16x8 Segmented LED Matrix
-            // =================================================================
-            Item {
-                anchors.fill: parent
-                anchors.margins: 12
-                visible: visWin.curStyle === "dots"
-
-                readonly property int cols: 16
-                readonly property int rows: 8
-                readonly property real cellW: Math.max(8, (width - (cols - 1) * 4) / cols)
-                readonly property real cellH: Math.max(6, (height - (rows - 1) * 4) / rows)
-
-                Repeater {
-                    model: 16
-                    delegate: Item {
-                        required property int index
-                        readonly property int colIdx: index
-                        readonly property real level: visWin.bandValue(Math.min(31, colIdx * 2))
-                        readonly property int litRows: Math.max(1, Math.round(level * 8))
-
-                        x: colIdx * (parent.cellW + 4)
-                        y: 0
-                        width: parent.cellW
-                        height: parent.height
-
-                        Repeater {
-                            model: 8
-                            delegate: Rectangle {
-                                required property int index
-                                readonly property int rowFromBottom: 7 - index
-                                readonly property bool lit: rowFromBottom < litRows
-                                x: 0
-                                y: index * (parent.parent.cellH + 4)
-                                width: parent.width
-                                height: parent.parent.cellH
-                                radius: 4
-                                color: lit ? visWin.bandColor(colIdx, 16) : "#E2E8F5"
-                                border.color: lit ? themeHub.darkInk : "#CBD5E1"
-                                border.width: lit ? 1 : 0
-                            }
-                        }
-                    }
-                }
-            }
-
-            // =================================================================
             // STYLE 5: "wave" — Mirrored Smooth Canvas Waveform
             // =================================================================
             Item {
                 anchors.fill: parent
-                anchors.margins: 10
+                anchors.margins: visWin.isFrameless ? 4 : 10
                 visible: visWin.curStyle === "wave"
 
                 Canvas {
@@ -814,7 +804,111 @@ PanelWindow {
         }
 
         // =====================================================================
-        // Edit Mode Chrome (Dashed Outline, 4 Corner Diamonds, Tag, Pills, Close)
+        // Subtle Unlocked Hover Outline + Quick SE/E/S Resize Grips
+        // =====================================================================
+        Rectangle {
+            anchors.fill: parent
+            radius: visWin.isFrameless ? 12 : cardFace.radius
+            color: "transparent"
+            border.color: Qt.rgba(themeHub.accentA.r, themeHub.accentA.g, themeHub.accentA.b, 0.72)
+            border.width: 2
+            visible: !themeHub.editMode && !themeHub.widgetsLocked && (visWin.winHovered || visWin.resizing)
+            z: 55
+        }
+
+        // Quick right, bottom & corner resize grips when unlocked
+        Repeater {
+            model: (!themeHub.editMode && !themeHub.widgetsLocked && (visWin.winHovered || visWin.resizing))
+                ? [
+                    { k: "e",  l: false, r: true,  t: false, b: false },
+                    { k: "s",  l: false, r: false, t: false, b: true  },
+                    { k: "se", l: false, r: true,  t: false, b: true  }
+                  ]
+                : []
+            delegate: Item {
+                required property var modelData
+                readonly property bool isSE: modelData.r && modelData.b
+                x: modelData.r ? (parent.width - width) : 14
+                y: modelData.b ? (parent.height - height) : 14
+                width: modelData.r ? 12 : Math.max(12, parent.width - 28)
+                height: modelData.b ? 12 : Math.max(12, parent.height - 28)
+                z: 60
+
+                Rectangle {
+                    visible: isSE
+                    anchors.centerIn: parent
+                    width: 12; height: 12; radius: 6
+                    color: quickGripMa.containsMouse || quickGripMa.pressed ? themeHub.accentB : themeHub.accentA
+                    border.width: 2; border.color: themeHub.darkInk
+                }
+
+                MouseArea {
+                    id: quickGripMa
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    preventStealing: true
+                    cursorShape: isSE ? Qt.SizeFDiagCursor : (modelData.r ? Qt.SizeHorCursor : Qt.SizeVerCursor)
+                    property real startGX: 0
+                    property real startGY: 0
+                    property int startWinX: 0
+                    property int startWinY: 0
+                    property int startW: 380
+                    property int startH: 140
+                    onPressed: mouse => {
+                        visWin.resizing = true
+                        startWinX = visWin.x
+                        startWinY = visWin.y
+                        startW = visWin.cardW
+                        startH = visWin.cardH
+                        visWin.liveW = startW
+                        visWin.liveH = startH
+                        const gp = quickGripMa.mapToItem(null, mouse.x, mouse.y)
+                        startGX = visWin.x + gp.x
+                        startGY = visWin.y + gp.y
+                    }
+                    onPositionChanged: mouse => {
+                        if (!visWin.resizing) return
+                        const gp = quickGripMa.mapToItem(null, mouse.x, mouse.y)
+                        visWin.applyResize(modelData.l, modelData.r, modelData.t, modelData.b,
+                                           startGX, startGY, visWin.x + gp.x, visWin.y + gp.y,
+                                           startWinX, startWinY, startW, startH)
+                    }
+                    onReleased: {
+                        if (!visWin.resizing) return
+                        const fw = visWin.liveW
+                        const fh = visWin.liveH
+                        VisualizerService.setCustomSize(fw, fh)
+                        visWin.resizing = false
+                    }
+                    onCanceled: visWin.resizing = false
+                }
+            }
+        }
+
+        // Live Dimension HUD while resizing
+        Rectangle {
+            visible: visWin.resizing
+            anchors.centerIn: parent
+            width: dimTxt.implicitWidth + 18
+            height: 28
+            radius: 14
+            color: themeHub.darkInk
+            border.width: 2
+            border.color: themeHub.accentA
+            z: 99
+            Text {
+                id: dimTxt
+                anchors.centerIn: parent
+                text: Math.round(visWin.cardW) + " × " + Math.round(visWin.cardH)
+                font.family: "Consolas"
+                font.pixelSize: 12
+                font.weight: Font.Black
+                color: "#FFFFFF"
+            }
+        }
+
+        // =====================================================================
+        // Edit Mode Chrome (Dashed Outline, 8-Way Resize Handles, Tag, Pills)
         // =====================================================================
         Item {
             id: editChrome
@@ -829,10 +923,10 @@ PanelWindow {
 
             Canvas {
                 id: dashBorder
-                x: -3
-                y: -3
-                width: parent.width + 6
-                height: parent.height + 6
+                x: 0
+                y: 0
+                width: parent.width
+                height: parent.height
                 property color accentCol: themeHub.accentA
                 property color inkCol: themeHub.darkInk
                 property bool hovered: editDragMa.containsMouse || editDragMa.pressed
@@ -848,7 +942,7 @@ PanelWindow {
                     const pad = 2
                     const rw = width - pad * 2
                     const rh = height - pad * 2
-                    const r = 20
+                    const r = 18
                     function traceRect() {
                         ctx.beginPath()
                         ctx.moveTo(pad + r, pad)
@@ -876,32 +970,6 @@ PanelWindow {
                 }
             }
 
-            // 4 corner diamond handles
-            Repeater {
-                model: [
-                    { cx: -1, cy: -1 },
-                    { cx: 1, cy: -1 },
-                    { cx: -1, cy: 1 },
-                    { cx: 1, cy: 1 }
-                ]
-                delegate: Rectangle {
-                    required property var modelData
-                    readonly property real tx: modelData.cx < 0 ? 0 : editChrome.width
-                    readonly property real ty: modelData.cy < 0 ? 0 : editChrome.height
-                    x: Math.round(tx - width * 0.5)
-                    y: Math.round(ty - height * 0.5)
-                    width: editDragMa.containsMouse ? 12 : 9
-                    height: width
-                    rotation: 45
-                    radius: 2
-                    color: editDragMa.containsMouse ? themeHub.accentB : themeHub.accentA
-                    border.color: themeHub.darkInk
-                    border.width: 2
-                    antialiasing: true
-                    z: 92
-                }
-            }
-
             // Full-card Edit Drag Shield
             MouseArea {
                 id: editDragMa
@@ -926,10 +994,95 @@ PanelWindow {
                 onCanceled: visWin.finishDrag()
             }
 
-            // Top-left Tag Pill
+            // 8 Interactive Edge & Corner Resize Handles
+            Repeater {
+                model: [
+                    { l: true,  r: false, t: false, b: false, corner: false },
+                    { l: false, r: true,  t: false, b: false, corner: false },
+                    { l: false, r: false, t: true,  b: false, corner: false },
+                    { l: false, r: false, t: false, b: true,  corner: false },
+                    { l: true,  r: false, t: true,  b: false, corner: true  },
+                    { l: false, r: true,  t: true,  b: false, corner: true  },
+                    { l: true,  r: false, t: false, b: true,  corner: true  },
+                    { l: false, r: true,  t: false, b: true,  corner: true  }
+                ]
+                delegate: Item {
+                    required property var modelData
+                    readonly property bool isC: modelData.corner
+                    readonly property int pad: 14
+                    x: modelData.l ? 0 : (modelData.r ? Math.max(0, editChrome.width - (isC ? 18 : 10)) : pad)
+                    y: modelData.t ? 0 : (modelData.b ? Math.max(0, editChrome.height - (isC ? 18 : 10)) : pad)
+                    width: (modelData.l || modelData.r) ? (isC ? 18 : 10) : Math.max(12, editChrome.width - pad * 2)
+                    height: (modelData.t || modelData.b) ? (isC ? 18 : 10) : Math.max(12, editChrome.height - pad * 2)
+                    z: isC ? 94 : 93
+
+                    Rectangle {
+                        visible: isC
+                        anchors.centerIn: parent
+                        width: edgeMa.containsMouse || edgeMa.pressed ? 13 : 10
+                        height: width
+                        rotation: 45
+                        radius: 2
+                        color: edgeMa.containsMouse || edgeMa.pressed ? themeHub.accentB : themeHub.accentA
+                        border.color: themeHub.darkInk
+                        border.width: 2
+                        antialiasing: true
+                    }
+
+                    MouseArea {
+                        id: edgeMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        preventStealing: true
+                        cursorShape: {
+                            if ((modelData.l && modelData.t) || (modelData.r && modelData.b)) return Qt.SizeFDiagCursor
+                            if ((modelData.r && modelData.t) || (modelData.l && modelData.b)) return Qt.SizeBDiagCursor
+                            return (modelData.l || modelData.r) ? Qt.SizeHorCursor : Qt.SizeVerCursor
+                        }
+                        property real startGX: 0
+                        property real startGY: 0
+                        property int startWinX: 0
+                        property int startWinY: 0
+                        property int startW: 380
+                        property int startH: 140
+                        onPressed: mouse => {
+                            visWin.resizing = true
+                            startWinX = visWin.x
+                            startWinY = visWin.y
+                            startW = visWin.cardW
+                            startH = visWin.cardH
+                            visWin.liveW = startW
+                            visWin.liveH = startH
+                            const gp = edgeMa.mapToItem(null, mouse.x, mouse.y)
+                            startGX = visWin.x + gp.x
+                            startGY = visWin.y + gp.y
+                        }
+                        onPositionChanged: mouse => {
+                            if (!visWin.resizing) return
+                            const gp = edgeMa.mapToItem(null, mouse.x, mouse.y)
+                            visWin.applyResize(modelData.l, modelData.r, modelData.t, modelData.b,
+                                               startGX, startGY, visWin.x + gp.x, visWin.y + gp.y,
+                                               startWinX, startWinY, startW, startH)
+                        }
+                        onReleased: {
+                            if (!visWin.resizing) return
+                            const fw = visWin.liveW
+                            const fh = visWin.liveH
+                            if (modelData.l || modelData.t)
+                                VisualizerService.setPosition(visWin.x, visWin.y)
+                            VisualizerService.setCustomSize(fw, fh)
+                            visWin.resizing = false
+                        }
+                        onCanceled: visWin.resizing = false
+                    }
+                }
+            }
+
+            // Top-left Tag Pill (kept inside card bounds so edges never clip)
             Rectangle {
                 x: 8
-                y: -5
+                y: 6
+                visible: editChrome.width >= 260
                 width: visTagTxt.implicitWidth + 14
                 height: 20
                 radius: 10
@@ -947,13 +1100,68 @@ PanelWindow {
                 }
             }
 
-            // Top-right Action Pills: Size, Style, Close
+            // Top-right Action Pills: Clear/Card, Full W, Size, Style, Close
             Row {
                 anchors.right: parent.right
-                anchors.rightMargin: 4
-                y: -5
+                anchors.rightMargin: 8
+                y: 6
                 spacing: 4
                 z: 95
+
+                // Transparent vs Card Toggle Pill
+                Rectangle {
+                    visible: visWin.curStyle !== "sekai"
+                    width: bgModeTxt.implicitWidth + 12
+                    height: 22
+                    radius: 11
+                    color: VisualizerService.transparentBg
+                        ? (bgModeMa.containsMouse ? themeHub.hoverTint : "#FFFFFF")
+                        : themeHub.accentA
+                    border.color: themeHub.darkInk
+                    border.width: 2
+                    Text {
+                        id: bgModeTxt
+                        anchors.centerIn: parent
+                        text: VisualizerService.transparentBg ? "CLEAR" : "CARD"
+                        font.pixelSize: 9
+                        font.weight: Font.Black
+                        color: themeHub.darkInk
+                    }
+                    MouseArea {
+                        id: bgModeMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: VisualizerService.transparentBg = !VisualizerService.transparentBg
+                    }
+                }
+
+                // Full Width Quick Stretch Pill
+                Rectangle {
+                    width: fullWTxt.implicitWidth + 10
+                    height: 22
+                    radius: 11
+                    color: visWin.cardW >= themeHub.screenW - 24
+                        ? themeHub.accentB
+                        : (fullWMa.containsMouse ? themeHub.hoverTint : "#FFFFFF")
+                    border.color: themeHub.darkInk
+                    border.width: 2
+                    Text {
+                        id: fullWTxt
+                        anchors.centerIn: parent
+                        text: "FULL W"
+                        font.pixelSize: 9
+                        font.weight: Font.Black
+                        color: themeHub.darkInk
+                    }
+                    MouseArea {
+                        id: fullWMa
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: visWin.toggleFullWidth()
+                    }
+                }
 
                 // Size Cycle Pill (S/M/L/XL)
                 Rectangle {
@@ -966,8 +1174,10 @@ PanelWindow {
                     Text {
                         id: sizePillTxt
                         anchors.centerIn: parent
-                        text: visWin.sizeLabels[visWin.sizeIdx] || "M"
-                        font.pixelSize: 10
+                        text: (VisualizerService.customWidth >= 160 || VisualizerService.customHeight >= 80)
+                            ? "FIT"
+                            : (visWin.sizeLabels[visWin.sizeIdx] || "M")
+                        font.pixelSize: 9
                         font.weight: Font.Black
                         color: themeHub.darkInk
                     }

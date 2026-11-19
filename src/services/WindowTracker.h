@@ -27,6 +27,15 @@ class WindowTracker : public QObject {
     Q_PROPERTY(int cpuTemp READ cpuTemp NOTIFY statsChanged)
     Q_PROPERTY(int gpuTemp READ gpuTemp NOTIFY statsChanged)
     Q_PROPERTY(QString uptimeText READ uptimeText NOTIFY statsChanged)
+    Q_PROPERTY(double downloadBps READ downloadBps NOTIFY statsChanged)
+    Q_PROPERTY(double uploadBps READ uploadBps NOTIFY statsChanged)
+    Q_PROPERTY(bool hasBattery READ hasBattery NOTIFY statsChanged)
+    Q_PROPERTY(int batteryPercent READ batteryPercent NOTIFY statsChanged)
+    Q_PROPERTY(bool batteryCharging READ batteryCharging NOTIFY statsChanged)
+    Q_PROPERTY(QString batteryTimeText READ batteryTimeText NOTIFY statsChanged)
+    Q_PROPERTY(QVariantList cpuHistory READ cpuHistory NOTIFY statsChanged)
+    Q_PROPERTY(QVariantList ramHistory READ ramHistory NOTIFY statsChanged)
+    Q_PROPERTY(QString ramDetailText READ ramDetailText NOTIFY statsChanged)
     Q_PROPERTY(QString machineName READ machineName CONSTANT)
     Q_PROPERTY(QString userName READ userName CONSTANT)
 
@@ -49,6 +58,15 @@ public:
     int cpuTemp() const { return m_cpuTemp; }
     int gpuTemp() const { return m_gpuTemp; }
     QString uptimeText() const { return m_uptimeText; }
+    double downloadBps() const { return m_downloadBps; }
+    double uploadBps() const { return m_uploadBps; }
+    bool hasBattery() const { return m_hasBattery; }
+    int batteryPercent() const { return m_batteryPercent; }
+    bool batteryCharging() const { return m_batteryCharging; }
+    QString batteryTimeText() const { return m_batteryTimeText; }
+    QVariantList cpuHistory() const { return m_cpuHistory; }
+    QVariantList ramHistory() const { return m_ramHistory; }
+    QString ramDetailText() const { return m_ramDetailText; }
     QString machineName() const { return m_machineName; }
     QString userName() const { return m_userName; }
 
@@ -60,6 +78,11 @@ public:
     Q_INVOKABLE bool minimizeHwnd(qulonglong hwnd);
     Q_INVOKABLE bool closeHwnd(qulonglong hwnd);
     Q_INVOKABLE bool openSpecialFolder(const QString& kind);
+    Q_INVOKABLE QString resolveFolderPath(const QString& kindOrPath) const;
+    Q_INVOKABLE QVariantList listFolderFiles(const QString& kindOrPath, int maxItems = 48) const;
+    Q_INVOKABLE bool openPath(const QString& path) const;
+    Q_INVOKABLE void openTaskManager() const;
+    Q_INVOKABLE QVariantList topProcesses(int limit = 6) const;
     Q_INVOKABLE void lockWorkstation();
     Q_INVOKABLE void sleepComputer();
     Q_INVOKABLE void takeScreenshot();
@@ -107,6 +130,19 @@ private:
     int m_cpuTemp = -1;
     int m_gpuTemp = -1;
     QString m_uptimeText = QStringLiteral("0m");
+    double m_downloadBps = 0.0;
+    double m_uploadBps = 0.0;
+    quint64 m_prevRxBytes = 0;
+    quint64 m_prevTxBytes = 0;
+    qint64 m_prevNetMs = 0;
+    bool m_hasBattery = false;
+    int m_batteryPercent = 100;
+    bool m_batteryCharging = false;
+    QString m_batteryTimeText;
+    QString m_ramDetailText;
+    QVariantList m_cpuHistory;
+    QVariantList m_ramHistory;
+    int m_historyTick = 0;
     QString m_machineName;
     QString m_userName;
     struct CpuSample {

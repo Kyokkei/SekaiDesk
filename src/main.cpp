@@ -8,6 +8,7 @@
 //   4. Load qrc:/qml/Shell.qml (smoke test; replaced by the full shell in
 //      later phases).
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -21,6 +22,7 @@
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QUrl>
+#include <cstring>
 
 #ifdef Q_OS_WIN
 #ifndef WIN32_LEAN_AND_MEAN
@@ -50,6 +52,7 @@
 #include "services/NotificationService.h"
 #include "services/VisualizerService.h"
 #include "services/WallpaperService.h"
+#include "services/TaskbarManager.h"
 
 namespace {
 QFile* g_logFile = nullptr;
@@ -73,11 +76,32 @@ void sekaiMessageHandler(QtMsgType type, const QMessageLogContext&, const QStrin
        << "[" << tag << "] " << msg << "\n";
     ts.flush();
 }
+
+#ifdef Q_OS_WIN
+LONG WINAPI sekaiUnhandledExceptionFilter(EXCEPTION_POINTERS* /*info*/) noexcept
+{
+    TaskbarManager::emergencyRestoreAllNoAlloc();
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif
 }
 
 int main(int argc, char* argv[])
 {
+    for (int i = 1; i < argc; ++i) {
+        if (argv[i] && std::strcmp(argv[i], "--restore") == 0) {
+            QCoreApplication restoreApp(argc, argv);
+            QCoreApplication::setOrganizationName(QStringLiteral("SekaiDesk"));
+            QCoreApplication::setApplicationName(QStringLiteral("SekaiDesk"));
+            SettingsStore restoreSettings;
+            restoreSettings.ensureLoaded();
+            TaskbarManager::emergencyRestoreAll(&restoreSettings);
+            return 0;
+        }
+    }
+
 #ifdef Q_OS_WIN
+    SetUnhandledExceptionFilter(sekaiUnhandledExceptionFilter);
     std::wstring instanceTag;
     for (int i = 1; i < argc; ++i) {
         if (!argv[i])
@@ -165,6 +189,15 @@ int main(int argc, char* argv[])
     static NotificationService notificationService;
     static VisualizerService visualizerService(&settings, &mediaService);
     static WallpaperService wallpaperService(&settings);
+    static TaskbarManager taskbarManager(&settings);
+    systemControl.setBeforeQuitCallback([]() {
+        taskbarManager.prepareForExit();
+    });
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
+        taskbarManager.prepareForExit();
+    });
+    QObject::connect(&systemControl, &SystemControlService::taskbarToggleRequested,
+                     &taskbarManager, &TaskbarManager::toggleTemporary);
 
     // --- Quickshell compat registrations -----------------------------------
     // Unversioned imports (`import Quickshell`) resolve to the highest
@@ -217,6 +250,8 @@ int main(int argc, char* argv[])
                                  "VisualizerService", &visualizerService);
     qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
                                  "WallpaperService", &wallpaperService);
+    qmlRegisterSingletonInstance("SekaiDesk", 1, 0,
+                                 "TaskbarManager", &taskbarManager);
     qmlRegisterType<DwmThumbnailItem>("SekaiDesk", 1, 0,
                                       "DwmThumbnail");
 

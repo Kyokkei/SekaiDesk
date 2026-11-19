@@ -1,15 +1,32 @@
 #include "WindowTracker.h"
 
+#include <QDateTime>
+#include <QDir>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QHash>
 #include <QScreen>
+#include <QStandardPaths>
+#include <QUrl>
 
 #ifdef Q_OS_WIN
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#if !defined(_WIN32_WINNT) || (_WIN32_WINNT < 0x0600)
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#include <winsock2.h>
+#include <ws2ipdef.h>
 #include <windows.h>
+#include <iphlpapi.h>
+#include <netioapi.h>
 #include <dwmapi.h>
 #include <pdh.h>
 #include <psapi.h>
 #include <shellapi.h>
+#include <tlhelp32.h>
 #endif
 
 namespace {
@@ -289,10 +306,16 @@ void WindowTracker::updateSystemStats()
     }
 
     int nextRam = m_ramUsage;
+    QString nextRamDetail = m_ramDetailText;
     MEMORYSTATUSEX ms{};
     ms.dwLength = sizeof(ms);
     if (GlobalMemoryStatusEx(&ms)) {
         nextRam = static_cast<int>(ms.dwMemoryLoad);
+        const double totalGb = static_cast<double>(ms.ullTotalPhys) / (1024.0 * 1024.0 * 1024.0);
+        const double usedGb = static_cast<double>(ms.ullTotalPhys - ms.ullAvailPhys) / (1024.0 * 1024.0 * 1024.0);
+        nextRamDetail = QStringLiteral("%1 / %2 GB")
+            .arg(QString::number(usedGb, 'f', 1))
+            .arg(QString::number(totalGb, 'f', 1));
     }
 
     static auto queryCpuTempC = []() -> int {
@@ -467,14 +490,116 @@ void WindowTracker::updateSystemStats()
     else
         nextUptime = QStringLiteral("%1m").arg(mins);
 
-    if (nextCpu != m_cpuUsage || nextRam != m_ramUsage
+    double nextDownBps = m_downloadBps;
+    double nextUpBps = m_uploadBps;
+    const qint64 nowNetMs = QDateTime::currentMSecsSinceEpoch();
+    if (m_prevNetMs == 0 || (nowNetMs - m_prevNetMs) >= 700) {
+        PMIB_IF_TABLE2 table = nullptr;
+        if (GetIfTable2(&table) == NO_ERROR && table) {
+            quint64 rxTotal = 0;
+            quint64 txTotal = 0;
+            for (ULONG i = 0; i < table->NumEntries; ++i) {
+                const MIB_IF_ROW2& row = table->Table[i];
+                if (row.OperStatus != IfOperStatusUp)
+                    continue;
+                if (row.Type == IF_TYPE_SOFTWARE_LOOPBACK || row.Type == IF_TYPE_TUNNEL)
+                    continue;
+                if (row.InterfaceAndOperStatusFlags.HardwareInterface ||
+                    row.Type == IF_TYPE_ETHERNET_CSMACD ||
+                    row.Type == IF_TYPE_IEEE80211) {
+                    rxTotal += row.InOctets;
+                    txTotal += row.OutOctets;
+                }
+            }
+            FreeMibTable(table);
+
+            if (m_prevNetMs > 0 && nowNetMs > m_prevNetMs &&
+                rxTotal >= m_prevRxBytes && txTotal >= m_prevTxBytes) {
+                const double dt = static_cast<double>(nowNetMs - m_prevNetMs) / 1000.0;
+                const double rawDown = static_cast<double>(rxTotal - m_prevRxBytes) / dt;
+                const double rawUp = static_cast<double>(txTotal - m_prevTxBytes) / dt;
+                nextDownBps = (rawDown < 10.0 && m_downloadBps < 50.0)
+                    ? rawDown
+                    : (0.45 * rawDown + 0.55 * m_downloadBps);
+                nextUpBps = (rawUp < 10.0 && m_uploadBps < 50.0)
+                    ? rawUp
+                    : (0.45 * rawUp + 0.55 * m_uploadBps);
+            }
+            m_prevRxBytes = rxTotal;
+            m_prevTxBytes = txTotal;
+            m_prevNetMs = nowNetMs;
+        }
+    }
+
+    bool nextHasBattery = m_hasBattery;
+    int nextBatteryPct = m_batteryPercent;
+    bool nextBatteryCharging = m_batteryCharging;
+    QString nextBatteryTime = m_batteryTimeText;
+    SYSTEM_POWER_STATUS sps{};
+    if (GetSystemPowerStatus(&sps)) {
+        const bool present = ((sps.BatteryFlag & 128) == 0)
+            && (sps.BatteryFlag != 255)
+            && (sps.BatteryLifePercent <= 100);
+        nextHasBattery = present;
+        if (present) {
+            nextBatteryPct = qBound(0, static_cast<int>(sps.BatteryLifePercent), 100);
+            nextBatteryCharging = (sps.ACLineStatus == 1) || ((sps.BatteryFlag & 8) != 0);
+            if (nextBatteryCharging) {
+                nextBatteryTime = (nextBatteryPct >= 99)
+                    ? QStringLiteral("Fully Charged")
+                    : QStringLiteral("Plugged in (Charging)");
+            } else if (sps.BatteryLifeTime != 0xFFFFFFFF && sps.BatteryLifeTime > 0) {
+                const int mins = static_cast<int>(sps.BatteryLifeTime / 60);
+                const int h = mins / 60;
+                const int m = mins % 60;
+                nextBatteryTime = h > 0
+                    ? QStringLiteral("%1h %2m remaining").arg(h).arg(m)
+                    : QStringLiteral("%1m remaining").arg(qMax(1, m));
+            } else {
+                nextBatteryTime = QStringLiteral("On Battery");
+            }
+        } else {
+            nextBatteryPct = 100;
+            nextBatteryCharging = false;
+            nextBatteryTime.clear();
+        }
+    }
+
+    bool historyUpdated = false;
+    ++m_historyTick;
+    if (m_cpuHistory.isEmpty() || (m_historyTick % 3) == 0) {
+        m_cpuHistory.append(nextCpu);
+        if (m_cpuHistory.size() > 30)
+            m_cpuHistory.removeFirst();
+        m_ramHistory.append(nextRam);
+        if (m_ramHistory.size() > 30)
+            m_ramHistory.removeFirst();
+        historyUpdated = true;
+    }
+
+    if (historyUpdated
+        || nextCpu != m_cpuUsage || nextRam != m_ramUsage
+        || nextRamDetail != m_ramDetailText
         || nextCpuTemp != m_cpuTemp || nextGpuTemp != m_gpuTemp
-        || nextUptime != m_uptimeText) {
+        || nextUptime != m_uptimeText
+        || nextHasBattery != m_hasBattery
+        || nextBatteryPct != m_batteryPercent
+        || nextBatteryCharging != m_batteryCharging
+        || nextBatteryTime != m_batteryTimeText
+        || qRound(nextDownBps) != qRound(m_downloadBps)
+        || qRound(nextUpBps) != qRound(m_uploadBps)) {
         m_cpuUsage = nextCpu;
         m_ramUsage = nextRam;
+        m_ramDetailText = nextRamDetail;
         m_cpuTemp = nextCpuTemp;
         m_gpuTemp = nextGpuTemp;
         m_uptimeText = nextUptime;
+        m_hasBattery = nextHasBattery;
+        m_batteryPercent = nextBatteryPct;
+        m_batteryCharging = nextBatteryCharging;
+        m_batteryTimeText = nextBatteryTime;
+        m_downloadBps = nextDownBps;
+        m_uploadBps = nextUpBps;
         emit statsChanged();
     }
 #endif
@@ -834,4 +959,180 @@ void WindowTracker::takeScreenshot()
 #ifdef Q_OS_WIN
     ShellExecuteW(nullptr, L"open", L"ms-screenclip:", nullptr, nullptr, SW_SHOWNORMAL);
 #endif
+}
+
+QString WindowTracker::resolveFolderPath(const QString& kindOrPath) const
+{
+    const QString raw = kindOrPath.trimmed();
+    const QString low = raw.toLower();
+    if (low.isEmpty() || low == QStringLiteral("downloads")) {
+        QString p = QStandardPaths::writableLocation(QStandardPaths::DownloadLocation);
+        if (p.isEmpty())
+            p = QDir::homePath() + QStringLiteral("/Downloads");
+        return QDir::cleanPath(p);
+    }
+    if (low == QStringLiteral("desktop")) {
+        QString p = QStandardPaths::writableLocation(QStandardPaths::DesktopLocation);
+        if (p.isEmpty())
+            p = QDir::homePath() + QStringLiteral("/Desktop");
+        return QDir::cleanPath(p);
+    }
+    if (low == QStringLiteral("documents")) {
+        QString p = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+        if (p.isEmpty())
+            p = QDir::homePath() + QStringLiteral("/Documents");
+        return QDir::cleanPath(p);
+    }
+    if (low == QStringLiteral("pictures")) {
+        QString p = QStandardPaths::writableLocation(QStandardPaths::PicturesLocation);
+        if (p.isEmpty())
+            p = QDir::homePath() + QStringLiteral("/Pictures");
+        return QDir::cleanPath(p);
+    }
+    return QDir::cleanPath(QDir::fromNativeSeparators(raw));
+}
+
+QVariantList WindowTracker::listFolderFiles(const QString& kindOrPath, int maxItems) const
+{
+    QVariantList out;
+    const QString folder = resolveFolderPath(kindOrPath);
+    if (folder.isEmpty() || !QFileInfo::exists(folder))
+        return out;
+
+    const QDir dir(folder);
+    QFileInfoList entries = dir.entryInfoList(
+        QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::Readable,
+        QDir::DirsFirst | QDir::Time);
+
+    auto formatSize = [](qint64 bytes) -> QString {
+        if (bytes < 1024)
+            return QStringLiteral("%1 B").arg(bytes);
+        if (bytes < 1024 * 1024)
+            return QStringLiteral("%1 KB").arg(qMax<qint64>(1, bytes / 1024));
+        if (bytes < 1024LL * 1024LL * 1024LL)
+            return QStringLiteral("%1 MB").arg(QString::number(static_cast<double>(bytes) / (1024.0 * 1024.0), 'f', 1));
+        return QStringLiteral("%1 GB").arg(QString::number(static_cast<double>(bytes) / (1024.0 * 1024.0 * 1024.0), 'f', 2));
+    };
+
+    const int cap = qBound(1, maxItems, 120);
+    for (const QFileInfo& fi : entries) {
+        if (out.size() >= cap)
+            break;
+        const bool isDir = fi.isDir();
+        const QString ext = fi.suffix().toLower();
+        const bool isImg = !isDir && (ext == QStringLiteral("png") || ext == QStringLiteral("jpg")
+            || ext == QStringLiteral("jpeg") || ext == QStringLiteral("webp")
+            || ext == QStringLiteral("bmp") || ext == QStringLiteral("gif"));
+        const QString cleanPath = QDir::cleanPath(fi.absoluteFilePath());
+        QVariantMap item;
+        item.insert(QStringLiteral("name"), fi.fileName());
+        item.insert(QStringLiteral("path"), cleanPath);
+        item.insert(QStringLiteral("fileUrl"), QUrl::fromLocalFile(cleanPath).toString());
+        item.insert(QStringLiteral("isDir"), isDir);
+        item.insert(QStringLiteral("ext"), isDir ? QStringLiteral("DIR") : (ext.isEmpty() ? QStringLiteral("FILE") : ext.toUpper()));
+        item.insert(QStringLiteral("isImage"), isImg);
+        item.insert(QStringLiteral("sizeText"), isDir ? QStringLiteral("Folder") : formatSize(fi.size()));
+        item.insert(QStringLiteral("modifiedText"), fi.lastModified().toString(QStringLiteral("MM/dd HH:mm")));
+        out.append(item);
+    }
+    return out;
+}
+
+bool WindowTracker::openPath(const QString& path) const
+{
+#ifdef Q_OS_WIN
+    QString clean = path.trimmed();
+    if (clean.startsWith(QStringLiteral("file://"), Qt::CaseInsensitive)) {
+        const QUrl u(clean);
+        if (u.isLocalFile())
+            clean = u.toLocalFile();
+    }
+    clean = QDir::toNativeSeparators(clean);
+    if (clean.isEmpty())
+        return false;
+    const HINSTANCE res = ShellExecuteW(
+        nullptr, L"open", reinterpret_cast<const wchar_t*>(clean.utf16()),
+        nullptr, nullptr, SW_SHOWNORMAL);
+    return reinterpret_cast<qintptr>(res) > 32;
+#else
+    Q_UNUSED(path);
+    return false;
+#endif
+}
+
+void WindowTracker::openTaskManager() const
+{
+#ifdef Q_OS_WIN
+    ShellExecuteW(nullptr, L"open", L"taskmgr.exe", nullptr, nullptr, SW_SHOWNORMAL);
+#endif
+}
+
+QVariantList WindowTracker::topProcesses(int limit) const
+{
+    QVariantList out;
+#ifdef Q_OS_WIN
+    const int cap = qBound(1, limit, 16);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE)
+        return out;
+
+    struct ProcAgg {
+        QString name;
+        quint64 bytes = 0;
+        int instances = 0;
+        DWORD samplePid = 0;
+    };
+    QHash<QString, ProcAgg> agg;
+
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(snap, &pe)) {
+        do {
+            if (pe.th32ProcessID <= 4)
+                continue;
+            HANDLE proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, FALSE, pe.th32ProcessID);
+            if (!proc)
+                proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+            if (!proc)
+                continue;
+            PROCESS_MEMORY_COUNTERS pmc{};
+            pmc.cb = sizeof(pmc);
+            if (GetProcessMemoryInfo(proc, &pmc, sizeof(pmc))) {
+                const QString rawName = QString::fromWCharArray(pe.szExeFile);
+                const QString key = rawName.toLower();
+                ProcAgg& entry = agg[key];
+                if (entry.name.isEmpty()) {
+                    entry.name = rawName;
+                    entry.samplePid = pe.th32ProcessID;
+                }
+                entry.bytes += static_cast<quint64>(pmc.WorkingSetSize);
+                entry.instances += 1;
+            }
+            CloseHandle(proc);
+        } while (Process32NextW(snap, &pe));
+    }
+    CloseHandle(snap);
+
+    QList<ProcAgg> list = agg.values();
+    std::sort(list.begin(), list.end(), [](const ProcAgg& a, const ProcAgg& b) {
+        return a.bytes > b.bytes;
+    });
+
+    for (int i = 0; i < list.size() && i < cap; ++i) {
+        const ProcAgg& p = list.at(i);
+        const double mb = static_cast<double>(p.bytes) / (1024.0 * 1024.0);
+        QString disp = p.name;
+        if (disp.endsWith(QStringLiteral(".exe"), Qt::CaseInsensitive))
+            disp.chop(4);
+        QVariantMap m;
+        m.insert(QStringLiteral("name"), disp);
+        m.insert(QStringLiteral("instances"), p.instances);
+        m.insert(QStringLiteral("pid"), static_cast<qulonglong>(p.samplePid));
+        m.insert(QStringLiteral("ramMb"), qRound(mb));
+        out.append(m);
+    }
+#else
+    Q_UNUSED(limit);
+#endif
+    return out;
 }
