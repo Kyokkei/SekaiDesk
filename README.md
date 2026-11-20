@@ -1,8 +1,8 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="SekaiDesk — Project Sekai Pop-Comic Desktop Shell for Windows 10 & Windows 11" width="90%">
+# ✨ SekaiDesk
 
-<br><br>
+**Project Sekai Pop-Comic Desktop Shell for Windows 10 & Windows 11**
 
 [Showcase](#showcase) &nbsp;|&nbsp; [Features](#features) &nbsp;|&nbsp; [Requirements](#requirements) &nbsp;|&nbsp; [Installation](#installation) &nbsp;|&nbsp; [Keybinds](#keybinds) &nbsp;|&nbsp; [Credits](#credits)
 
