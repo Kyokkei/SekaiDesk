@@ -1201,7 +1201,7 @@ void PanelWindow::updateMask()
         }
     }
 
-    if (m_blurBehind && next.isEmpty()) {
+    if (m_blurBehind && !s_globalHibernated && next.isEmpty()) {
         applyBlurBehind();
         return;
     }
@@ -1340,7 +1340,8 @@ void PanelWindow::applyBlurBehind()
         WindowCompositionAttribData data{ 19, &policy, sizeof(policy) };
         fnSetWCA(hwnd, &data);
         m_hasAppliedMask = false;
-        updateMask();
+        if (!s_globalHibernated)
+            updateMask();
     }
 #endif
 }

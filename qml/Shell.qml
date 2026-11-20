@@ -9876,9 +9876,6 @@ PanelWindow {
     PanelWindow {
         id: notifPeekWindow
         readonly property bool quietNow: GameModeService.active || (themeHub.notifyQuietFullscreen && topBarWindow.fullscreenActive)
-        readonly property real dockRightEdge: dockWindow.x > 0
-                                              ? (dockWindow.x + dockWindow.width)
-                                              : ((themeHub.screenW + dockWindow.width) * 0.5)
         // Phone mode is now handled directly by the real 2.5D phone stage in quickPanelWindow!
         readonly property bool usePopupMode: true
 
