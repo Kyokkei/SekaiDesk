@@ -951,12 +951,14 @@ PanelWindow::PanelWindow(QWindow* parent)
     connect(this, &QWindow::heightChanged, this, &PanelWindow::recompute);
     connect(this, &QWindow::visibleChanged, this, [this](bool vis) {
         if (vis) {
+            m_hasAppliedMask = false;
             recomputeGeometry();
             applyClickThrough();
             updateMask();
             applyBlurBehind();
             applyDesktopLayer();
             applyFileDrops();
+            update();
 #ifdef Q_OS_WIN
             if (!m_desktopLayer && handle()) {
                 HWND hwnd = reinterpret_cast<HWND>(winId());
@@ -974,6 +976,22 @@ PanelWindow::PanelWindow(QWindow* parent)
                 if (!s_globalHibernated)
                     m_fsGuardTimer.start();
             }
+            const QPointer<PanelWindow> safeThis(this);
+            QTimer::singleShot(45, this, [safeThis]() {
+                if (!safeThis || !safeThis->isVisible())
+                    return;
+                safeThis->m_hasAppliedMask = false;
+                safeThis->updateMask();
+                safeThis->applyBlurBehind();
+                safeThis->update();
+            });
+            QTimer::singleShot(140, this, [safeThis]() {
+                if (!safeThis || !safeThis->isVisible())
+                    return;
+                safeThis->updateMask();
+                safeThis->applyBlurBehind();
+                safeThis->update();
+            });
         } else {
 #ifdef Q_OS_WIN
             if (handle())
@@ -1322,6 +1340,7 @@ void PanelWindow::applyBlurBehind()
         WindowCompositionAttribData data{ 19, &policy, sizeof(policy) };
         fnSetWCA(hwnd, &data);
         m_hasAppliedMask = false;
+        updateMask();
     }
 #endif
 }
@@ -1354,15 +1373,27 @@ void PanelWindow::setGlobalHibernated(bool hibernated)
         if (s_showDesktopWatchTimer && !s_desktopWindows.isEmpty())
             s_showDesktopWatchTimer->start();
 
-        for (PanelWindow* p : std::as_const(s_allPanels)) {
-            if (!p || !p->isVisible())
-                continue;
-            p->applyBlurBehind();
-            if (!p->m_desktopLayer) {
-                p->verifyFullscreenState();
-                if (!p->m_fsGuardTimer.isActive())
-                    p->m_fsGuardTimer.start();
+        auto wakeAllVisiblePanels = []() {
+            if (s_globalHibernated)
+                return;
+            for (PanelWindow* p : std::as_const(s_allPanels)) {
+                if (!p || !p->isVisible())
+                    continue;
+                p->m_hasAppliedMask = false;
+                p->updateMask();
+                p->applyBlurBehind();
+                p->update();
+                if (!p->m_desktopLayer) {
+                    p->verifyFullscreenState();
+                    if (!p->m_fsGuardTimer.isActive())
+                        p->m_fsGuardTimer.start();
+                }
             }
+        };
+        wakeAllVisiblePanels();
+        if (auto* app = QCoreApplication::instance()) {
+            QTimer::singleShot(30, app, wakeAllVisiblePanels);
+            QTimer::singleShot(120, app, wakeAllVisiblePanels);
         }
     }
 #endif
@@ -1379,6 +1410,8 @@ void PanelWindow::scheduleHiddenResourceRelease()
             return;
         for (QWindow* w : QGuiApplication::topLevelWindows()) {
             if (auto* qw = qobject_cast<QQuickWindow*>(w)) {
+                if (qobject_cast<PanelWindow*>(qw))
+                    continue;
                 if (!qw->isVisible())
                     qw->releaseResources();
             }

@@ -91,7 +91,9 @@ LONG WINAPI sekaiUnhandledExceptionFilter(EXCEPTION_POINTERS* /*info*/) noexcept
 int main(int argc, char* argv[])
 {
     for (int i = 1; i < argc; ++i) {
-        if (argv[i] && std::strcmp(argv[i], "--restore") == 0) {
+        if (!argv[i])
+            continue;
+        if (std::strcmp(argv[i], "--restore") == 0) {
             QCoreApplication restoreApp(argc, argv);
             QCoreApplication::setOrganizationName(QStringLiteral("SekaiDesk"));
             QCoreApplication::setApplicationName(QStringLiteral("SekaiDesk"));
@@ -99,6 +101,18 @@ int main(int argc, char* argv[])
             restoreSettings.ensureLoaded();
             TaskbarManager::emergencyRestoreAll(&restoreSettings);
             return 0;
+        }
+        if (std::strcmp(argv[i], "--register-startup") == 0) {
+            QCoreApplication startupApp(argc, argv);
+            QCoreApplication::setOrganizationName(QStringLiteral("SekaiDesk"));
+            QCoreApplication::setApplicationName(QStringLiteral("SekaiDesk"));
+            return SystemControlService::registerStartupForCurrentExe() ? 0 : 1;
+        }
+        if (std::strcmp(argv[i], "--unregister-startup") == 0) {
+            QCoreApplication startupApp(argc, argv);
+            QCoreApplication::setOrganizationName(QStringLiteral("SekaiDesk"));
+            QCoreApplication::setApplicationName(QStringLiteral("SekaiDesk"));
+            return SystemControlService::unregisterStartupForCurrentExe() ? 0 : 1;
         }
     }
 

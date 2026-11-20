@@ -79,6 +79,8 @@ public:
     Q_INVOKABLE void hideStockOsdIfActive();
     Q_INVOKABLE void setLaunchAtStartup(bool on);
     Q_INVOKABLE void toggleLaunchAtStartup();
+    static bool registerStartupForCurrentExe();
+    static bool unregisterStartupForCurrentExe();
     Q_INVOKABLE void quitApp();
     void setBeforeQuitCallback(std::function<void()> cb);
 

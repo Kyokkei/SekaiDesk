@@ -29,7 +29,7 @@ ShowUninstDetails show
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 
-!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT "Launch ${APP_NAME} now"
 !define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAppFromInstaller"
 !insertmacro MUI_PAGE_FINISH
@@ -41,7 +41,9 @@ ShowUninstDetails show
 
 Function LaunchAppFromInstaller
     SetOutPath "$INSTDIR"
-    Exec '"$INSTDIR\${APP_EXE}"'
+    ExecShell "" "$INSTDIR\${APP_EXE}" "" SW_SHOWNORMAL
+    IfErrors 0 +2
+        Exec '"$INSTDIR\${APP_EXE}"'
 FunctionEnd
 
 Section "SekaiDesk" SecMain
@@ -58,6 +60,11 @@ Section "SekaiDesk" SecMain
 
     ; Ensure native Windows taskbar is restored cleanly after force-stopping an old instance
     nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --restore'
+    Pop $0
+    Pop $1
+
+    ; Clear previous startup entry first; SecAutostart below re-registers it if checked
+    nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --unregister-startup'
     Pop $0
     Pop $1
 
@@ -86,7 +93,10 @@ Section "SekaiDesk" SecMain
 SectionEnd
 
 Section "Start with Windows" SecAutostart
-    WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}" '"$INSTDIR\${APP_EXE}"'
+    SetOutPath "$INSTDIR"
+    nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --register-startup'
+    Pop $0
+    Pop $1
 SectionEnd
 
 Section "Uninstall"
@@ -98,8 +108,14 @@ Section "Uninstall"
         nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --restore'
         Pop $0
         Pop $1
+        nsExec::ExecToStack '"$INSTDIR\${APP_EXE}" --unregister-startup'
+        Pop $0
+        Pop $1
     done_uninst_restore:
 
+    nsExec::ExecToStack 'schtasks /Delete /TN "${APP_NAME}" /F'
+    Pop $0
+    Pop $1
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${APP_NAME}"
     Delete "$DESKTOP\${APP_NAME}.lnk"
     Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"

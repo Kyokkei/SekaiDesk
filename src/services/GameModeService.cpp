@@ -96,13 +96,76 @@ QString queryProcessExeNameWin(DWORD pid)
     return out;
 }
 
+bool isSystemOverlayOrShellExe(const QString& lowerExe)
+{
+    if (lowerExe.isEmpty())
+        return false;
+    static const QSet<QString> kSystemExes = {
+        QStringLiteral("explorer.exe"),
+        QStringLiteral("dwm.exe"),
+        QStringLiteral("sekaidesk.exe"),
+        QStringLiteral("screenclippinghost.exe"),
+        QStringLiteral("snippingtool.exe"),
+        QStringLiteral("snipandsketch.exe"),
+        QStringLiteral("textinputhost.exe"),
+        QStringLiteral("pickerhost.exe"),
+        QStringLiteral("shellexperiencehost.exe"),
+        QStringLiteral("startmenuexperiencehost.exe"),
+        QStringLiteral("searchhost.exe"),
+        QStringLiteral("searchapp.exe"),
+        QStringLiteral("searchui.exe"),
+        QStringLiteral("lockapp.exe"),
+        QStringLiteral("applicationframehost.exe"),
+        QStringLiteral("credentialuibroker.exe"),
+        QStringLiteral("credihost.exe"),
+        QStringLiteral("consent.exe"),
+        QStringLiteral("logonui.exe"),
+        QStringLiteral("gamebar.exe"),
+        QStringLiteral("gamebarftserver.exe"),
+        QStringLiteral("wallpaper64.exe"),
+        QStringLiteral("wallpaper32.exe"),
+        QStringLiteral("sharex.exe"),
+        QStringLiteral("flameshot.exe"),
+        QStringLiteral("lightshot.exe"),
+        QStringLiteral("greenshot.exe"),
+        QStringLiteral("picpick.exe"),
+    };
+    return kSystemExes.contains(lowerExe);
+}
+
+bool isSystemOverlayWindowClass(const QString& cls)
+{
+    if (cls.isEmpty())
+        return false;
+    return cls == QStringLiteral("Progman")
+        || cls == QStringLiteral("WorkerW")
+        || cls == QStringLiteral("Shell_TrayWnd")
+        || cls == QStringLiteral("Shell_SecondaryTrayWnd")
+        || cls == QStringLiteral("NotifyIconOverflowWindow")
+        || cls == QStringLiteral("Windows.UI.Core.CoreWindow")
+        || cls == QStringLiteral("XamlExplorerHostIslandWindow")
+        || cls == QStringLiteral("ForegroundStaging")
+        || cls == QStringLiteral("MultitaskingViewFrame")
+        || cls.contains(QStringLiteral("ScreenClipping"), Qt::CaseInsensitive)
+        || cls.contains(QStringLiteral("Snipping"), Qt::CaseInsensitive);
+}
+
 bool isWindowGenuineBorderlessFullscreen(HWND hwnd)
 {
     if (!hwnd || !IsWindowVisible(hwnd) || IsIconic(hwnd))
         return false;
 
+    wchar_t classBuf[128]{};
+    GetClassNameW(hwnd, classBuf, static_cast<int>(std::size(classBuf)));
+    if (isSystemOverlayWindowClass(QString::fromWCharArray(classBuf)))
+        return false;
+
     DWORD cloaked = 0;
     if (SUCCEEDED(DwmGetWindowAttribute(hwnd, 14 /*DWMWA_CLOAKED*/, &cloaked, sizeof(cloaked))) && cloaked != 0)
+        return false;
+
+    const LONG_PTR exStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if ((exStyle & WS_EX_TOOLWINDOW) && !(exStyle & WS_EX_APPWINDOW))
         return false;
 
     const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
@@ -386,7 +449,12 @@ QStringList GameModeService::defaultExcludeList()
         QStringLiteral("potplayermini64.exe"),
         QStringLiteral("explorer.exe"),
         QStringLiteral("dwm.exe"),
+        QStringLiteral("screenclippinghost.exe"),
+        QStringLiteral("snippingtool.exe"),
+        QStringLiteral("textinputhost.exe"),
+        QStringLiteral("pickerhost.exe"),
         QStringLiteral("searchhost.exe"),
+        QStringLiteral("searchapp.exe"),
         QStringLiteral("shellexperiencehost.exe"),
         QStringLiteral("startmenuexperiencehost.exe"),
         QStringLiteral("applicationframehost.exe"),
@@ -446,6 +514,19 @@ void GameModeService::loadConfig()
 
     readStringArray(obj, QStringLiteral("gameList"), m_gameList);
     readStringArray(obj, QStringLiteral("excludeList"), m_excludeList);
+
+    // Ensure system screenshot / shell overlays are always present in existing configs
+    const QStringList kMandatorySystemExcludes = {
+        QStringLiteral("screenclippinghost.exe"),
+        QStringLiteral("snippingtool.exe"),
+        QStringLiteral("textinputhost.exe"),
+        QStringLiteral("pickerhost.exe"),
+        QStringLiteral("searchapp.exe"),
+    };
+    for (const QString& sysExe : kMandatorySystemExcludes) {
+        if (!m_excludeList.contains(sysExe) && !m_gameList.contains(sysExe))
+            m_excludeList.append(sysExe);
+    }
 }
 
 void GameModeService::saveConfig() const
@@ -534,8 +615,8 @@ void GameModeService::setManualActive(bool on)
         m_activeGameTitle.clear();
         m_activeReason.clear();
     }
-    applyEffectiveState(on ? QStringLiteral("Manual") : QStringLiteral("Manual Off"));
     emit activeChanged();
+    applyEffectiveState(on ? QStringLiteral("Manual") : QStringLiteral("Manual Off"));
 }
 
 void GameModeService::addGameExe(const QString& exeOrPath)
@@ -820,14 +901,12 @@ void GameModeService::pollForeground()
         GetWindowThreadProcessId(hwnd, &pid);
         if (pid != 0 && pid != GetCurrentProcessId()) {
             exe = queryProcessExeNameWin(pid);
-            const bool isExcluded = (!exe.isEmpty() && m_excludeList.contains(exe));
+            const bool isExcluded = (!exe.isEmpty() && (m_excludeList.contains(exe) || isSystemOverlayOrShellExe(exe)));
             if (!isExcluded) {
-                wchar_t classBuf[64]{};
+                wchar_t classBuf[128]{};
                 GetClassNameW(hwnd, classBuf, static_cast<int>(std::size(classBuf)));
                 const QString cls = QString::fromWCharArray(classBuf);
-                const bool isDesktopShell = (cls == QStringLiteral("Progman")
-                    || cls == QStringLiteral("WorkerW")
-                    || cls == QStringLiteral("Shell_TrayWnd"));
+                const bool isDesktopShell = isSystemOverlayWindowClass(cls);
 
                 if (!isDesktopShell) {
                     const QString displayExe = exe.isEmpty()
@@ -878,8 +957,8 @@ void GameModeService::pollForeground()
                 m_activeGameExe = displayExe;
                 m_activeGameTitle = title;
                 m_activeReason = triggerReason;
-                applyEffectiveState(triggerReason);
                 emit activeChanged();
+                applyEffectiveState(triggerReason);
             }
         }
         return;
@@ -900,8 +979,8 @@ void GameModeService::pollForeground()
                 m_activeGameTitle.clear();
                 m_activeReason.clear();
             }
-            applyEffectiveState(QStringLiteral("Game Inactive"));
             emit activeChanged();
+            applyEffectiveState(QStringLiteral("Game Inactive"));
         }
     }
 #endif

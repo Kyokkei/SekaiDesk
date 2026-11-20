@@ -2023,3 +2023,33 @@ void SystemControlService::toggleLaunchAtStartup()
 {
     setLaunchAtStartup(!m_launchAtStartup);
 }
+
+bool SystemControlService::registerStartupForCurrentExe()
+{
+#ifdef Q_OS_WIN
+    deleteLegacyRunEntry();
+    const QString curExe = QDir::toNativeSeparators(
+        QCoreApplication::applicationFilePath());
+    if (registerStartupTaskWithFallback(curExe))
+        return true;
+    writeLegacyRunEntry(curExe);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SystemControlService::unregisterStartupForCurrentExe()
+{
+#ifdef Q_OS_WIN
+    deleteLegacyRunEntry();
+    runSchtasksHidden({
+        QStringLiteral("/Delete"),
+        QStringLiteral("/TN"), QStringLiteral("SekaiDesk"),
+        QStringLiteral("/F")
+    });
+    return true;
+#else
+    return false;
+#endif
+}
