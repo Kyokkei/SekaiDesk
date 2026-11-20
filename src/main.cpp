@@ -219,9 +219,11 @@ int main(int argc, char* argv[])
 #endif
     static bool s_skipTaskbarRestoreOnQuit = false;
     systemControl.setBeforeQuitCallback([]() {
+        trayService.stop();
         taskbarManager.prepareForExit();
     });
     QObject::connect(&app, &QCoreApplication::aboutToQuit, []() {
+        trayService.stop();
         if (!s_skipTaskbarRestoreOnQuit)
             taskbarManager.prepareForExit();
     });
@@ -232,6 +234,7 @@ int main(int argc, char* argv[])
     QObject::connect(&gameModeService, &GameModeService::hibernateChanged,
                      &app, [](bool hibernated, const QString&) {
                          PanelWindow::setGlobalHibernated(hibernated);
+                         trayService.setPaused(hibernated);
                          windowTracker.setPaused(hibernated);
                          audioService.setPaused(hibernated);
                          lyricsService.setPaused(hibernated);
@@ -241,6 +244,7 @@ int main(int argc, char* argv[])
                      });
     QObject::connect(&gameModeService, &GameModeService::zeroFootprintRequested,
                      &app, []() {
+                         trayService.stop();
                          if (gameModeService.restoreTaskbarInZero())
                              taskbarManager.prepareForExit();
                          else

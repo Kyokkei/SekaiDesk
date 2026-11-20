@@ -151,6 +151,38 @@ bool equalsIgnoreCaseAscii(const wchar_t* a, const wchar_t* b) noexcept
     return _wcsicmp(a, b) == 0;
 }
 
+HWND findRealExplorerTrayWnd() noexcept
+{
+    const DWORD selfPid = GetCurrentProcessId();
+    HWND firstNonSelf = nullptr;
+    HWND candidate = nullptr;
+
+    while ((candidate = FindWindowExW(nullptr, candidate, L"Shell_TrayWnd", nullptr)) != nullptr) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(candidate, &pid);
+        if (pid == 0 || pid == selfPid)
+            continue;
+
+        if (!firstNonSelf)
+            firstNonSelf = candidate;
+
+        HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (hProc) {
+            wchar_t pathBuf[MAX_PATH]{};
+            DWORD size = MAX_PATH;
+            const bool gotName = tryQueryProcessImageName(hProc, pathBuf, &size);
+            CloseHandle(hProc);
+            if (gotName) {
+                const wchar_t* base = wcsrchr(pathBuf, L'\\');
+                base = base ? (base + 1) : pathBuf;
+                if (equalsIgnoreCaseAscii(base, L"explorer.exe"))
+                    return candidate;
+            }
+        }
+    }
+    return firstNonSelf;
+}
+
 void collectSecondaryTrays(std::vector<HWND>& out) noexcept
 {
     out.clear();
@@ -466,7 +498,7 @@ void TaskbarManager::emergencyRestoreAll(SettingsStore* settings)
             restoreHwndBasic(hSec, 0);
     }
 
-    HWND hPrimary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND hPrimary = findRealExplorerTrayWnd();
     if (hPrimary && (wasSuppressed || trayNeedsRestoreOutsideSession(hPrimary))) {
         restoreHwndBasic(hPrimary, origPrimaryEx);
         if (wasSuppressed || hasOrigAbs)
@@ -653,7 +685,7 @@ void TaskbarManager::applySuppressionPass(bool allowWorkAreaTimer)
     if (m_hideMode == QStringLiteral("off") || m_temporarilyShown)
         return;
 
-    HWND hPrimary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND hPrimary = findRealExplorerTrayWnd();
     if (!hPrimary || !IsWindow(hPrimary))
         return;
 
@@ -789,7 +821,7 @@ void TaskbarManager::restoreAllSuppressed(bool updateConfigFlag)
             restoreSingleTray(hSec, 0, false);
     }
 
-    HWND hPrimary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND hPrimary = findRealExplorerTrayWnd();
     if (hPrimary && IsWindow(hPrimary)) {
         restoreSingleTray(hPrimary, m_origPrimaryExStyle, true);
         if (shouldRestoreAbsState)
@@ -806,7 +838,7 @@ void TaskbarManager::restoreAllSuppressed(bool updateConfigFlag)
 
 void TaskbarManager::syncAtomicCrashState()
 {
-    HWND hPrimary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND hPrimary = findRealExplorerTrayWnd();
     g_crashPrimaryTray.store(hPrimary, std::memory_order_release);
     g_crashOrigPrimaryEx.store(m_origPrimaryExStyle, std::memory_order_release);
     g_crashOrigAbsState.store(m_origAbsState, std::memory_order_release);
@@ -832,7 +864,7 @@ void TaskbarManager::checkAndReclaimWorkArea()
     if (now - m_lastWorkAreaReclaimMs < 1500)
         return;
 
-    HWND hPrimary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND hPrimary = findRealExplorerTrayWnd();
     if (!hPrimary || !IsWindow(hPrimary))
         return;
 
@@ -893,7 +925,7 @@ void TaskbarManager::onWatchdogTick()
     if (!isActive())
         return;
 
-    HWND hPrimary = FindWindowW(L"Shell_TrayWnd", nullptr);
+    HWND hPrimary = findRealExplorerTrayWnd();
     if (!hPrimary || !IsWindow(hPrimary))
         return;
 
@@ -953,6 +985,16 @@ LRESULT CALLBACK TaskbarManager::watcherWndProc(HWND hwnd, UINT msg,
         return DefWindowProcW(hwnd, msg, wParam, lParam);
 
     if (self->m_taskbarCreatedMsg != 0 && msg == self->m_taskbarCreatedMsg) {
+        HWND hReal = findRealExplorerTrayWnd();
+        DWORD curExplorerPid = 0;
+        if (hReal && IsWindow(hReal))
+            GetWindowThreadProcessId(hReal, &curExplorerPid);
+        // Ignore synthetic TaskbarCreated broadcasts (e.g. from TrayService) while
+        // the same Explorer process is still hooked and suppressed.
+        if (curExplorerPid != 0 && curExplorerPid == self->m_hookedExplorerPid &&
+            self->m_showHook != nullptr) {
+            return 0;
+        }
         self->m_suppressedSecondaryStyles.clear();
         self->removeWinEventHooks();
         if (self->isActive()) {
@@ -1009,6 +1051,11 @@ void CALLBACK TaskbarManager::winEventProc(HWINEVENTHOOK /*hook*/, DWORD /*event
                                            DWORD /*dwEventThread*/, DWORD /*dwmsEventTime*/)
 {
     if (idObject != OBJID_WINDOW || idChild != CHILDID_SELF || !hwnd)
+        return;
+
+    DWORD evPid = 0;
+    GetWindowThreadProcessId(hwnd, &evPid);
+    if (evPid == GetCurrentProcessId())
         return;
 
     TaskbarManager* self = g_activeInstance.load(std::memory_order_acquire);

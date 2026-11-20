@@ -4589,9 +4589,16 @@ PanelWindow {
         readonly property int cardShadow: 4
         readonly property int cardW: 248
         property double openedAt: 0
+        property bool quitArmed: false
+
+        Timer {
+            id: trayQuitResetTimer
+            interval: 3500
+            onTriggered: trayPopupWindow.quitArmed = false
+        }
 
         width: cardW + cardShadow
-        height: Math.max(92, trayCol.implicitHeight + 24) + cardShadow
+        height: Math.max(118, trayCol.implicitHeight + 24) + cardShadow
         x: topBarWindow.barPopupX(width, topBarWindow.anchors.margins.left + rightContentRow.x + trayPill.x + Math.round((trayPill.width - cardW) * 0.5))
         y: topBarWindow.barPopupY(height, themeHub.screenH - height - 60)
 
@@ -4600,6 +4607,9 @@ PanelWindow {
                 openedAt = Date.now()
                 TrayService.refresh()
                 focusActivate()
+            } else {
+                quitArmed = false
+                trayQuitResetTimer.stop()
             }
         }
         Timer {
@@ -4628,7 +4638,7 @@ PanelWindow {
             x: 0
             y: 0
             width: trayPopupWindow.cardW
-            height: Math.max(92, trayCol.implicitHeight + 24)
+            height: Math.max(118, trayCol.implicitHeight + 24)
             radius: 16
             color: "#1A1B2E"
 
@@ -4733,6 +4743,100 @@ PanelWindow {
                                         TrayService.activateItem(modelData.index, mouse.button === Qt.RightButton)
                                         topBarWindow.trayPopupOpen = false
                                     }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Rectangle {
+                    width: parent.width
+                    height: 1.5
+                    color: "#CBD5E1"
+                }
+
+                Row {
+                    width: parent.width
+                    height: 28
+                    spacing: 6
+
+                    Rectangle {
+                        width: (parent.width - 6) * 0.5
+                        height: 28
+                        radius: 9
+                        color: traySettingsMa.containsMouse ? themeHub.accentB : "#FFFFFF"
+                        border.width: 1.5
+                        border.color: "#1A1B2E"
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 5
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 13; height: 13
+                                source: "qrc:/qml/icons/settings-dark.svg"
+                                smooth: true
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: "Settings"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 11
+                                font.weight: Font.Bold
+                                color: "#1A1B2E"
+                            }
+                        }
+                        MouseArea {
+                            id: traySettingsMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                topBarWindow.trayPopupOpen = false
+                                themeHub.openSettings("")
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        width: (parent.width - 6) * 0.5
+                        height: 28
+                        radius: 9
+                        color: trayPopupWindow.quitArmed
+                            ? "#FB7185"
+                            : (trayQuitMa.containsMouse ? "#FECDD3" : "#FFE4E6")
+                        border.width: 1.5
+                        border.color: "#1A1B2E"
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 5
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 13; height: 13
+                                source: "qrc:/qml/icons/power-dark.svg"
+                                smooth: true
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: trayPopupWindow.quitArmed ? "Confirm?" : "Quit"
+                                font.family: "Segoe UI"
+                                font.pixelSize: 11
+                                font.weight: Font.Black
+                                color: "#1A1B2E"
+                            }
+                        }
+                        MouseArea {
+                            id: trayQuitMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: {
+                                if (!trayPopupWindow.quitArmed) {
+                                    trayPopupWindow.quitArmed = true
+                                    trayQuitResetTimer.restart()
+                                } else {
+                                    trayQuitResetTimer.stop()
+                                    topBarWindow.trayPopupOpen = false
+                                    SystemControl.quitApp()
                                 }
                             }
                         }
@@ -5588,49 +5692,156 @@ PanelWindow {
         Item {
             id: powerRail
             x: quickPanelWindow.portStageX + quickPanelWindow.phoneBoxW + 4
-            y: Math.max(40, Math.min(themeHub.screenH - height - 20, quickPanelWindow.portWinY + quickPanelWindow.headroom + Math.round(290 * quickPanelWindow.fitScale) + quickPanelWindow.stageLift))
-            width: 64
-            height: 386
-            visible: quickPanelWindow.powerMenuOpen && !quickPanelWindow.inLandscapeStage
-            opacity: quickPanelWindow.powerMenuOpen ? 1.0 : 0.0
-            Behavior on opacity { NumberAnimation { duration: 150 } }
+            y: Math.max(40, Math.min(themeHub.screenH - height - 20, quickPanelWindow.portWinY + quickPanelWindow.headroom + Math.round(280 * quickPanelWindow.fitScale) + quickPanelWindow.stageLift))
+            width: 70
+            height: 406
+            visible: opacity > 0.01 && !quickPanelWindow.inLandscapeStage
+            opacity: (quickPanelWindow.powerMenuOpen && !quickPanelWindow.inLandscapeStage) ? 1.0 : 0.0
+            Behavior on opacity { NumberAnimation { duration: quickPanelWindow.powerMenuOpen ? 120 : 200 } }
             z: 20
+
+            property bool quitArmed: false
+            property int hoveredIdx: -1
+            property int shownHoverIdx: 0
+            readonly property var fullLabels: [
+                "Lock Screen",
+                "Sleep PC",
+                "Hibernate PC",
+                "Sign Out",
+                "Restart PC",
+                "Shut Down PC",
+                "Quit SekaiDesk"
+            ]
+
+            onHoveredIdxChanged: {
+                if (hoveredIdx >= 0)
+                    shownHoverIdx = hoveredIdx
+            }
+
+            Timer {
+                id: railQuitResetTimer
+                interval: 3500
+                onTriggered: powerRail.quitArmed = false
+            }
+
+            Connections {
+                target: quickPanelWindow
+                function onPowerMenuOpenChanged() {
+                    if (!quickPanelWindow.powerMenuOpen) {
+                        powerRail.quitArmed = false
+                        powerRail.hoveredIdx = -1
+                        railQuitResetTimer.stop()
+                    }
+                }
+            }
 
             Column {
                 anchors.horizontalCenter: parent.horizontalCenter
                 spacing: 8
                 Repeater {
                     model: [
-                        { label: "Lock",     icon: "qrc:/qml/icons/lock-dark.svg",       col: "#E0F2FE", act: "lock" },
-                        { label: "Sleep",    icon: "qrc:/qml/icons/moon-sleep-dark.svg", col: "#EDE9FE", act: "sleep" },
-                        { label: "Hibern.",  icon: "qrc:/qml/icons/snowflake-dark.svg",  col: "#E0E7FF", act: "hibernate" },
-                        { label: "Sign Out", icon: "qrc:/qml/icons/logout-dark.svg",     col: "#FEF3C7", act: "signout" },
-                        { label: "Restart",  icon: "qrc:/qml/icons/restart-dark.svg",    col: "#FFEDD5", act: "restart" },
-                        { label: "Shut Dn",  icon: "qrc:/qml/icons/power-dark.svg",      col: "#FFE4E6", act: "shutdown" },
+                        { label: "Lock",     icon: "qrc:/qml/icons/lock-dark.svg",         col: "#E0F2FE", act: "lock" },
+                        { label: "Sleep",    icon: "qrc:/qml/icons/moon-sleep-dark.svg",   col: "#EDE9FE", act: "sleep" },
+                        { label: "Hibern.",  icon: "qrc:/qml/icons/snowflake-dark.svg",    col: "#E0E7FF", act: "hibernate" },
+                        { label: "Sign Out", icon: "qrc:/qml/icons/logout-dark.svg",       col: "#FEF3C7", act: "signout" },
+                        { label: "Restart",  icon: "qrc:/qml/icons/restart-dark.svg",      col: "#FFEDD5", act: "restart" },
+                        { label: "Shut Dn",  icon: "qrc:/qml/icons/power-dark.svg",        col: "#FFE4E6", act: "shutdown" },
                         { label: "Quit App", icon: "qrc:/qml/icons/close-circle-dark.svg", col: "#FECDD3", act: "quitapp" }
                     ]
                     delegate: Item {
+                        id: railBtn
                         required property var modelData
-                        width: 58
-                        height: 46
+                        required property int index
+                        readonly property bool isQuitArmed: modelData.act === "quitapp" && powerRail.quitArmed
+
+                        width: 66
+                        height: 48
+
+                        property real popT: quickPanelWindow.powerMenuOpen ? 1.0 : 0.0
+                        opacity: popT
+                        transform: [
+                            Scale {
+                                origin.x: 33; origin.y: 24
+                                xScale: 0.4 + 0.6 * railBtn.popT
+                                yScale: 0.4 + 0.6 * railBtn.popT
+                            },
+                            Translate {
+                                x: (1.0 - railBtn.popT) * -36
+                            }
+                        ]
+
+                        SequentialAnimation {
+                            id: railPopIn
+                            PauseAnimation { duration: railBtn.index * 30 }
+                            NumberAnimation {
+                                target: railBtn; property: "popT"; to: 1.0; duration: 300
+                                easing.type: Easing.OutBack; easing.overshoot: 1.6
+                            }
+                        }
+                        SequentialAnimation {
+                            id: railPopOut
+                            PauseAnimation { duration: (6 - railBtn.index) * 20 }
+                            NumberAnimation {
+                                target: railBtn; property: "popT"; to: 0.0; duration: 140
+                                easing.type: Easing.InCubic
+                            }
+                        }
+
+                        Connections {
+                            target: quickPanelWindow
+                            function onPowerMenuOpenChanged() {
+                                if (quickPanelWindow.powerMenuOpen) {
+                                    railPopOut.stop()
+                                    railPopIn.restart()
+                                } else {
+                                    railPopIn.stop()
+                                    railPopOut.restart()
+                                }
+                            }
+                        }
+
                         Rectangle {
-                            x: 3; y: 3; width: 54; height: 42; radius: 14; color: "#1A1B2E"
+                            x: 3; y: 3; width: 62; height: 44; radius: 14; color: "#1A1B2E"
                         }
                         Rectangle {
                             x: pBtnMa.pressed ? 2 : 0
                             y: pBtnMa.pressed ? 2 : 0
-                            width: 54; height: 42; radius: 14
-                            color: pBtnMa.containsMouse ? themeHub.accentB : modelData.col
+                            width: 62; height: 44; radius: 14
+                            color: railBtn.isQuitArmed
+                                ? "#FB7185"
+                                : (pBtnMa.containsMouse ? themeHub.accentB : modelData.col)
                             border.width: 2.5; border.color: "#1A1B2E"
                             Column {
                                 anchors.centerIn: parent; spacing: 1
-                                Image { anchors.horizontalCenter: parent.horizontalCenter; width: 15; height: 15; source: modelData.icon; smooth: true }
-                                Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.label; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                Image { anchors.horizontalCenter: parent.horizontalCenter; width: 16; height: 16; source: modelData.icon; smooth: true }
+                                Text {
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    text: railBtn.isQuitArmed ? "Sure?" : modelData.label
+                                    font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                }
                             }
                             MouseArea {
                                 id: pBtnMa
                                 anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onContainsMouseChanged: {
+                                    if (containsMouse)
+                                        powerRail.hoveredIdx = railBtn.index
+                                    else if (powerRail.hoveredIdx === railBtn.index)
+                                        powerRail.hoveredIdx = -1
+                                }
                                 onClicked: {
+                                    if (modelData.act === "quitapp") {
+                                        if (!powerRail.quitArmed) {
+                                            powerRail.quitArmed = true
+                                            railQuitResetTimer.restart()
+                                            return
+                                        }
+                                        railQuitResetTimer.stop()
+                                        powerRail.quitArmed = false
+                                        topBarWindow.quickPanelOpen = false
+                                        SystemControl.quitApp()
+                                        return
+                                    }
                                     topBarWindow.quickPanelOpen = false
                                     if (modelData.act === "lock") SystemControl.lockScreen()
                                     else if (modelData.act === "sleep") SystemControl.sleepPc()
@@ -5638,10 +5849,44 @@ PanelWindow {
                                     else if (modelData.act === "signout") SystemControl.signOut()
                                     else if (modelData.act === "restart") SystemControl.restartPc()
                                     else if (modelData.act === "shutdown") SystemControl.shutdownPc()
-                                    else if (modelData.act === "quitapp") SystemControl.quitApp()
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            // Floating SekaiPop tooltip label beside hovered pill
+            Item {
+                id: powerRailTip
+                x: 74
+                y: powerRail.shownHoverIdx * 56 + 24 - height * 0.5
+                width: railTipTxt.implicitWidth + 24
+                height: 36
+                opacity: (quickPanelWindow.powerMenuOpen && powerRail.hoveredIdx >= 0) ? 1.0 : 0.0
+                visible: opacity > 0.01
+                Behavior on opacity { NumberAnimation { duration: 90 } }
+
+                Rectangle {
+                    x: 3; y: 3
+                    width: parent.width; height: parent.height
+                    radius: 12; color: "#1A1B2E"
+                }
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 12
+                    color: (powerRail.shownHoverIdx === 6 && powerRail.quitArmed) ? "#FFE4E6" : "#FFFFFF"
+                    border.width: 2.5; border.color: "#1A1B2E"
+                    Text {
+                        id: railTipTxt
+                        anchors.centerIn: parent
+                        text: (powerRail.shownHoverIdx === 6 && powerRail.quitArmed)
+                              ? "Click again to Quit SekaiDesk"
+                              : (powerRail.fullLabels[powerRail.shownHoverIdx] || "")
+                        font.family: "Segoe UI"
+                        font.pixelSize: 13
+                        font.weight: Font.Black
+                        color: "#1A1B2E"
                     }
                 }
             }
@@ -6137,7 +6382,7 @@ PanelWindow {
 
                         // ---- User@Host Identity ----
                         Text {
-                            x: 46; y: 304; width: 222; elide: Text.ElideRight
+                            x: 46; y: 304; width: 210; elide: Text.ElideRight
                             text: (WindowTracker.userName || "user") + "@" + (WindowTracker.machineName || "pc")
                             font.family: "Segoe UI"
                             font.pixelSize: 21
@@ -6145,34 +6390,53 @@ PanelWindow {
                             color: "#1A1B2E"
                         }
 
-                        // ---- 4 Header Square Pill Action Buttons (Settings / Refresh / Edit / Game) ----
+                        // ---- 5 Header Square Pill Action Buttons (Settings / Refresh / Edit / Game / Power) ----
                         Row {
-                            x: 280; y: 258; spacing: 6
+                            x: 264; y: 258; spacing: 6
                             Repeater {
                                 model: [
-                                    { label: "Settings", icon: "⚙",  act: "settings", active: false },
-                                    { label: "Refresh",  icon: "↻",  act: "refresh",  active: false },
-                                    { label: "Edit",     icon: "✎",  act: "edit",     active: themeHub.editMode },
-                                    { label: GameModeService.autoDetect ? "Game ON" : "Game", icon: "🎮", act: "game", active: GameModeService.autoDetect }
+                                    { label: "Settings", icon: "⚙",  svgIcon: "",                             act: "settings", active: false },
+                                    { label: "Refresh",  icon: "↻",  svgIcon: "",                             act: "refresh",  active: false },
+                                    { label: "Edit",     icon: "✎",  svgIcon: "",                             act: "edit",     active: themeHub.editMode },
+                                    { label: GameModeService.autoDetect ? "Game ON" : "Game", icon: "🎮", svgIcon: "", act: "game", active: GameModeService.autoDetect },
+                                    { label: "Power",    icon: "",   svgIcon: "qrc:/qml/icons/power-dark.svg", act: "power",    active: quickPanelWindow.powerMenuOpen }
                                 ]
                                 delegate: Item {
                                     required property var modelData
-                                    width: 80; height: 68
-                                    Rectangle { x: 3; y: 3; width: 76; height: 64; radius: 20; color: "#1A1B2E" }
+                                    width: 66; height: 68
+                                    Rectangle { x: 3; y: 3; width: 62; height: 64; radius: 18; color: "#1A1B2E" }
                                     Rectangle {
                                         x: hdrActMa.pressed ? 3 : 0
                                         y: hdrActMa.pressed ? 2 : 0
-                                        width: 76; height: 64; radius: 20
-                                        color: modelData.active || hdrActMa.containsMouse ? themeHub.accentB : "#FFFFFF"
+                                        width: 62; height: 64; radius: 18
+                                        color: modelData.active || hdrActMa.containsMouse
+                                            ? themeHub.accentB
+                                            : (modelData.act === "power" ? "#FFE4E6" : "#FFFFFF")
                                         border.width: 3.5; border.color: "#1A1B2E"
                                         Rectangle {
-                                            anchors.fill: parent; anchors.margins: 4; radius: 16
+                                            anchors.fill: parent; anchors.margins: 4; radius: 14
                                             color: "transparent"; border.width: 2; border.color: "#99FFFFFF"
                                         }
                                         Column {
-                                            anchors.centerIn: parent; spacing: 0
-                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.icon; font.pixelSize: 22; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.label; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                            anchors.centerIn: parent; spacing: 1
+                                            Image {
+                                                visible: modelData.svgIcon !== ""
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                width: 21; height: 21
+                                                source: modelData.svgIcon
+                                                smooth: true
+                                            }
+                                            Text {
+                                                visible: modelData.svgIcon === ""
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                text: modelData.icon
+                                                font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E"
+                                            }
+                                            Text {
+                                                anchors.horizontalCenter: parent.horizontalCenter
+                                                text: modelData.label
+                                                font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E"
+                                            }
                                         }
                                         MouseArea {
                                             id: hdrActMa
@@ -6200,6 +6464,8 @@ PanelWindow {
                                                 } else if (modelData.act === "edit") {
                                                     topBarWindow.quickPanelOpen = false
                                                     themeHub.setEditMode(true)
+                                                } else if (modelData.act === "power") {
+                                                    quickPanelWindow.powerMenuOpen = !quickPanelWindow.powerMenuOpen
                                                 }
                                             }
                                         }
@@ -7408,10 +7674,27 @@ PanelWindow {
                             anchors.fill: parent
                             anchors.margins: 24
                             radius: quickPanelWindow.landCornerR - 24
-                            color: "#FAFAFF"
+                            color: Qt.tint("#FAFAFF", Qt.rgba(themeHub.accentB.r, themeHub.accentB.g, themeHub.accentB.b, 0.14))
                             border.width: 3
                             border.color: "#1A1B2E"
                             clip: true
+
+                            // SekaiPop diagonal stage-light bands
+                            SekaiSlant {
+                                x: -160; y: -40; width: 520; height: parent.height + 80
+                                skew: 0.34
+                                color: Qt.rgba(themeHub.accentA.r, themeHub.accentA.g, themeHub.accentA.b, 0.14)
+                            }
+                            SekaiSlant {
+                                x: 160; y: -40; width: 390; height: parent.height + 80
+                                skew: 0.34
+                                color: Qt.rgba(244 / 255, 114 / 255, 182 / 255, 0.13)
+                            }
+                            SekaiSlant {
+                                x: 310; y: -40; width: 300; height: parent.height + 80
+                                skew: 0.34
+                                color: Qt.rgba(250 / 255, 204 / 255, 21 / 255, 0.16)
+                            }
 
                             // Top-right comic halftone dots
                             Canvas {
@@ -7448,7 +7731,7 @@ PanelWindow {
                                 id: landHeader
                                 x: 58; y: 20
                                 width: parent.width - 82
-                                height: 66
+                                height: 68
 
                                 Row {
                                     anchors.left: parent.left
@@ -7458,7 +7741,7 @@ PanelWindow {
                                     // Back button (subpage -> Hub, or Hub -> Phone if opened from QuickPanel)
                                     Item {
                                         visible: themeHub.settingsSection !== "" || quickPanelWindow.settingsOpenedFromQuick
-                                        width: backLbl.implicitWidth + 32; height: 48
+                                        width: backLbl.implicitWidth + 34; height: 50
                                         anchors.verticalCenter: parent.verticalCenter
                                         Rectangle { x: 4; y: 4; width: parent.width; height: parent.height; radius: 16; color: "#1A1B2E" }
                                         Rectangle {
@@ -7470,7 +7753,7 @@ PanelWindow {
                                                 id: backLbl
                                                 anchors.centerIn: parent
                                                 text: themeHub.settingsSection !== "" ? "← HUB" : "← PHONE"
-                                                font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E"
+                                                font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E"
                                             }
                                             MouseArea {
                                                 id: landBackMa
@@ -7487,14 +7770,15 @@ PanelWindow {
 
                                     // Section badge + title
                                     Rectangle {
-                                        width: 48; height: 48; radius: 16
+                                        width: 50; height: 50; radius: 16
                                         anchors.verticalCenter: parent.verticalCenter
                                         color: themeHub.accentA
                                         border.width: 3; border.color: "#1A1B2E"
-                                        Text {
+                                        Image {
                                             anchors.centerIn: parent
-                                            text: "⚙"
-                                            font.pixelSize: 24; font.weight: Font.Black; color: "#1A1B2E"
+                                            width: 26; height: 26
+                                            source: "qrc:/qml/icons/settings-dark.svg"
+                                            smooth: true
                                         }
                                     }
 
@@ -7512,13 +7796,13 @@ PanelWindow {
                                                 if (s === "about") return "06 · ABOUT"
                                                 return "SEKAIDESK SETTINGS"
                                             }
-                                            font.family: "Segoe UI"; font.pixelSize: 24; font.weight: Font.Black; color: "#1A1B2E"
+                                            font.family: "Segoe UI"; font.pixelSize: 28; font.weight: Font.Black; color: "#1A1B2E"
                                         }
                                         Text {
                                             text: themeHub.settingsSection === ""
                                                   ? "Choose a category card to customize your desktop"
                                                   : "Changes apply live and save automatically"
-                                            font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#475569"
+                                            font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.DemiBold; color: "#475569"
                                         }
                                     }
                                 }
@@ -7549,7 +7833,7 @@ PanelWindow {
 
                                     // Integrated Wallpaper Gallery pill
                                     Item {
-                                        width: 112; height: 44
+                                        width: 124; height: 46
                                         anchors.verticalCenter: parent.verticalCenter
                                         Rectangle { x: 4; y: 4; width: parent.width; height: parent.height; radius: 14; color: "#1A1B2E" }
                                         Rectangle {
@@ -7560,7 +7844,7 @@ PanelWindow {
                                             Text {
                                                 anchors.centerIn: parent
                                                 text: "🖼 WALLS"
-                                                font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
+                                                font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E"
                                             }
                                             MouseArea {
                                                 id: landWallsMa
@@ -7575,7 +7859,7 @@ PanelWindow {
 
                                     // Edit Mode shortcut pill
                                     Item {
-                                        width: 112; height: 44
+                                        width: 124; height: 46
                                         anchors.verticalCenter: parent.verticalCenter
                                         Rectangle { x: 4; y: 4; width: parent.width; height: parent.height; radius: 14; color: "#1A1B2E" }
                                         Rectangle {
@@ -7586,7 +7870,7 @@ PanelWindow {
                                             Text {
                                                 anchors.centerIn: parent
                                                 text: themeHub.editMode ? "✎ EDITING" : "✎ EDIT"
-                                                font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
+                                                font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E"
                                             }
                                             MouseArea {
                                                 id: landEditMa
@@ -7604,7 +7888,7 @@ PanelWindow {
 
                                     // Close button
                                     Item {
-                                        width: 48; height: 44
+                                        width: 50; height: 46
                                         anchors.verticalCenter: parent.verticalCenter
                                         Rectangle { x: 4; y: 4; width: parent.width; height: parent.height; radius: 14; color: "#1A1B2E" }
                                         Rectangle {
@@ -7615,7 +7899,7 @@ PanelWindow {
                                             Text {
                                                 anchors.centerIn: parent
                                                 text: "✕"
-                                                font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E"
+                                                font.family: "Segoe UI"; font.pixelSize: 20; font.weight: Font.Black; color: "#1A1B2E"
                                             }
                                             MouseArea {
                                                 id: landCloseMa
@@ -7641,106 +7925,47 @@ PanelWindow {
                                 width: parent.width - 82
                                 height: parent.height - 130
 
-                                // ==== HUB (3x2 Comic Cards) ====
-                                Grid {
-                                    visible: themeHub.settingsSection === ""
-                                    anchors.centerIn: parent
-                                    columns: 3
-                                    columnSpacing: 24
-                                    rowSpacing: 24
+                                // ==== HUB (SekaiPop Brick-Staggered Slanted Keycap Tiles) ====
+                                Item {
+                                    id: landHubArea
+                                    anchors.fill: parent
+                                    readonly property bool isHub: themeHub.settingsSection === ""
+                                    property real hubP: isHub ? 1.0 : 0.0
+                                    Behavior on hubP { NumberAnimation { duration: 260; easing.type: Easing.OutCubic } }
+                                    opacity: hubP
+                                    scale: 0.96 + 0.04 * hubP
+                                    visible: opacity > 0.01
+                                    enabled: isHub
+
+                                    readonly property var hubModel: [
+                                        { id: "quick",   num: "01", title: "Quick",            sub: "Notify style, OSD, 2.5D mode & audio",      accent: "#06B6D4", iconSrc: "qrc:/qml/icons/rocket-dark.svg",     stripes: ["#F43F5E", "#F59E0B", "#8B5CF6"] },
+                                        { id: "general", num: "02", title: "General",          sub: "Theme bands, wallpaper palette & clock",    accent: "#F43F5E", iconSrc: "qrc:/qml/icons/palette-dark.svg",    stripes: ["#F59E0B", "#8B5CF6", "#10B981"] },
+                                        { id: "bar",     num: "03", title: "Bar",              sub: "TopBar style, auto-hide & status modules",  accent: "#F59E0B", iconSrc: "qrc:/qml/icons/checklist-dark.svg",  stripes: ["#8B5CF6", "#10B981", "#EC4899"] },
+                                        { id: "desktop", num: "04", title: "Desktop",          sub: "Dock layout, widgets, visualizer & walls",  accent: "#8B5CF6", iconSrc: "qrc:/qml/icons/monitor-dark.svg",    stripes: ["#10B981", "#EC4899", "#06B6D4"] },
+                                        { id: "system",  num: "05", title: "Hotkeys & System", sub: "Shortcuts, Game Mode, taskbar & quit",      accent: "#10B981", iconSrc: "qrc:/qml/icons/command-dark.svg",    stripes: ["#EC4899", "#06B6D4", "#F43F5E"] },
+                                        { id: "about",   num: "06", title: "About",            sub: "SekaiDesk version, build & credits",        accent: "#EC4899", iconSrc: "qrc:/qml/icons/smartphone-dark.svg", stripes: ["#06B6D4", "#F43F5E", "#F59E0B"] }
+                                    ]
 
                                     Repeater {
-                                        model: [
-                                            { id: "quick",   num: "01", title: "Quick",            sub: "Notify style, OSD, 2.5D mode & audio",      accent: "#06B6D4", glyph: "⚡" },
-                                            { id: "general", num: "02", title: "General",          sub: "Theme bands, wallpaper palette & clock",    accent: "#F43F5E", glyph: "🎨" },
-                                            { id: "bar",     num: "03", title: "Bar",              sub: "TopBar style, auto-hide & status modules",  accent: "#F59E0B", glyph: "▭"  },
-                                            { id: "desktop", num: "04", title: "Desktop",          sub: "Dock layout, widgets, visualizer & walls",  accent: "#8B5CF6", glyph: "🖥" },
-                                            { id: "system",  num: "05", title: "Hotkeys & System", sub: "Shortcuts, taskbar hide & quit SekaiDesk",   accent: "#10B981", glyph: "⌨" },
-                                            { id: "about",   num: "06", title: "About",            sub: "SekaiDesk version, build & credits",        accent: "#EC4899", glyph: "✦"  }
-                                        ]
-                                        delegate: Item {
+                                        model: landHubArea.hubModel
+                                        delegate: SekaiHubTile {
                                             required property var modelData
-                                            width: 404; height: 256
-                                            Rectangle { x: 7; y: 7; width: parent.width; height: parent.height; radius: 28; color: "#1A1B2E" }
-                                            Rectangle {
-                                                x: cardMa.pressed ? 4 : 0
-                                                y: cardMa.pressed ? 4 : 0
-                                                width: parent.width; height: parent.height; radius: 28
-                                                color: cardMa.containsMouse ? "#F0FDFA" : "#FFFFFF"
-
-                                                // Accent top ribbon clipped strictly inside the rounded card & 4px border
-                                                Item {
-                                                    anchors.top: parent.top; anchors.topMargin: 4
-                                                    anchors.left: parent.left; anchors.leftMargin: 4
-                                                    anchors.right: parent.right; anchors.rightMargin: 4
-                                                    height: 14
-                                                    clip: true
-                                                    Rectangle {
-                                                        width: parent.width
-                                                        height: 56
-                                                        radius: 24
-                                                        color: modelData.accent
-                                                    }
-                                                }
-                                                // Number badge
-                                                Rectangle {
-                                                    x: 24; y: 36; width: 64; height: 64; radius: 20
-                                                    color: modelData.accent
-                                                    border.width: 3.5; border.color: "#1A1B2E"
-                                                    Text {
-                                                        anchors.centerIn: parent
-                                                        text: modelData.num
-                                                        font.family: "Consolas"; font.pixelSize: 26; font.weight: Font.Black; color: "#FFFFFF"
-                                                    }
-                                                }
-                                                // Glyph watermark
-                                                Text {
-                                                    anchors.right: parent.right; anchors.rightMargin: 24; y: 32
-                                                    text: modelData.glyph
-                                                    font.pixelSize: 48; font.weight: Font.Black; color: modelData.accent; opacity: 0.35
-                                                }
-                                                // Title & Description
-                                                Text {
-                                                    x: 24; y: 120; width: parent.width - 48
-                                                    text: modelData.title
-                                                    font.family: "Segoe UI"; font.pixelSize: 26; font.weight: Font.Black; color: "#1A1B2E"
-                                                }
-                                                Text {
-                                                    x: 24; y: 158; width: parent.width - 48
-                                                    text: modelData.sub
-                                                    wrapMode: Text.WordWrap
-                                                    font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.DemiBold; color: "#475569"
-                                                }
-                                                // Open indicator pill
-                                                Rectangle {
-                                                    anchors.right: parent.right; anchors.rightMargin: 22
-                                                    anchors.bottom: parent.bottom; anchors.bottomMargin: 18
-                                                    width: 84; height: 32; radius: 12
-                                                    color: cardMa.containsMouse ? modelData.accent : "#F1F5F9"
-                                                    border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text {
-                                                        anchors.centerIn: parent
-                                                        text: "OPEN →"
-                                                        font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black
-                                                        color: cardMa.containsMouse ? "#FFFFFF" : "#1A1B2E"
-                                                    }
-                                                }
-                                                // Crisp rounded card border rendered on top of the clipped ribbon
-                                                Rectangle {
-                                                    anchors.fill: parent
-                                                    radius: 28
-                                                    color: "transparent"
-                                                    border.width: 4
-                                                    border.color: "#1A1B2E"
-                                                    z: 10
-                                                }
-                                                MouseArea {
-                                                    id: cardMa
-                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                                    z: 20
-                                                    onClicked: themeHub.settingsSection = modelData.id
-                                                }
-                                            }
+                                            required property int index
+                                            readonly property int col: index % 3
+                                            readonly property int row: Math.floor(index / 3)
+                                            wipeFrom: themeHub.accentB
+                                            wipeTo: themeHub.accentA
+                                            x: col * (404 + 24) + row * 34
+                                            y: 4 + row * (271 + 26)
+                                            tileW: 404
+                                            tileH: 271
+                                            num: modelData.num
+                                            title: modelData.title
+                                            subtitle: modelData.sub
+                                            iconSource: modelData.iconSrc
+                                            accent: modelData.accent
+                                            stripeColors: modelData.stripes
+                                            onClicked: themeHub.settingsSection = modelData.id
                                         }
                                     }
                                 }
@@ -7755,60 +7980,67 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 18
-                                            Text { text: "NOTIFICATIONS & PEEK"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Text { text: "Choose how arriving notifications appear without interfering with the Dock."; wrapMode: Text.WordWrap; width: parent.width; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#475569" }
-
+                                        Flickable {
+                                            id: quickLeftFlick
+                                            anchors.fill: parent; anchors.margins: 22
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: quickLeftCol.implicitHeight
                                             Column {
-                                                width: parent.width; spacing: 10
-                                                Repeater {
-                                                    model: [
-                                                        { val: "peek",  title: "Phone Peek (Bottom-Right)",  desc: "Mini phone rises bottom-right; auto-falls back to Popup if tight." },
-                                                        { val: "popup", title: "Popup Stack (Top-Right)",   desc: "Clean stacked SekaiPop cards below the TopBar." },
-                                                        { val: "off",   title: "Off (Tray Only)",           desc: "Silent collection in QuickPanel notification inbox." }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        width: parent.width; height: 70; radius: 16
-                                                        color: themeHub.notifyStyle === modelData.val ? "#ECFEFF" : "#F8FAFC"
-                                                        border.width: themeHub.notifyStyle === modelData.val ? 3.5 : 2
-                                                        border.color: themeHub.notifyStyle === modelData.val ? themeHub.accentA : "#CBD5E1"
-                                                        Column {
-                                                            anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 16; anchors.right: parent.right; anchors.rightMargin: 16; spacing: 2
-                                                            Text { text: modelData.title; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            Text { text: modelData.desc; width: parent.width; elide: Text.ElideRight; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#64748B" }
+                                                id: quickLeftCol
+                                                width: quickLeftFlick.width; spacing: 14
+                                                Text { text: "NOTIFICATIONS & PEEK"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
+                                                Text { text: "Choose how arriving notifications appear without interfering with the Dock."; wrapMode: Text.WordWrap; width: parent.width; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.DemiBold; color: "#475569" }
+
+                                                Column {
+                                                    width: parent.width; spacing: 10
+                                                    Repeater {
+                                                        model: [
+                                                            { val: "peek",  title: "Phone Peek (Bottom-Right)",  desc: "Mini phone rises bottom-right; auto-falls back to Popup if tight." },
+                                                            { val: "popup", title: "Popup Stack (Top-Right)",   desc: "Clean stacked SekaiPop cards below the TopBar." },
+                                                            { val: "off",   title: "Off (Tray Only)",           desc: "Silent collection in QuickPanel notification inbox." }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            width: parent.width; height: 76; radius: 16
+                                                            color: themeHub.notifyStyle === modelData.val ? "#ECFEFF" : "#F8FAFC"
+                                                            border.width: themeHub.notifyStyle === modelData.val ? 3.5 : 2
+                                                            border.color: themeHub.notifyStyle === modelData.val ? themeHub.accentA : "#CBD5E1"
+                                                            Column {
+                                                                anchors.verticalCenter: parent.verticalCenter; anchors.left: parent.left; anchors.leftMargin: 16; anchors.right: parent.right; anchors.rightMargin: 16; spacing: 3
+                                                                Text { text: modelData.title; font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { text: modelData.desc; width: parent.width; elide: Text.ElideRight; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#64748B" }
+                                                            }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setNotifyStyle(modelData.val) }
                                                         }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setNotifyStyle(modelData.val) }
                                                     }
                                                 }
-                                            }
 
-                                            // Quiet Fullscreen toggle
-                                            Rectangle {
-                                                width: parent.width; height: 56; radius: 16
-                                                color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: "Quiet Notifications in Fullscreen"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                // Quiet Fullscreen toggle
                                                 Rectangle {
-                                                    anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                    width: 72; height: 32; radius: 16
-                                                    color: themeHub.notifyQuietFullscreen ? themeHub.accentA : "#CBD5E1"
-                                                    border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: themeHub.notifyQuietFullscreen ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    width: parent.width; height: 58; radius: 16
+                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: "Quiet Notifications in Fullscreen"; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    Rectangle {
+                                                        anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                                                        width: 78; height: 34; radius: 17
+                                                        color: themeHub.notifyQuietFullscreen ? themeHub.accentA : "#CBD5E1"
+                                                        border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: themeHub.notifyQuietFullscreen ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    }
+                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setNotifyQuietFullscreen(!themeHub.notifyQuietFullscreen) }
                                                 }
-                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setNotifyQuietFullscreen(!themeHub.notifyQuietFullscreen) }
-                                            }
 
-                                            // Test notification button
-                                            Rectangle {
-                                                width: parent.width; height: 50; radius: 16
-                                                color: testNotifMa.containsMouse ? themeHub.accentB : themeHub.accentA
-                                                border.width: 3; border.color: "#1A1B2E"
-                                                Text { anchors.centerIn: parent; text: "🔔 SEND TEST NOTIFICATION"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                MouseArea {
-                                                    id: testNotifMa
-                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                                    onClicked: NotificationService.emitTestNotification()
+                                                // Test notification button
+                                                Rectangle {
+                                                    width: parent.width; height: 52; radius: 16
+                                                    color: testNotifMa.containsMouse ? themeHub.accentB : themeHub.accentA
+                                                    border.width: 3; border.color: "#1A1B2E"
+                                                    Text { anchors.centerIn: parent; text: "🔔 SEND TEST NOTIFICATION"; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    MouseArea {
+                                                        id: testNotifMa
+                                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                        onClicked: NotificationService.emitTestNotification()
+                                                    }
                                                 }
                                             }
                                         }
@@ -7818,58 +8050,65 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 18
-                                            Text { text: "CHASSIS, OSD & QUICK TOGGLES"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                        Flickable {
+                                            id: quickRightFlick
+                                            anchors.fill: parent; anchors.margins: 22
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: quickRightCol.implicitHeight
+                                            Column {
+                                                id: quickRightCol
+                                                width: quickRightFlick.width; spacing: 14
+                                                Text { text: "CHASSIS, OSD & QUICK TOGGLES"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
 
-                                            Repeater {
-                                                model: [
-                                                    { label: "2.5D Tilted Phone Chassis", sub: "Extruded metallic depth walls & 3D flip", val: themeHub.phoneMode, act: "phone" },
-                                                    { label: "SekaiPop On-Screen Display (OSD)", sub: "Show pill HUD on Volume / Brightness / Dark Mode", val: themeHub.osdEnabled, act: "osd" },
-                                                    { label: "System Dark Mode", sub: "Toggle Windows dark/light app theme", val: SystemControl.darkMode, act: "dark" },
-                                                    { label: "Master Audio Mute", sub: "Current volume: " + AudioService.masterVolume + "%", val: AudioService.masterMuted, act: "mute" }
-                                                ]
-                                                delegate: Rectangle {
-                                                    required property var modelData
-                                                    width: parent.width; height: 74; radius: 16
-                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Column {
-                                                        anchors.left: parent.left; anchors.leftMargin: 16; anchors.right: swBadge.left; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; spacing: 2
-                                                        Text { text: modelData.label; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        Text { text: modelData.sub; width: parent.width; elide: Text.ElideRight; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#64748B" }
-                                                    }
-                                                    Rectangle {
-                                                        id: swBadge
-                                                        anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                        width: 72; height: 32; radius: 16
-                                                        color: modelData.val ? themeHub.accentA : "#CBD5E1"
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    }
-                                                    MouseArea {
-                                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                        onClicked: {
-                                                            if (modelData.act === "phone") themeHub.setPhoneMode(!themeHub.phoneMode)
-                                                            else if (modelData.act === "osd") themeHub.setOsdEnabled(!themeHub.osdEnabled)
-                                                            else if (modelData.act === "dark") SystemControl.toggleDarkMode()
-                                                            else if (modelData.act === "mute") AudioService.toggleMasterMute()
+                                                Repeater {
+                                                    model: [
+                                                        { label: "2.5D Tilted Phone Chassis", sub: "Extruded metallic depth walls & 3D flip", val: themeHub.phoneMode, act: "phone" },
+                                                        { label: "SekaiPop On-Screen Display (OSD)", sub: "Show pill HUD on Volume / Brightness / Dark Mode", val: themeHub.osdEnabled, act: "osd" },
+                                                        { label: "System Dark Mode", sub: "Toggle Windows dark/light app theme", val: SystemControl.darkMode, act: "dark" },
+                                                        { label: "Master Audio Mute", sub: "Current volume: " + AudioService.masterVolume + "%", val: AudioService.masterMuted, act: "mute" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        width: parent.width; height: 78; radius: 16
+                                                        color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Column {
+                                                            anchors.left: parent.left; anchors.leftMargin: 16; anchors.right: swBadge.left; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter; spacing: 3
+                                                            Text { text: modelData.label; font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            Text { text: modelData.sub; width: parent.width; elide: Text.ElideRight; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#64748B" }
+                                                        }
+                                                        Rectangle {
+                                                            id: swBadge
+                                                            anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                                                            width: 78; height: 34; radius: 17
+                                                            color: modelData.val ? themeHub.accentA : "#CBD5E1"
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        }
+                                                        MouseArea {
+                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                if (modelData.act === "phone") themeHub.setPhoneMode(!themeHub.phoneMode)
+                                                                else if (modelData.act === "osd") themeHub.setOsdEnabled(!themeHub.osdEnabled)
+                                                                else if (modelData.act === "dark") SystemControl.toggleDarkMode()
+                                                                else if (modelData.act === "mute") AudioService.toggleMasterMute()
+                                                            }
                                                         }
                                                     }
                                                 }
-                                            }
 
-                                            // Mic Mute quick pill
-                                            Rectangle {
-                                                visible: AudioService.micSupported
-                                                width: parent.width; height: 54; radius: 16
-                                                color: AudioService.micMuted ? "#FFE4E6" : "#ECFDF5"
-                                                border.width: 2.5; border.color: "#1A1B2E"
-                                                Text {
-                                                    anchors.centerIn: parent
-                                                    text: AudioService.micMuted ? "🎙 MICROPHONE MUTED (CLICK TO UNMUTE)" : "🎙 MICROPHONE ACTIVE (" + AudioService.micVolume + "%)"
-                                                    font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E"
+                                                // Mic Mute quick pill
+                                                Rectangle {
+                                                    visible: AudioService.micSupported
+                                                    width: parent.width; height: 56; radius: 16
+                                                    color: AudioService.micMuted ? "#FFE4E6" : "#ECFDF5"
+                                                    border.width: 2.5; border.color: "#1A1B2E"
+                                                    Text {
+                                                        anchors.centerIn: parent
+                                                        text: AudioService.micMuted ? "🎙 MICROPHONE MUTED (CLICK TO UNMUTE)" : "🎙 MICROPHONE ACTIVE (" + AudioService.micVolume + "%)"
+                                                        font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E"
+                                                    }
+                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: AudioService.toggleMicMute() }
                                                 }
-                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: AudioService.toggleMicMute() }
                                             }
                                         }
                                     }
@@ -7885,59 +8124,68 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 14
-                                            Text { text: "UNIT BAND PALETTES"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Grid {
-                                                columns: 2; columnSpacing: 12; rowSpacing: 12; width: parent.width
-                                                Repeater {
-                                                    model: themeHub.bands
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        readonly property bool sel: !themeHub.useCustomPalette && themeHub.bandId === modelData.id
-                                                        width: (parent.width - 12) * 0.5; height: 74; radius: 16
-                                                        color: sel ? "#F0FDFA" : "#F8FAFC"
-                                                        border.width: sel ? 3.5 : 2; border.color: sel ? modelData.A : "#1A1B2E"
-                                                        Row {
-                                                            anchors.fill: parent; anchors.margins: 12; spacing: 10
-                                                            Rectangle {
-                                                                width: 44; height: 44; radius: 14; anchors.verticalCenter: parent.verticalCenter
-                                                                gradient: Gradient {
-                                                                    GradientStop { position: 0.0; color: modelData.B }
-                                                                    GradientStop { position: 1.0; color: modelData.A }
+                                        Flickable {
+                                            id: genLeftFlick
+                                            anchors.fill: parent; anchors.margins: 22
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: genLeftCol.implicitHeight
+                                            Column {
+                                                id: genLeftCol
+                                                width: genLeftFlick.width; spacing: 14
+                                                Text { text: "UNIT BAND PALETTES"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
+                                                Grid {
+                                                    columns: 2; columnSpacing: 12; rowSpacing: 12; width: parent.width
+                                                    Repeater {
+                                                        model: themeHub.bands
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            readonly property bool sel: !themeHub.useCustomPalette && themeHub.bandId === modelData.id
+                                                            width: (parent.width - 12) * 0.5; height: 78; radius: 16
+                                                            color: sel ? "#F0FDFA" : "#F8FAFC"
+                                                            border.width: sel ? 3.5 : 2; border.color: sel ? modelData.A : "#1A1B2E"
+                                                            Row {
+                                                                anchors.fill: parent; anchors.margins: 12; spacing: 12
+                                                                Rectangle {
+                                                                    width: 46; height: 46; radius: 14; anchors.verticalCenter: parent.verticalCenter
+                                                                    gradient: Gradient {
+                                                                        GradientStop { position: 0.0; color: modelData.B }
+                                                                        GradientStop { position: 1.0; color: modelData.A }
+                                                                    }
+                                                                    border.width: 2.5; border.color: "#1A1B2E"
                                                                 }
-                                                                border.width: 2.5; border.color: "#1A1B2E"
+                                                                Column {
+                                                                    anchors.verticalCenter: parent.verticalCenter
+                                                                    width: parent.width - 58
+                                                                    spacing: 2
+                                                                    Text { text: modelData.shortName; font.family: "Consolas"; font.pixelSize: 14; font.weight: Font.Black; color: modelData.A }
+                                                                    Text { width: parent.width; elide: Text.ElideRight; text: modelData.name; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                }
                                                             }
-                                                            Column {
-                                                                anchors.verticalCenter: parent.verticalCenter; spacing: 2
-                                                                Text { text: modelData.shortName; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Black; color: modelData.A }
-                                                                Text { text: modelData.name; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBand(modelData.id) }
                                                         }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBand(modelData.id) }
                                                     }
                                                 }
-                                            }
 
-                                            // Wallpaper Match button
-                                            Rectangle {
-                                                width: parent.width; height: 64; radius: 16
-                                                color: themeHub.useCustomPalette ? "#ECFEFF" : "#F8FAFC"
-                                                border.width: themeHub.useCustomPalette ? 3.5 : 2.5; border.color: "#1A1B2E"
-                                                Row {
-                                                    anchors.centerIn: parent; spacing: 10
-                                                    Text { text: "🎨"; font.pixelSize: 20 }
-                                                    Text {
-                                                        text: themeHub.useCustomPalette ? "WALLPAPER MATCH ACTIVE (CLICK TO RE-EXTRACT)" : "MATCH PALETTE TO CURRENT WALLPAPER"
-                                                        font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
+                                                // Wallpaper Match button
+                                                Rectangle {
+                                                    width: parent.width; height: 64; radius: 16
+                                                    color: themeHub.useCustomPalette ? "#ECFEFF" : "#F8FAFC"
+                                                    border.width: themeHub.useCustomPalette ? 3.5 : 2.5; border.color: "#1A1B2E"
+                                                    Row {
+                                                        anchors.centerIn: parent; spacing: 10
+                                                        Text { text: "🎨"; font.pixelSize: 22 }
+                                                        Text {
+                                                            text: themeHub.useCustomPalette ? "WALLPAPER MATCH ACTIVE (RE-EXTRACT)" : "MATCH PALETTE TO CURRENT WALLPAPER"
+                                                            font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E"
+                                                        }
                                                     }
-                                                }
-                                                MouseArea {
-                                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                    onClicked: {
-                                                        const pal = WallpaperService.extractCurrentPalette()
-                                                        if (pal && pal.accentA)
-                                                            themeHub.applyWallpaperPalette(pal)
+                                                    MouseArea {
+                                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                        onClicked: {
+                                                            const pal = WallpaperService.extractCurrentPalette()
+                                                            if (pal && pal.accentA)
+                                                                themeHub.applyWallpaperPalette(pal)
+                                                        }
                                                     }
                                                 }
                                             }
@@ -7948,119 +8196,126 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 14
-                                            Text { text: "CLOCK & WEATHER"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                        Flickable {
+                                            id: genRightFlick
+                                            anchors.fill: parent; anchors.margins: 22
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: genRightCol.implicitHeight
+                                            Column {
+                                                id: genRightCol
+                                                width: genRightFlick.width; spacing: 14
+                                                Text { text: "CLOCK & WEATHER"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
 
-                                            // Weather City input
-                                            Row {
-                                                width: parent.width; spacing: 10
-                                                Rectangle {
-                                                    width: parent.width - 208; height: 48; radius: 14
-                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    clip: true
-                                                    TextInput {
-                                                        id: landCityInput
-                                                        anchors.fill: parent; anchors.margins: 12
-                                                        verticalAlignment: Text.AlignVCenter
+                                                // Weather City input
+                                                Row {
+                                                    width: parent.width; spacing: 10
+                                                    Rectangle {
+                                                        width: parent.width - 216; height: 50; radius: 14
+                                                        color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
                                                         clip: true
-                                                        selectByMouse: true
-                                                        text: WeatherService.city
-                                                        font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Bold; color: "#1A1B2E"
-                                                        onAccepted: WeatherService.setCity(text.trim())
-                                                        Keys.onEscapePressed: event => {
-                                                            qpKeyCatcher.forceActiveFocus()
-                                                            event.accepted = true
-                                                        }
-                                                        Connections {
-                                                            target: WeatherService
-                                                            function onWeatherChanged() {
-                                                                if (!landCityInput.activeFocus)
-                                                                    landCityInput.text = WeatherService.city
+                                                        TextInput {
+                                                            id: landCityInput
+                                                            anchors.fill: parent; anchors.margins: 12
+                                                            verticalAlignment: Text.AlignVCenter
+                                                            clip: true
+                                                            selectByMouse: true
+                                                            text: WeatherService.city
+                                                            font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Bold; color: "#1A1B2E"
+                                                            onAccepted: WeatherService.setCity(text.trim())
+                                                            Keys.onEscapePressed: event => {
+                                                                qpKeyCatcher.forceActiveFocus()
+                                                                event.accepted = true
+                                                            }
+                                                            Connections {
+                                                                target: WeatherService
+                                                                function onWeatherChanged() {
+                                                                    if (!landCityInput.activeFocus)
+                                                                        landCityInput.text = WeatherService.city
+                                                                }
                                                             }
                                                         }
                                                     }
-                                                }
-                                                Rectangle {
-                                                    width: 94; height: 48; radius: 14; color: themeHub.accentA; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: "APPLY"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: WeatherService.setCity(landCityInput.text.trim()) }
-                                                }
-                                                Rectangle {
-                                                    width: 94; height: 48; radius: 14; color: "#F1F5F9"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: "↻ SYNC"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: WeatherService.refresh() }
-                                                }
-                                            }
-
-                                            // Weather Unit + Style pills
-                                            Row {
-                                                width: parent.width; spacing: 10
-                                                Repeater {
-                                                    model: [{ l: "°C", v: "C" }, { l: "°F", v: "F" }]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        width: 72; height: 42; radius: 12
-                                                        color: themeHub.weatherUnit === modelData.v ? themeHub.accentA : "#F1F5F9"
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setWeatherUnit(modelData.v) }
-                                                    }
-                                                }
-                                                Item { width: 8; height: 1 }
-                                                Repeater {
-                                                    model: [{ l: "CARD", v: "card" }, { l: "COMPACT", v: "compact" }]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        width: 112; height: 42; radius: 12
-                                                        color: themeHub.weatherStyle === modelData.v ? themeHub.accentB : "#F1F5F9"
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setWeatherStyle(modelData.v) }
-                                                    }
-                                                }
-                                            }
-
-                                            // Clock style pills (0=KEYS, 1=TOWER, 2=STICKER, 3=STACK)
-                                            Row {
-                                                width: parent.width; spacing: 10
-                                                Repeater {
-                                                    model: [{ l: "KEYS", v: 0 }, { l: "TOWER", v: 1 }, { l: "STICKER", v: 2 }, { l: "STACK", v: 3 }]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        width: (parent.width - 30) / 4; height: 44; radius: 12
-                                                        color: themeHub.clockStyle === modelData.v ? themeHub.accentA : "#F1F5F9"
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setClockStyle(modelData.v) }
-                                                    }
-                                                }
-                                            }
-
-                                            // Clock toggles
-                                            Repeater {
-                                                model: [
-                                                    { l: "24-Hour Clock Format", val: themeHub.clock24h, k: "24h" },
-                                                    { l: "Show Seconds on Clock Widget", val: themeHub.clockSeconds, k: "sec" },
-                                                    { l: "Show Date on Clock Widget", val: themeHub.clockShowDate, k: "date" }
-                                                ]
-                                                delegate: Rectangle {
-                                                    required property var modelData
-                                                    width: parent.width; height: 52; radius: 14
-                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
                                                     Rectangle {
-                                                        anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                        width: 68; height: 30; radius: 15
-                                                        color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        width: 98; height: 50; radius: 14; color: themeHub.accentA; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: "APPLY"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: WeatherService.setCity(landCityInput.text.trim()) }
                                                     }
-                                                    MouseArea {
-                                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                        onClicked: {
-                                                            if (modelData.k === "24h") themeHub.setClock24h(!themeHub.clock24h)
-                                                            else if (modelData.k === "sec") themeHub.setClockSeconds(!themeHub.clockSeconds)
-                                                            else if (modelData.k === "date") themeHub.setClockShowDate(!themeHub.clockShowDate)
+                                                    Rectangle {
+                                                        width: 98; height: 50; radius: 14; color: "#F1F5F9"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: "↻ SYNC"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: WeatherService.refresh() }
+                                                    }
+                                                }
+
+                                                // Weather Unit + Style pills
+                                                Row {
+                                                    width: parent.width; spacing: 10
+                                                    Repeater {
+                                                        model: [{ l: "°C", v: "C" }, { l: "°F", v: "F" }]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            width: 74; height: 44; radius: 12
+                                                            color: themeHub.weatherUnit === modelData.v ? themeHub.accentA : "#F1F5F9"
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setWeatherUnit(modelData.v) }
+                                                        }
+                                                    }
+                                                    Item { width: 8; height: 1 }
+                                                    Repeater {
+                                                        model: [{ l: "CARD", v: "card" }, { l: "COMPACT", v: "compact" }]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            width: 120; height: 44; radius: 12
+                                                            color: themeHub.weatherStyle === modelData.v ? themeHub.accentB : "#F1F5F9"
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setWeatherStyle(modelData.v) }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Clock style pills (0=KEYS, 1=TOWER, 2=STICKER, 3=STACK)
+                                                Row {
+                                                    width: parent.width; spacing: 10
+                                                    Repeater {
+                                                        model: [{ l: "KEYS", v: 0 }, { l: "TOWER", v: 1 }, { l: "STICKER", v: 2 }, { l: "STACK", v: 3 }]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            width: (parent.width - 30) / 4; height: 46; radius: 12
+                                                            color: themeHub.clockStyle === modelData.v ? themeHub.accentA : "#F1F5F9"
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setClockStyle(modelData.v) }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Clock toggles
+                                                Repeater {
+                                                    model: [
+                                                        { l: "24-Hour Clock Format", val: themeHub.clock24h, k: "24h" },
+                                                        { l: "Show Seconds on Clock Widget", val: themeHub.clockSeconds, k: "sec" },
+                                                        { l: "Show Date on Clock Widget", val: themeHub.clockShowDate, k: "date" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        width: parent.width; height: 54; radius: 14
+                                                        color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        Rectangle {
+                                                            anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                                                            width: 74; height: 32; radius: 16
+                                                            color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        }
+                                                        MouseArea {
+                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                if (modelData.k === "24h") themeHub.setClock24h(!themeHub.clock24h)
+                                                                else if (modelData.k === "sec") themeHub.setClockSeconds(!themeHub.clockSeconds)
+                                                                else if (modelData.k === "date") themeHub.setClockShowDate(!themeHub.clockShowDate)
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -8078,78 +8333,85 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.45; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 24; spacing: 14
-                                            Text { text: "BAR STYLE & EDGE"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Grid {
-                                                columns: 2; columnSpacing: 12; rowSpacing: 12; width: parent.width
-                                                Repeater {
-                                                    model: [
-                                                        { id: "float",       name: "Float",       desc: "Rounded detached bar" },
-                                                        { id: "straight",    name: "Straight",    desc: "Flush crisp edge" },
-                                                        { id: "capsule",     name: "Capsule",     desc: "Pill-outlined frame" },
-                                                        { id: "transparent", name: "Transparent", desc: "Pure blur overlay" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        readonly property bool sel: themeHub.barStyle === modelData.id
-                                                        width: (parent.width - 12) * 0.5; height: 84; radius: 16
-                                                        color: sel ? "#FEF3C7" : "#F8FAFC"
-                                                        border.width: sel ? 3.5 : 2; border.color: "#1A1B2E"
-                                                        Column {
-                                                            anchors.centerIn: parent; spacing: 4; width: parent.width - 20
-                                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.name; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.desc; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#64748B" }
-                                                        }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarStyle(modelData.id) }
-                                                    }
-                                                }
-                                            }
-                                            // 4-Edge Selector
+                                        Flickable {
+                                            id: barLeftFlick
+                                            anchors.fill: parent; anchors.margins: 22
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: barLeftCol.implicitHeight
                                             Column {
-                                                width: parent.width; spacing: 8
-                                                Text { text: "SCREEN EDGE"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#64748B" }
-                                                Row {
-                                                    width: parent.width; spacing: 8
+                                                id: barLeftCol
+                                                width: barLeftFlick.width; spacing: 14
+                                                Text { text: "BAR STYLE & EDGE"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
+                                                Grid {
+                                                    columns: 2; columnSpacing: 12; rowSpacing: 12; width: parent.width
                                                     Repeater {
                                                         model: [
-                                                            { id: "top", l: "TOP" },
-                                                            { id: "bottom", l: "BOT" },
-                                                            { id: "left", l: "LEFT" },
-                                                            { id: "right", l: "RIGHT" }
+                                                            { id: "float",       name: "Float",       desc: "Rounded detached bar" },
+                                                            { id: "straight",    name: "Straight",    desc: "Flush crisp edge" },
+                                                            { id: "capsule",     name: "Capsule",     desc: "Pill-outlined frame" },
+                                                            { id: "transparent", name: "Transparent", desc: "Pure blur overlay" }
                                                         ]
                                                         delegate: Rectangle {
                                                             required property var modelData
-                                                            readonly property bool sel: themeHub.barEdge === modelData.id
-                                                            width: (parent.width - 24) / 4; height: 42; radius: 12
-                                                            color: sel ? themeHub.accentA : "#F1F5F9"
-                                                            border.width: sel ? 3 : 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarEdge(modelData.id) }
+                                                            readonly property bool sel: themeHub.barStyle === modelData.id
+                                                            width: (parent.width - 12) * 0.5; height: 88; radius: 16
+                                                            color: sel ? "#FEF3C7" : "#F8FAFC"
+                                                            border.width: sel ? 3.5 : 2; border.color: "#1A1B2E"
+                                                            Column {
+                                                                anchors.centerIn: parent; spacing: 4; width: parent.width - 20
+                                                                Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.name; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.desc; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#64748B" }
+                                                            }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarStyle(modelData.id) }
                                                         }
                                                     }
                                                 }
-                                            }
-                                            // Visibility Mode: Auto-Hide vs No-Hide
-                                            Row {
-                                                width: parent.width; spacing: 10
-                                                Repeater {
-                                                    model: [
-                                                        { val: true,  l: "AUTO-HIDE", desc: "Hide on overlap" },
-                                                        { val: false, l: "NO-HIDE",   desc: "Always reserve" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        readonly property bool sel: themeHub.barAutoHide === modelData.val
-                                                        width: (parent.width - 10) * 0.5; height: 64; radius: 16
-                                                        color: sel ? themeHub.accentB : "#F8FAFC"
-                                                        border.width: sel ? 3 : 2; border.color: "#1A1B2E"
-                                                        Column {
-                                                            anchors.centerIn: parent; spacing: 2
-                                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.desc; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.DemiBold; color: "#475569" }
+                                                // 4-Edge Selector
+                                                Column {
+                                                    width: parent.width; spacing: 8
+                                                    Text { text: "SCREEN EDGE"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#64748B" }
+                                                    Row {
+                                                        width: parent.width; spacing: 8
+                                                        Repeater {
+                                                            model: [
+                                                                { id: "top", l: "TOP" },
+                                                                { id: "bottom", l: "BOT" },
+                                                                { id: "left", l: "LEFT" },
+                                                                { id: "right", l: "RIGHT" }
+                                                            ]
+                                                            delegate: Rectangle {
+                                                                required property var modelData
+                                                                readonly property bool sel: themeHub.barEdge === modelData.id
+                                                                width: (parent.width - 24) / 4; height: 46; radius: 12
+                                                                color: sel ? themeHub.accentA : "#F1F5F9"
+                                                                border.width: sel ? 3 : 2; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarEdge(modelData.id) }
+                                                            }
                                                         }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarAutoHide(modelData.val) }
+                                                    }
+                                                }
+                                                // Visibility Mode: Auto-Hide vs No-Hide
+                                                Row {
+                                                    width: parent.width; spacing: 10
+                                                    Repeater {
+                                                        model: [
+                                                            { val: true,  l: "AUTO-HIDE", desc: "Hide on overlap" },
+                                                            { val: false, l: "NO-HIDE",   desc: "Always reserve" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            readonly property bool sel: themeHub.barAutoHide === modelData.val
+                                                            width: (parent.width - 10) * 0.5; height: 68; radius: 16
+                                                            color: sel ? themeHub.accentB : "#F8FAFC"
+                                                            border.width: sel ? 3 : 2; border.color: "#1A1B2E"
+                                                            Column {
+                                                                anchors.centerIn: parent; spacing: 3
+                                                                Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { anchors.horizontalCenter: parent.horizontalCenter; text: modelData.desc; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#475569" }
+                                                            }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setBarAutoHide(modelData.val) }
+                                                        }
                                                     }
                                                 }
                                             }
@@ -8159,71 +8421,78 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.55; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 20; spacing: 8
-                                            Text { text: "VISIBLE TOPBAR MODULES"; font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Repeater {
-                                                model: [
-                                                    { label: "Active App Badge & Window Title", val: themeHub.barShowActiveWindow, k: "win" },
-                                                    { label: "SekaiPop Media Pill",             val: themeHub.barShowMedia,        k: "media" },
-                                                    { label: "CPU / GPU / RAM Telemetry Pills", val: themeHub.barShowStats,        k: "stats" },
-                                                    { label: "System Tray Pill",                val: themeHub.barShowTray,         k: "tray" },
-                                                    { label: "Weather Temperature Pill",        val: themeHub.barShowWeather,      k: "weather" },
-                                                    { label: "Date & Clock Pill",               val: themeHub.barShowClock,        k: "clock" },
-                                                    { label: "Laptop Battery Indicator Pill",   val: themeHub.barShowBattery,      k: "bat" }
-                                                ]
-                                                delegate: Rectangle {
-                                                    required property var modelData
-                                                    width: parent.width; height: 48; radius: 14
-                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: modelData.label; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    Rectangle {
-                                                        anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                        width: 68; height: 28; radius: 14
-                                                        color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    }
-                                                    MouseArea {
-                                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                        onClicked: {
-                                                            if (modelData.k === "win") themeHub.setBarShowActiveWindow(!themeHub.barShowActiveWindow)
-                                                            else if (modelData.k === "media") themeHub.setBarShowMedia(!themeHub.barShowMedia)
-                                                            else if (modelData.k === "stats") themeHub.setBarShowStats(!themeHub.barShowStats)
-                                                            else if (modelData.k === "tray") themeHub.setBarShowTray(!themeHub.barShowTray)
-                                                            else if (modelData.k === "weather") themeHub.setBarShowWeather(!themeHub.barShowWeather)
-                                                            else if (modelData.k === "clock") themeHub.setBarShowClock(!themeHub.barShowClock)
-                                                            else if (modelData.k === "bat") themeHub.setBarShowBattery(!themeHub.barShowBattery)
+                                        Flickable {
+                                            id: barRightFlick
+                                            anchors.fill: parent; anchors.margins: 20
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: barRightCol.implicitHeight
+                                            Column {
+                                                id: barRightCol
+                                                width: barRightFlick.width; spacing: 10
+                                                Text { text: "VISIBLE TOPBAR MODULES"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
+                                                Repeater {
+                                                    model: [
+                                                        { label: "Active App Badge & Window Title", val: themeHub.barShowActiveWindow, k: "win" },
+                                                        { label: "SekaiPop Media Pill",             val: themeHub.barShowMedia,        k: "media" },
+                                                        { label: "CPU / GPU / RAM Telemetry Pills", val: themeHub.barShowStats,        k: "stats" },
+                                                        { label: "System Tray Pill",                val: themeHub.barShowTray,         k: "tray" },
+                                                        { label: "Weather Temperature Pill",        val: themeHub.barShowWeather,      k: "weather" },
+                                                        { label: "Date & Clock Pill",               val: themeHub.barShowClock,        k: "clock" },
+                                                        { label: "Laptop Battery Indicator Pill",   val: themeHub.barShowBattery,      k: "bat" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        width: parent.width; height: 50; radius: 14
+                                                        color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter; text: modelData.label; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        Rectangle {
+                                                            anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                                                            width: 72; height: 30; radius: 15
+                                                            color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        }
+                                                        MouseArea {
+                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                if (modelData.k === "win") themeHub.setBarShowActiveWindow(!themeHub.barShowActiveWindow)
+                                                                else if (modelData.k === "media") themeHub.setBarShowMedia(!themeHub.barShowMedia)
+                                                                else if (modelData.k === "stats") themeHub.setBarShowStats(!themeHub.barShowStats)
+                                                                else if (modelData.k === "tray") themeHub.setBarShowTray(!themeHub.barShowTray)
+                                                                else if (modelData.k === "weather") themeHub.setBarShowWeather(!themeHub.barShowWeather)
+                                                                else if (modelData.k === "clock") themeHub.setBarShowClock(!themeHub.barShowClock)
+                                                                else if (modelData.k === "bat") themeHub.setBarShowBattery(!themeHub.barShowBattery)
+                                                            }
                                                         }
                                                     }
                                                 }
-                                            }
-                                            Rectangle {
-                                                width: parent.width; height: 56; radius: 14
-                                                color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text {
-                                                    anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter
-                                                    text: "MEDIA PILL VISUALIZER"
-                                                    font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E"
-                                                }
-                                                Row {
-                                                    anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
-                                                    spacing: 8
-                                                    Repeater {
-                                                        model: [
-                                                            { id: "bars", l: "BARS" },
-                                                            { id: "wave", l: "WAVE" },
-                                                            { id: "off",  l: "OFF" }
-                                                        ]
-                                                        delegate: Rectangle {
-                                                            required property var modelData
-                                                            readonly property bool sel: themeHub.barMediaVizStyle === modelData.id
-                                                            width: 70; height: 32; radius: 10
-                                                            color: sel ? themeHub.accentB : "#FFFFFF"
-                                                            border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            MouseArea {
-                                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                                onClicked: themeHub.setBarMediaVizStyle(modelData.id)
+                                                Rectangle {
+                                                    width: parent.width; height: 58; radius: 14
+                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    Text {
+                                                        anchors.left: parent.left; anchors.leftMargin: 16; anchors.verticalCenter: parent.verticalCenter
+                                                        text: "MEDIA PILL VISUALIZER"
+                                                        font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E"
+                                                    }
+                                                    Row {
+                                                        anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
+                                                        spacing: 8
+                                                        Repeater {
+                                                            model: [
+                                                                { id: "bars", l: "BARS" },
+                                                                { id: "wave", l: "WAVE" },
+                                                                { id: "off",  l: "OFF" }
+                                                            ]
+                                                            delegate: Rectangle {
+                                                                required property var modelData
+                                                                readonly property bool sel: themeHub.barMediaVizStyle === modelData.id
+                                                                width: 74; height: 34; radius: 10
+                                                                color: sel ? themeHub.accentB : "#FFFFFF"
+                                                                border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea {
+                                                                    anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                                    onClicked: themeHub.setBarMediaVizStyle(modelData.id)
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -8243,156 +8512,163 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 18; spacing: 8
-                                            Text { text: "DOCK STYLE & KEYS"; font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black; color: "#1A1B2E" }
+                                        Flickable {
+                                            id: dskLeftFlick
+                                            anchors.fill: parent; anchors.margins: 20
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: dskLeftCol.implicitHeight
+                                            Column {
+                                                id: dskLeftCol
+                                                width: dskLeftFlick.width; spacing: 10
+                                                Text { text: "DOCK STYLE & KEYS"; font.family: "Segoe UI"; font.pixelSize: 20; font.weight: Font.Black; color: "#1A1B2E" }
 
-                                            // Dock Outer Pill Style
-                                            Row {
-                                                width: parent.width; spacing: 8
-                                                Repeater {
-                                                    model: [{ id: "float", l: "FLOAT" }, { id: "capsule", l: "CAPSULE" }, { id: "transparent", l: "CLEAR" }]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        width: (parent.width - 16) / 3; height: 38; radius: 12
-                                                        color: themeHub.dockStyle === modelData.id ? themeHub.accentA : "#F1F5F9"
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockStyle(modelData.id) }
-                                                    }
-                                                }
-                                            }
-
-                                            // Icon Roundness (Auto vs Round Circle vs Square Keycap)
-                                            Row {
-                                                width: parent.width; spacing: 8
-                                                Repeater {
-                                                    model: [
-                                                        { id: "auto",   l: "ICONS: AUTO" },
-                                                        { id: "circle", l: "ROUND ICONS" },
-                                                        { id: "square", l: "SQUARE KEYCAPS" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        readonly property bool sel: themeHub.dockIconShape === modelData.id
-                                                        width: (parent.width - 16) / 3; height: 36; radius: 11
-                                                        color: sel ? themeHub.accentB : "#F1F5F9"
-                                                        border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockIconShape(modelData.id) }
-                                                    }
-                                                }
-                                            }
-
-                                            // Dock Tile Size stepped slider (40..64)
-                                            Rectangle {
-                                                width: parent.width; height: 50; radius: 14
-                                                color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                // Dock Outer Pill Style
                                                 Row {
-                                                    anchors.fill: parent; anchors.margins: 10; spacing: 6
-                                                    Text { anchors.verticalCenter: parent.verticalCenter; text: "SIZE (" + themeHub.dockTileSize + "px)"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E"; width: 108 }
+                                                    width: parent.width; spacing: 8
                                                     Repeater {
-                                                        model: [40, 44, 48, 52, 56, 60, 64]
+                                                        model: [{ id: "float", l: "FLOAT" }, { id: "capsule", l: "CAPSULE" }, { id: "transparent", l: "CLEAR" }]
                                                         delegate: Rectangle {
-                                                            required property int modelData
-                                                            width: 46; height: 30; radius: 9; anchors.verticalCenter: parent.verticalCenter
-                                                            color: themeHub.dockTileSize === modelData ? themeHub.accentB : "#FFFFFF"
-                                                            border.width: 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: String(modelData); font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockTileSize(modelData) }
+                                                            required property var modelData
+                                                            width: (parent.width - 16) / 3; height: 42; radius: 12
+                                                            color: themeHub.dockStyle === modelData.id ? themeHub.accentA : "#F1F5F9"
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockStyle(modelData.id) }
                                                         }
                                                     }
                                                 }
-                                            }
 
-                                            // Magnification toggle
-                                            Rectangle {
-                                                width: parent.width; height: 42; radius: 13; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Text { anchors.left: parent.left; anchors.leftMargin: 14; anchors.verticalCenter: parent.verticalCenter; text: "Dock Hover Magnification"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                // Icon Roundness (Auto vs Round Circle vs Square Keycap)
+                                                Row {
+                                                    width: parent.width; spacing: 8
+                                                    Repeater {
+                                                        model: [
+                                                            { id: "auto",   l: "ICONS: AUTO" },
+                                                            { id: "circle", l: "ROUND ICONS" },
+                                                            { id: "square", l: "SQUARE KEYCAPS" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            readonly property bool sel: themeHub.dockIconShape === modelData.id
+                                                            width: (parent.width - 16) / 3; height: 40; radius: 11
+                                                            color: sel ? themeHub.accentB : "#F1F5F9"
+                                                            border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockIconShape(modelData.id) }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Dock Tile Size stepped slider (40..64)
                                                 Rectangle {
-                                                    anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
-                                                    width: 64; height: 26; radius: 13; color: themeHub.dockMagnify ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: themeHub.dockMagnify ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                }
-                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockMagnify(!themeHub.dockMagnify) }
-                                            }
-
-                                            // Dock Edge & Visibility Mode
-                                            Row {
-                                                width: parent.width; spacing: 8
-                                                Repeater {
-                                                    model: [
-                                                        { id: "bottom", l: "BOT" },
-                                                        { id: "top",    l: "TOP" },
-                                                        { id: "left",   l: "LEFT" },
-                                                        { id: "right",  l: "RIGHT" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        readonly property bool sel: themeHub.dockEdge === modelData.id
-                                                        width: (parent.width - 24) / 4; height: 36; radius: 10
-                                                        color: sel ? themeHub.accentA : "#F1F5F9"
-                                                        border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockEdge(modelData.id) }
-                                                    }
-                                                }
-                                            }
-
-                                            // Auto-hide vs No-hide toggle
-                                            Row {
-                                                width: parent.width; spacing: 8
-                                                Repeater {
-                                                    model: [
-                                                        { val: true,  l: "AUTO-HIDE (Dodge)" },
-                                                        { val: false, l: "NO-HIDE (Pinned)" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        readonly property bool sel: themeHub.dockAutoHide === modelData.val
-                                                        width: (parent.width - 8) * 0.5; height: 38; radius: 12
-                                                        color: sel ? themeHub.accentB : "#F8FAFC"
-                                                        border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockAutoHide(modelData.val) }
-                                                    }
-                                                }
-                                            }
-
-                                            // Dock utility keycap pills (4x2 grid)
-                                            Grid {
-                                                columns: 4; columnSpacing: 8; rowSpacing: 8; width: parent.width
-                                                Repeater {
-                                                    model: [
-                                                        { l: "Finder",    val: themeHub.dockShowFinder,    k: "finder" },
-                                                        { l: "Clip",      val: themeHub.dockShowClipboard, k: "clip" },
-                                                        { l: "Shelf",     val: themeHub.dockShowDropShelf, k: "drop" },
-                                                        { l: "Timer",     val: themeHub.dockShowTimer,     k: "timer" },
-                                                        { l: "Files",     val: themeHub.dockShowFiles,     k: "files" },
-                                                        { l: "Trash",     val: themeHub.dockShowTrash,     k: "trash" },
-                                                        { l: "Media",     val: themeHub.dockShowMedia,     k: "media" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        required property var modelData
-                                                        width: (parent.width - 24) / 4; height: 42; radius: 12
-                                                        color: modelData.val ? "#ECFDF5" : "#F8FAFC"
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.left: parent.left; anchors.leftMargin: 8; anchors.verticalCenter: parent.verticalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        Rectangle {
-                                                            anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
-                                                            width: 38; height: 22; radius: 11; color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    width: parent.width; height: 52; radius: 14
+                                                    color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    Row {
+                                                        anchors.fill: parent; anchors.margins: 9; spacing: 6
+                                                        Text { anchors.verticalCenter: parent.verticalCenter; text: "SIZE (" + themeHub.dockTileSize + "px)"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E"; width: 116 }
+                                                        Repeater {
+                                                            model: [40, 44, 48, 52, 56, 60, 64]
+                                                            delegate: Rectangle {
+                                                                required property int modelData
+                                                                width: 50; height: 34; radius: 9; anchors.verticalCenter: parent.verticalCenter
+                                                                color: themeHub.dockTileSize === modelData ? themeHub.accentB : "#FFFFFF"
+                                                                border.width: 2; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: String(modelData); font.family: "Consolas"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockTileSize(modelData) }
+                                                            }
                                                         }
-                                                        MouseArea {
-                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                            onClicked: {
-                                                                if (modelData.k === "finder") themeHub.setDockShowFinder(!themeHub.dockShowFinder)
-                                                                else if (modelData.k === "clip") themeHub.setDockShowClipboard(!themeHub.dockShowClipboard)
-                                                                else if (modelData.k === "drop") themeHub.setDockShowDropShelf(!themeHub.dockShowDropShelf)
-                                                                else if (modelData.k === "timer") themeHub.setDockShowTimer(!themeHub.dockShowTimer)
-                                                                else if (modelData.k === "files") themeHub.setDockShowFiles(!themeHub.dockShowFiles)
-                                                                else if (modelData.k === "trash") themeHub.setDockShowTrash(!themeHub.dockShowTrash)
-                                                                else if (modelData.k === "media") themeHub.setDockShowMedia(!themeHub.dockShowMedia)
+                                                    }
+                                                }
+
+                                                // Magnification toggle
+                                                Rectangle {
+                                                    width: parent.width; height: 46; radius: 13; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    Text { anchors.left: parent.left; anchors.leftMargin: 14; anchors.verticalCenter: parent.verticalCenter; text: "Dock Hover Magnification"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    Rectangle {
+                                                        anchors.right: parent.right; anchors.rightMargin: 14; anchors.verticalCenter: parent.verticalCenter
+                                                        width: 68; height: 28; radius: 14; color: themeHub.dockMagnify ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: themeHub.dockMagnify ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    }
+                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockMagnify(!themeHub.dockMagnify) }
+                                                }
+
+                                                // Dock Edge & Visibility Mode
+                                                Row {
+                                                    width: parent.width; spacing: 8
+                                                    Repeater {
+                                                        model: [
+                                                            { id: "bottom", l: "BOT" },
+                                                            { id: "top",    l: "TOP" },
+                                                            { id: "left",   l: "LEFT" },
+                                                            { id: "right",  l: "RIGHT" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            readonly property bool sel: themeHub.dockEdge === modelData.id
+                                                            width: (parent.width - 24) / 4; height: 40; radius: 10
+                                                            color: sel ? themeHub.accentA : "#F1F5F9"
+                                                            border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockEdge(modelData.id) }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Auto-hide vs No-hide toggle
+                                                Row {
+                                                    width: parent.width; spacing: 8
+                                                    Repeater {
+                                                        model: [
+                                                            { val: true,  l: "AUTO-HIDE (Dodge)" },
+                                                            { val: false, l: "NO-HIDE (Pinned)" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            readonly property bool sel: themeHub.dockAutoHide === modelData.val
+                                                            width: (parent.width - 8) * 0.5; height: 42; radius: 12
+                                                            color: sel ? themeHub.accentB : "#F8FAFC"
+                                                            border.width: sel ? 2.5 : 2; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.setDockAutoHide(modelData.val) }
+                                                        }
+                                                    }
+                                                }
+
+                                                // Dock utility keycap pills (4x2 grid)
+                                                Grid {
+                                                    columns: 4; columnSpacing: 8; rowSpacing: 8; width: parent.width
+                                                    Repeater {
+                                                        model: [
+                                                            { l: "Finder",    val: themeHub.dockShowFinder,    k: "finder" },
+                                                            { l: "Clip",      val: themeHub.dockShowClipboard, k: "clip" },
+                                                            { l: "Shelf",     val: themeHub.dockShowDropShelf, k: "drop" },
+                                                            { l: "Timer",     val: themeHub.dockShowTimer,     k: "timer" },
+                                                            { l: "Files",     val: themeHub.dockShowFiles,     k: "files" },
+                                                            { l: "Trash",     val: themeHub.dockShowTrash,     k: "trash" },
+                                                            { l: "Media",     val: themeHub.dockShowMedia,     k: "media" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            required property var modelData
+                                                            width: (parent.width - 24) / 4; height: 46; radius: 12
+                                                            color: modelData.val ? "#ECFDF5" : "#F8FAFC"
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.left: parent.left; anchors.leftMargin: 10; anchors.verticalCenter: parent.verticalCenter; text: modelData.l; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            Rectangle {
+                                                                anchors.right: parent.right; anchors.rightMargin: 7; anchors.verticalCenter: parent.verticalCenter
+                                                                width: 44; height: 24; radius: 12; color: modelData.val ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: modelData.val ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            }
+                                                            MouseArea {
+                                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                                onClicked: {
+                                                                    if (modelData.k === "finder") themeHub.setDockShowFinder(!themeHub.dockShowFinder)
+                                                                    else if (modelData.k === "clip") themeHub.setDockShowClipboard(!themeHub.dockShowClipboard)
+                                                                    else if (modelData.k === "drop") themeHub.setDockShowDropShelf(!themeHub.dockShowDropShelf)
+                                                                    else if (modelData.k === "timer") themeHub.setDockShowTimer(!themeHub.dockShowTimer)
+                                                                    else if (modelData.k === "files") themeHub.setDockShowFiles(!themeHub.dockShowFiles)
+                                                                    else if (modelData.k === "trash") themeHub.setDockShowTrash(!themeHub.dockShowTrash)
+                                                                    else if (modelData.k === "media") themeHub.setDockShowMedia(!themeHub.dockShowMedia)
+                                                                }
                                                             }
                                                         }
                                                     }
@@ -8405,112 +8681,121 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.5; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 22; spacing: 12
-                                            Text { text: "WIDGETS, VISUALIZER & WALLPAPER"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                        Flickable {
+                                            id: dskRightFlick
+                                            anchors.fill: parent; anchors.margins: 20
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: dskRightCol.implicitHeight
+                                            Column {
+                                                id: dskRightCol
+                                                width: dskRightFlick.width; spacing: 12
+                                                Text { text: "WIDGETS, VISUALIZER & WALLPAPER"; font.family: "Segoe UI"; font.pixelSize: 20; font.weight: Font.Black; color: "#1A1B2E" }
 
-                                            // Desktop widgets grid (all 7 SekaiDesk widgets + "+ Photo" Polaroid adder)
-                                            Grid {
-                                                columns: 4; columnSpacing: 8; rowSpacing: 8; width: parent.width
-                                                Repeater {
-                                                    model: [
-                                                        { k: "clock",    l: "Clock" },
-                                                        { k: "weather",  l: "Weather" },
-                                                        { k: "calendar", l: "Calendar" },
-                                                        { k: "profile",  l: "Profile" },
-                                                        { k: "todo",     l: "To-Do" },
-                                                        { k: "notes",    l: "Notes" },
-                                                        { k: "lyrics",   l: "Lyrics" },
-                                                        { k: "__photo",  l: "+ Photo" }
-                                                    ]
-                                                    delegate: Rectangle {
-                                                        id: widChip
-                                                        required property var modelData
-                                                        readonly property bool isPhoto: modelData.k === "__photo"
-                                                        readonly property bool on: !isPhoto && themeHub.widgetVisible(modelData.k)
-                                                        width: (parent.width - 24) / 4; height: 42; radius: 13
-                                                        color: isPhoto ? "#FFF1F2" : (widChip.on ? themeHub.accentA : "#F1F5F9")
-                                                        border.width: 2.5; border.color: "#1A1B2E"
-                                                        Text { anchors.centerIn: parent; text: isPhoto ? modelData.l : ((widChip.on ? "✓ " : "") + modelData.l); font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        MouseArea {
-                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                            onClicked: {
-                                                                if (widChip.isPhoto) {
-                                                                    quickPanelWindow.pickingFile = true
-                                                                    const p = SystemControl.pickImageFile("Add Polaroid Photo Frame")
-                                                                    quickPanelWindow.pickingFile = false
-                                                                    if (p && p.length > 0)
-                                                                        themeHub.addImageFrame(p)
-                                                                } else {
-                                                                    themeHub.setWidgetVisible(modelData.k, !widChip.on)
+                                                // Desktop widgets grid (all 7 SekaiDesk widgets + "+ Photo" Polaroid adder)
+                                                Grid {
+                                                    columns: 4; columnSpacing: 8; rowSpacing: 8; width: parent.width
+                                                    Repeater {
+                                                        model: [
+                                                            { k: "clock",    l: "Clock" },
+                                                            { k: "weather",  l: "Weather" },
+                                                            { k: "calendar", l: "Calendar" },
+                                                            { k: "profile",  l: "Profile" },
+                                                            { k: "todo",     l: "To-Do" },
+                                                            { k: "notes",    l: "Notes" },
+                                                            { k: "lyrics",   l: "Lyrics" },
+                                                            { k: "__photo",  l: "+ Photo" }
+                                                        ]
+                                                        delegate: Rectangle {
+                                                            id: widChip
+                                                            required property var modelData
+                                                            readonly property bool isPhoto: modelData.k === "__photo"
+                                                            readonly property bool on: !isPhoto && themeHub.widgetVisible(modelData.k)
+                                                            width: (parent.width - 24) / 4; height: 46; radius: 13
+                                                            color: isPhoto ? "#FFF1F2" : (widChip.on ? themeHub.accentA : "#F1F5F9")
+                                                            border.width: 2.5; border.color: "#1A1B2E"
+                                                            Text { anchors.centerIn: parent; text: isPhoto ? modelData.l : ((widChip.on ? "✓ " : "") + modelData.l); font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            MouseArea {
+                                                                anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                                onClicked: {
+                                                                    if (widChip.isPhoto) {
+                                                                        quickPanelWindow.pickingFile = true
+                                                                        const p = SystemControl.pickImageFile("Add Polaroid Photo Frame")
+                                                                        quickPanelWindow.pickingFile = false
+                                                                        if (p && p.length > 0)
+                                                                            themeHub.addImageFrame(p)
+                                                                    } else {
+                                                                        themeHub.setWidgetVisible(modelData.k, !widChip.on)
+                                                                    }
                                                                 }
                                                             }
                                                         }
                                                     }
                                                 }
-                                            }
 
-                                            // Visualizer toggle + all 11 styles (GPU shaders + Canvas)
-                                            Rectangle {
-                                                width: parent.width; height: 146; radius: 16; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                Column {
-                                                    anchors.fill: parent; anchors.margins: 12; spacing: 8
-                                                    Item {
-                                                        width: parent.width; height: 28
-                                                        Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "AUDIO VISUALIZER"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        Rectangle {
-                                                            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                                                            width: 72; height: 28; radius: 14; color: VisualizerService.enabled ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: VisualizerService.enabled ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
-                                                            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: VisualizerService.enabled = !VisualizerService.enabled }
+                                                // Visualizer toggle + all 11 styles (GPU shaders + Canvas)
+                                                Rectangle {
+                                                    width: parent.width; height: visInnerCol.implicitHeight + 24; radius: 16; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    Column {
+                                                        id: visInnerCol
+                                                        anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
+                                                        spacing: 10
+                                                        Item {
+                                                            width: parent.width; height: 30
+                                                            Text { anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter; text: "AUDIO VISUALIZER"; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            Rectangle {
+                                                                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                                                                width: 74; height: 30; radius: 15; color: VisualizerService.enabled ? themeHub.accentA : "#CBD5E1"; border.width: 2; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: VisualizerService.enabled ? "ON" : "OFF"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: VisualizerService.enabled = !VisualizerService.enabled }
+                                                            }
                                                         }
-                                                    }
-                                                    Grid {
-                                                        width: parent.width; columns: 6; columnSpacing: 6; rowSpacing: 6
-                                                        Repeater {
-                                                            model: ["tide", "ribbons", "aurora", "pulse", "scope", "mirror", "ring", "dots", "sekai", "bars", "wave"]
-                                                            delegate: Rectangle {
-                                                                required property string modelData
-                                                                width: (parent.width - 30) / 6; height: 38; radius: 10
-                                                                color: VisualizerService.style === modelData ? themeHub.accentB : "#FFFFFF"
-                                                                border.width: 2; border.color: "#1A1B2E"
-                                                                Text { anchors.centerIn: parent; text: modelData.toUpperCase(); font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E" }
-                                                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: VisualizerService.style = modelData }
+                                                        Grid {
+                                                            width: parent.width; columns: 4; columnSpacing: 6; rowSpacing: 6
+                                                            Repeater {
+                                                                model: ["tide", "ribbons", "aurora", "pulse", "scope", "mirror", "ring", "dots", "sekai", "bars", "wave"]
+                                                                delegate: Rectangle {
+                                                                    required property string modelData
+                                                                    width: (parent.width - 18) / 4; height: 40; radius: 10
+                                                                    color: VisualizerService.style === modelData ? themeHub.accentB : "#FFFFFF"
+                                                                    border.width: 2; border.color: "#1A1B2E"
+                                                                    Text { anchors.centerIn: parent; text: modelData.toUpperCase(); font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: VisualizerService.style = modelData }
+                                                                }
                                                             }
                                                         }
                                                     }
                                                 }
-                                            }
 
-                                            // Integrated Landscape Phone Wallpaper Gallery button
-                                            Rectangle {
-                                                width: parent.width; height: 50; radius: 16
-                                                color: openWallMa.containsMouse ? themeHub.accentB : themeHub.accentA
-                                                border.width: 3; border.color: "#1A1B2E"
-                                                Text { anchors.centerIn: parent; text: "🖼 OPEN WALLPAPER GALLERY"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
-                                                MouseArea {
-                                                    id: openWallMa
-                                                    anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
-                                                    onClicked: themeHub.openWallpapers()
-                                                }
-                                            }
-                                            Row {
-                                                width: parent.width; spacing: 12
+                                                // Integrated Landscape Phone Wallpaper Gallery button
                                                 Rectangle {
-                                                    width: (parent.width - 12) * 0.5; height: 48; radius: 14; color: "#F1F5F9"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: "🎲 RANDOM WALLPAPER"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
-                                                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: WallpaperService.nextRandomWallpaper() }
-                                                }
-                                                Rectangle {
-                                                    width: (parent.width - 12) * 0.5; height: 48; radius: 14; color: "#F1F5F9"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Text { anchors.centerIn: parent; text: "🖼 PICK PROFILE AVATAR"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                    width: parent.width; height: 52; radius: 16
+                                                    color: openWallMa.containsMouse ? themeHub.accentB : themeHub.accentA
+                                                    border.width: 3; border.color: "#1A1B2E"
+                                                    Text { anchors.centerIn: parent; text: "🖼 OPEN WALLPAPER GALLERY"; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
                                                     MouseArea {
-                                                        anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                                        onClicked: {
-                                                            quickPanelWindow.pickingFile = true
-                                                            const p = SystemControl.pickImageFile("Choose Profile Avatar Image")
-                                                            quickPanelWindow.pickingFile = false
-                                                            if (p && p.length > 0) themeHub.setProfileAvatar(p)
+                                                        id: openWallMa
+                                                        anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                                        onClicked: themeHub.openWallpapers()
+                                                    }
+                                                }
+                                                Row {
+                                                    width: parent.width; spacing: 12
+                                                    Rectangle {
+                                                        width: (parent.width - 12) * 0.5; height: 50; radius: 14; color: "#F1F5F9"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: "🎲 RANDOM WALLPAPER"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: WallpaperService.nextRandomWallpaper() }
+                                                    }
+                                                    Rectangle {
+                                                        width: (parent.width - 12) * 0.5; height: 50; radius: 14; color: "#F1F5F9"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Text { anchors.centerIn: parent; text: "🖼 PICK PROFILE AVATAR"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        MouseArea {
+                                                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                                            onClicked: {
+                                                                quickPanelWindow.pickingFile = true
+                                                                const p = SystemControl.pickImageFile("Choose Profile Avatar Image")
+                                                                quickPanelWindow.pickingFile = false
+                                                                if (p && p.length > 0) themeHub.setProfileAvatar(p)
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -8528,30 +8813,41 @@ PanelWindow {
                                     Rectangle {
                                         width: (parent.width - 24) * 0.52; height: parent.height
                                         radius: 24; color: "#FFFFFF"; border.width: 3.5; border.color: "#1A1B2E"
-                                        Column {
-                                            anchors.fill: parent; anchors.margins: 22; spacing: 8
-                                            Text { text: "GLOBAL SHORTCUTS"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
-                                            Repeater {
-                                                model: [
-                                                    { keys: "ALT + SPACE",     desc: "Open Spotlight Search & PowerTools" },
-                                                    { keys: "CTRL + ALT + V",  desc: "Open Clipboard History & Snippets" },
-                                                    { keys: "CTRL + ALT + A",  desc: "Toggle 2.5D QuickPanel Smartphone" },
-                                                    { keys: "CTRL + ALT + T",  desc: "Temporarily Show / Hide Windows Taskbar" },
-                                                    { keys: "CTRL + ALT + G",  desc: "Toggle Game Mode (Instant Hibernate)" },
-                                                    { keys: "TOPBAR BAND",     desc: "Enter Edit Desktop Mode (Scrapbook)" },
-                                                    { keys: "ESC",             desc: "Back out of active overlay / modal" }
-                                                ]
-                                                delegate: Rectangle {
-                                                    required property var modelData
-                                                    width: parent.width; height: 46; radius: 13; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
-                                                    Row {
-                                                        anchors.fill: parent; anchors.margins: 8; spacing: 12
-                                                        Rectangle {
-                                                            width: 150; height: 28; radius: 8; anchors.verticalCenter: parent.verticalCenter
-                                                            color: themeHub.accentA; border.width: 2; border.color: "#1A1B2E"
-                                                            Text { anchors.centerIn: parent; text: modelData.keys; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E" }
+                                        Flickable {
+                                            id: sysLeftFlick
+                                            anchors.fill: parent; anchors.margins: 22
+                                            clip: true; boundsBehavior: Flickable.StopAtBounds
+                                            contentWidth: width; contentHeight: sysLeftCol.implicitHeight
+                                            Column {
+                                                id: sysLeftCol
+                                                width: sysLeftFlick.width; spacing: 10
+                                                Text { text: "GLOBAL SHORTCUTS"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
+                                                Repeater {
+                                                    model: [
+                                                        { keys: "ALT + SPACE",     desc: "Open Spotlight Search & PowerTools" },
+                                                        { keys: "CTRL + ALT + V",  desc: "Open Clipboard History & Snippets" },
+                                                        { keys: "CTRL + ALT + A",  desc: "Toggle 2.5D QuickPanel Smartphone" },
+                                                        { keys: "CTRL + ALT + T",  desc: "Temporarily Show / Hide Windows Taskbar" },
+                                                        { keys: "CTRL + ALT + G",  desc: "Toggle Game Mode (Instant Hibernate)" },
+                                                        { keys: "TOPBAR BAND",     desc: "Enter Edit Desktop Mode (Scrapbook)" },
+                                                        { keys: "ESC",             desc: "Back out of active overlay / modal" }
+                                                    ]
+                                                    delegate: Rectangle {
+                                                        required property var modelData
+                                                        width: parent.width; height: 54; radius: 14; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                        Row {
+                                                            anchors.fill: parent; anchors.margins: 10; spacing: 12
+                                                            Rectangle {
+                                                                width: 170; height: 34; radius: 9; anchors.verticalCenter: parent.verticalCenter
+                                                                color: themeHub.accentA; border.width: 2; border.color: "#1A1B2E"
+                                                                Text { anchors.centerIn: parent; text: modelData.keys; font.family: "Consolas"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            }
+                                                            Text {
+                                                                width: parent.width - 182; elide: Text.ElideRight
+                                                                anchors.verticalCenter: parent.verticalCenter; text: modelData.desc
+                                                                font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.DemiBold; color: "#1A1B2E"
+                                                            }
                                                         }
-                                                        Text { anchors.verticalCenter: parent.verticalCenter; text: modelData.desc; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#1A1B2E" }
                                                     }
                                                 }
                                             }
@@ -8572,16 +8868,16 @@ PanelWindow {
                                             Column {
                                                 id: rightActionsCol
                                                 width: rightActionsFlick.width
-                                                spacing: 10
-                                                Text { text: "HARDWARE & ACTIONS"; font.family: "Segoe UI"; font.pixelSize: 18; font.weight: Font.Black; color: "#1A1B2E" }
+                                                spacing: 12
+                                                Text { text: "HARDWARE & ACTIONS"; font.family: "Segoe UI"; font.pixelSize: 21; font.weight: Font.Black; color: "#1A1B2E" }
                                                 Rectangle {
-                                                    width: parent.width; height: 122; radius: 18; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    width: parent.width; height: 142; radius: 18; color: "#F8FAFC"; border.width: 2.5; border.color: "#1A1B2E"
                                                     Column {
-                                                        anchors.fill: parent; anchors.margins: 15; spacing: 5
-                                                        Text { text: "Machine: " + (WindowTracker.machineName || "Windows PC") + "  ·  User: " + (WindowTracker.userName || "User"); font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        Text { text: "Uptime: " + (WindowTracker.uptimeText || "--"); font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#475569" }
-                                                        Text { text: "CPU: " + WindowTracker.cpuUsage + "%  (" + (WindowTracker.cpuTemp >= 0 ? WindowTracker.cpuTemp + "°C" : "--") + ")   ·   RAM: " + WindowTracker.ramUsage + "%"; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Bold; color: "#0F172A" }
-                                                        Text { text: "Display: " + themeHub.screenW + " x " + themeHub.screenH + "   ·   Band: " + themeHub.currentBand.name; font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Bold; color: "#0F172A" }
+                                                        anchors.fill: parent; anchors.margins: 15; spacing: 6
+                                                        Text { width: parent.width; elide: Text.ElideRight; text: "Machine: " + (WindowTracker.machineName || "Windows PC") + "  ·  User: " + (WindowTracker.userName || "User"); font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        Text { width: parent.width; elide: Text.ElideRight; text: "Uptime: " + (WindowTracker.uptimeText || "--"); font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#475569" }
+                                                        Text { width: parent.width; elide: Text.ElideRight; text: "CPU: " + WindowTracker.cpuUsage + "% (" + (WindowTracker.cpuTemp >= 0 ? WindowTracker.cpuTemp + "°C" : "--") + ")  ·  RAM: " + WindowTracker.ramUsage + "%"; font.family: "Consolas"; font.pixelSize: 14; font.weight: Font.Bold; color: "#0F172A" }
+                                                        Text { width: parent.width; elide: Text.ElideRight; text: "Display: " + themeHub.screenW + "×" + themeHub.screenH + "  ·  " + themeHub.currentBand.name; font.family: "Consolas"; font.pixelSize: 14; font.weight: Font.Bold; color: "#0F172A" }
                                                     }
                                                 }
                                                 Rectangle {
@@ -8598,31 +8894,31 @@ PanelWindow {
                                                     Column {
                                                         id: gmCol
                                                         anchors { left: parent.left; right: parent.right; top: parent.top; margins: 12 }
-                                                        spacing: 8
+                                                        spacing: 10
 
                                                         // Header + Live Status Badge + Manual Toggle
                                                         Row {
-                                                            width: gmCol.width; height: 32; spacing: 6
+                                                            width: gmCol.width; height: 38; spacing: 6
                                                             Column {
-                                                                width: Math.max(80, gmCol.width - 118)
+                                                                width: Math.max(80, gmCol.width - 148)
                                                                 anchors.verticalCenter: parent.verticalCenter
                                                                 spacing: 1
                                                                 Text {
                                                                     width: parent.width; elide: Text.ElideRight
                                                                     text: "GAME MODE & PERFORMANCE"
-                                                                    font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E"
                                                                 }
                                                                 Text {
                                                                     width: parent.width; elide: Text.ElideRight
                                                                     text: GameModeService.active
                                                                         ? ("ACTIVE · " + (GameModeService.activeGameExe || "Manual"))
                                                                         : (GameModeService.autoDetect ? "AUTO READY" : "STANDBY")
-                                                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Bold
+                                                                    font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold
                                                                     color: GameModeService.active ? "#BE123C" : (GameModeService.autoDetect ? "#047857" : "#475569")
                                                                 }
                                                             }
                                                             Rectangle {
-                                                                width: 112; height: 28; radius: 10
+                                                                width: 142; height: 34; radius: 11
                                                                 anchors.verticalCenter: parent.verticalCenter
                                                                 color: GameModeService.active
                                                                     ? (gmToggleMa.containsMouse ? "#FECDD3" : "#FFE4E6")
@@ -8631,7 +8927,7 @@ PanelWindow {
                                                                 Text {
                                                                     anchors.centerIn: parent
                                                                     text: GameModeService.active ? "RESUME" : "SLEEP (C+A+G)"
-                                                                    font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                    font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                                 }
                                                                 MouseArea {
                                                                     id: gmToggleMa
@@ -8649,26 +8945,26 @@ PanelWindow {
 
                                                         // Auto-Detect Toggle
                                                         Rectangle {
-                                                            width: gmCol.width; height: 36; radius: 11
+                                                            width: gmCol.width; height: 44; radius: 12
                                                             color: GameModeService.autoDetect ? "#ECFDF5" : "#FFFFFF"
                                                             border.width: 2; border.color: "#1A1B2E"
                                                             Row {
-                                                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                                                anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 8
                                                                 Text {
-                                                                    width: Math.max(80, gmCol.width - 80)
+                                                                    width: Math.max(80, gmCol.width - 92)
                                                                     anchors.verticalCenter: parent.verticalCenter
                                                                     text: "AUTO-DETECT GAMES"
-                                                                    font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Bold; color: "#1A1B2E"
                                                                 }
                                                                 Rectangle {
                                                                     anchors.verticalCenter: parent.verticalCenter
-                                                                    width: 52; height: 22; radius: 11
+                                                                    width: 60; height: 26; radius: 13
                                                                     color: GameModeService.autoDetect ? themeHub.accentB : "#E2E8F0"
                                                                     border.width: 1.5; border.color: "#1A1B2E"
                                                                     Text {
                                                                         anchors.centerIn: parent
                                                                         text: GameModeService.autoDetect ? "ON" : "OFF"
-                                                                        font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                        font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                                     }
                                                                 }
                                                             }
@@ -8680,9 +8976,9 @@ PanelWindow {
 
                                                         // Mode Selector (Hibernate vs Zero-Footprint)
                                                         Column {
-                                                            width: gmCol.width; spacing: 4
+                                                            width: gmCol.width; spacing: 6
                                                             Row {
-                                                                width: gmCol.width; height: 30; spacing: 6
+                                                                width: gmCol.width; height: 38; spacing: 6
                                                                 Repeater {
                                                                     model: [
                                                                         { id: "hibernate", label: "HIBERNATE (INSTANT)" },
@@ -8690,7 +8986,7 @@ PanelWindow {
                                                                     ]
                                                                     delegate: Rectangle {
                                                                         required property var modelData
-                                                                        width: (gmCol.width - 6) / 2; height: 30; radius: 9
+                                                                        width: (gmCol.width - 6) / 2; height: 38; radius: 10
                                                                         color: GameModeService.mode === modelData.id
                                                                             ? themeHub.accentB
                                                                             : (gmModeMa.containsMouse ? "#CBD5E1" : "#E2E8F0")
@@ -8698,7 +8994,7 @@ PanelWindow {
                                                                         Text {
                                                                             anchors.centerIn: parent
                                                                             text: modelData.label
-                                                                            font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                            font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                                         }
                                                                         MouseArea {
                                                                             id: gmModeMa
@@ -8713,33 +9009,33 @@ PanelWindow {
                                                                 text: GameModeService.mode === "zero"
                                                                     ? "Exits GUI into pure-Win32 --wait-game (~2MB, 0% CPU/VRAM) until game closes."
                                                                     : "Hides all overlays, pauses workers, sets Win11 EcoQoS & trims RAM/VRAM instantly."
-                                                                font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.DemiBold; color: "#475569"
+                                                                font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#475569"
                                                             }
                                                         }
 
                                                         // Restore Taskbar in Zero Mode
                                                         Rectangle {
                                                             visible: GameModeService.mode === "zero"
-                                                            width: gmCol.width; height: 34; radius: 11
+                                                            width: gmCol.width; height: 42; radius: 12
                                                             color: GameModeService.restoreTaskbarInZero ? "#EFF6FF" : "#FFFFFF"
                                                             border.width: 2; border.color: "#1A1B2E"
                                                             Row {
-                                                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 8
+                                                                anchors.fill: parent; anchors.leftMargin: 12; anchors.rightMargin: 12; spacing: 8
                                                                 Text {
-                                                                    width: Math.max(80, gmCol.width - 80)
+                                                                    width: Math.max(80, gmCol.width - 92)
                                                                     anchors.verticalCenter: parent.verticalCenter
                                                                     text: "RESTORE TASKBAR IN ZERO MODE"
-                                                                    font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Bold; color: "#1A1B2E"
                                                                 }
                                                                 Rectangle {
                                                                     anchors.verticalCenter: parent.verticalCenter
-                                                                    width: 52; height: 22; radius: 11
+                                                                    width: 60; height: 26; radius: 13
                                                                     color: GameModeService.restoreTaskbarInZero ? themeHub.accentB : "#E2E8F0"
                                                                     border.width: 1.5; border.color: "#1A1B2E"
                                                                     Text {
                                                                         anchors.centerIn: parent
                                                                         text: GameModeService.restoreTaskbarInZero ? "ON" : "OFF"
-                                                                        font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                        font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                                     }
                                                                 }
                                                             }
@@ -8751,18 +9047,18 @@ PanelWindow {
 
                                                         // Game List Header + Actions
                                                         Row {
-                                                            width: gmCol.width; height: 24; spacing: 4
+                                                            width: gmCol.width; height: 30; spacing: 6
                                                             Text {
-                                                                width: Math.max(60, gmCol.width - 178)
+                                                                width: Math.max(60, gmCol.width - 250)
                                                                 anchors.verticalCenter: parent.verticalCenter
                                                                 text: "GAME LIST (" + GameModeService.gameList.length + ")"
-                                                                font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                             }
                                                             Rectangle {
-                                                                width: 68; height: 22; radius: 7
+                                                                width: 96; height: 28; radius: 8
                                                                 color: gmCard.runningPickerOpen ? themeHub.accentA : (gmRunBtnMa.containsMouse ? "#DBEAFE" : "#E0F2FE")
                                                                 border.width: 1.5; border.color: "#1A1B2E"
-                                                                Text { anchors.centerIn: parent; text: "+ RUNNING"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { anchors.centerIn: parent; text: "+ RUNNING"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                 MouseArea {
                                                                     id: gmRunBtnMa
                                                                     anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -8774,10 +9070,10 @@ PanelWindow {
                                                                 }
                                                             }
                                                             Rectangle {
-                                                                width: 50; height: 22; radius: 7
+                                                                width: 68; height: 28; radius: 8
                                                                 color: gmExeBtnMa.containsMouse ? "#FEF08A" : "#FEF9C3"
                                                                 border.width: 1.5; border.color: "#1A1B2E"
-                                                                Text { anchors.centerIn: parent; text: "+ .EXE"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { anchors.centerIn: parent; text: "+ .EXE"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                 MouseArea {
                                                                     id: gmExeBtnMa
                                                                     anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -8792,10 +9088,10 @@ PanelWindow {
                                                                 }
                                                             }
                                                             Rectangle {
-                                                                width: 48; height: 22; radius: 7
+                                                                width: 68; height: 28; radius: 8
                                                                 color: gmResetBtnMa.containsMouse ? "#FCA5A5" : "#FEE2E2"
                                                                 border.width: 1.5; border.color: "#1A1B2E"
-                                                                Text { anchors.centerIn: parent; text: "RESET"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { anchors.centerIn: parent; text: "RESET"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                 MouseArea {
                                                                     id: gmResetBtnMa
                                                                     anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -8808,30 +9104,30 @@ PanelWindow {
                                                         Rectangle {
                                                             visible: gmCard.runningPickerOpen
                                                             width: gmCol.width
-                                                            height: runningFlow.implicitHeight + 12
-                                                            radius: 10; color: "#EFF6FF"; border.width: 1.5; border.color: "#1A1B2E"
+                                                            height: runningFlow.implicitHeight + 14
+                                                            radius: 12; color: "#EFF6FF"; border.width: 1.5; border.color: "#1A1B2E"
                                                             Flow {
                                                                 id: runningFlow
-                                                                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 6 }
-                                                                spacing: 4
+                                                                anchors { left: parent.left; right: parent.right; top: parent.top; margins: 7 }
+                                                                spacing: 6
                                                                 Text {
                                                                     visible: gmCard.runningExes.length === 0
                                                                     text: "No other app windows running."
-                                                                    font.family: "Segoe UI"; font.pixelSize: 10; color: "#64748B"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 13; color: "#64748B"
                                                                 }
                                                                 Repeater {
                                                                     model: gmCard.runningExes
                                                                     delegate: Rectangle {
                                                                         required property var modelData
                                                                         readonly property bool alreadyAdded: GameModeService.gameList.indexOf(modelData.exe) >= 0
-                                                                        width: runChipTxt.implicitWidth + 12; height: 22; radius: 7
+                                                                        width: runChipTxt.implicitWidth + 16; height: 28; radius: 8
                                                                         color: alreadyAdded ? "#DCFCE7" : (runChipMa.containsMouse ? themeHub.accentB : "#FFFFFF")
                                                                         border.width: 1.5; border.color: "#1A1B2E"
                                                                         Text {
                                                                             id: runChipTxt
                                                                             anchors.centerIn: parent
                                                                             text: (alreadyAdded ? "✓ " : "+ ") + modelData.exe
-                                                                            font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                            font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#1A1B2E"
                                                                         }
                                                                         MouseArea {
                                                                             id: runChipMa
@@ -8845,19 +9141,19 @@ PanelWindow {
 
                                                         // Game List Chips
                                                         Flow {
-                                                            width: gmCol.width; spacing: 4
+                                                            width: gmCol.width; spacing: 6
                                                             Repeater {
                                                                 model: GameModeService.gameList
                                                                 delegate: Rectangle {
                                                                     required property string modelData
-                                                                    width: gChipTxt.implicitWidth + 12; height: 21; radius: 7
+                                                                    width: gChipTxt.implicitWidth + 16; height: 28; radius: 8
                                                                     color: gChipMa.containsMouse ? "#FFE4E6" : "#FFFFFF"
                                                                     border.width: 1.5; border.color: "#1A1B2E"
                                                                     Text {
                                                                         id: gChipTxt
                                                                         anchors.centerIn: parent
                                                                         text: modelData + " ×"
-                                                                        font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                        font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#1A1B2E"
                                                                     }
                                                                     MouseArea {
                                                                         id: gChipMa
@@ -8870,18 +9166,18 @@ PanelWindow {
 
                                                         // Exclude List Header + Chips
                                                         Row {
-                                                            width: gmCol.width; height: 24; spacing: 4
+                                                            width: gmCol.width; height: 30; spacing: 6
                                                             Text {
-                                                                width: Math.max(60, gmCol.width - 54)
+                                                                width: Math.max(60, gmCol.width - 74)
                                                                 anchors.verticalCenter: parent.verticalCenter
                                                                 text: "EXCLUDE LIST (" + GameModeService.excludeList.length + ")"
-                                                                font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                             }
                                                             Rectangle {
-                                                                width: 50; height: 22; radius: 7
+                                                                width: 68; height: 28; radius: 8
                                                                 color: gmExclBtnMa.containsMouse ? "#E2E8F0" : "#FFFFFF"
                                                                 border.width: 1.5; border.color: "#1A1B2E"
-                                                                Text { anchors.centerIn: parent; text: "+ .EXE"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { anchors.centerIn: parent; text: "+ .EXE"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                 MouseArea {
                                                                     id: gmExclBtnMa
                                                                     anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -8898,19 +9194,19 @@ PanelWindow {
                                                         }
 
                                                         Flow {
-                                                            width: gmCol.width; spacing: 4
+                                                            width: gmCol.width; spacing: 6
                                                             Repeater {
                                                                 model: GameModeService.excludeList
                                                                 delegate: Rectangle {
                                                                     required property string modelData
-                                                                    width: exChipTxt.implicitWidth + 12; height: 21; radius: 7
+                                                                    width: exChipTxt.implicitWidth + 16; height: 28; radius: 8
                                                                     color: exChipMa.containsMouse ? "#FFE4E6" : "#E2E8F0"
                                                                     border.width: 1.5; border.color: "#1A1B2E"
                                                                     Text {
                                                                         id: exChipTxt
                                                                         anchors.centerIn: parent
                                                                         text: modelData + " ×"
-                                                                        font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#334155"
+                                                                        font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#334155"
                                                                     }
                                                                     MouseArea {
                                                                         id: exChipMa
@@ -8923,27 +9219,27 @@ PanelWindow {
 
                                                         // RTSS Guard
                                                         Rectangle {
-                                                            width: gmCol.width; height: 34; radius: 10
+                                                            width: gmCol.width; height: 42; radius: 11
                                                             color: GameModeService.rtssExcluded
                                                                 ? "#DCFCE7"
                                                                 : (GameModeService.rtssDetected ? "#FEF3C7" : "#F1F5F9")
                                                             border.width: 1.5; border.color: "#1A1B2E"
                                                             Row {
-                                                                anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 8; spacing: 6
+                                                                anchors.fill: parent; anchors.leftMargin: 10; anchors.rightMargin: 10; spacing: 6
                                                                 Text {
-                                                                    width: Math.max(80, gmCol.width - (GameModeService.rtssDetected && !GameModeService.rtssExcluded ? 152 : 76))
+                                                                    width: Math.max(80, gmCol.width - (GameModeService.rtssDetected && !GameModeService.rtssExcluded ? 202 : 94))
                                                                     anchors.verticalCenter: parent.verticalCenter
                                                                     elide: Text.ElideRight
                                                                     text: GameModeService.rtssExcluded
                                                                         ? "RTSS GUARD: Protected (SekaiDesk.exe.cfg)"
                                                                         : (GameModeService.rtssDetected ? "RTSS Detected — Hooking Active" : "RTSS Not Detected")
-                                                                    font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#1A1B2E"
+                                                                    font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#1A1B2E"
                                                                 }
                                                                 Rectangle {
-                                                                    width: 54; height: 22; radius: 7; anchors.verticalCenter: parent.verticalCenter
+                                                                    width: 72; height: 28; radius: 8; anchors.verticalCenter: parent.verticalCenter
                                                                     color: rtssRescanMa.containsMouse ? "#CBD5E1" : "#FFFFFF"
                                                                     border.width: 1.5; border.color: "#1A1B2E"
-                                                                    Text { anchors.centerIn: parent; text: "RESCAN"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    Text { anchors.centerIn: parent; text: "RESCAN"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                     MouseArea {
                                                                         id: rtssRescanMa
                                                                         anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -8952,10 +9248,10 @@ PanelWindow {
                                                                 }
                                                                 Rectangle {
                                                                     visible: GameModeService.rtssDetected && !GameModeService.rtssExcluded
-                                                                    width: 74; height: 22; radius: 7; anchors.verticalCenter: parent.verticalCenter
+                                                                    width: 102; height: 28; radius: 8; anchors.verticalCenter: parent.verticalCenter
                                                                     color: rtssBlockMa.containsMouse ? "#FDE047" : themeHub.accentB
                                                                     border.width: 1.5; border.color: "#1A1B2E"
-                                                                    Text { anchors.centerIn: parent; text: "BLOCK RTSS"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    Text { anchors.centerIn: parent; text: "BLOCK RTSS"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                     MouseArea {
                                                                         id: rtssBlockMa
                                                                         anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
@@ -8969,52 +9265,52 @@ PanelWindow {
                                                             visible: GameModeService.lastStatus !== ""
                                                             width: gmCol.width; elide: Text.ElideRight
                                                             text: GameModeService.lastStatus
-                                                            font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Bold; color: "#0369A1"
+                                                            font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#0369A1"
                                                         }
                                                     }
                                                 }
                                                 Rectangle {
-                                                    width: parent.width; height: 96; radius: 16
+                                                    width: parent.width; height: 118; radius: 16
                                                     color: TaskbarManager.active ? "#ECFDF5" : "#F8FAFC"
                                                     border.width: 2.5; border.color: "#1A1B2E"
                                                     Column {
-                                                        anchors.fill: parent; anchors.margins: 12; spacing: 8
+                                                        anchors.fill: parent; anchors.margins: 12; spacing: 10
                                                         Row {
-                                                            width: parent.width; height: 30; spacing: 8
+                                                            width: parent.width; height: 42; spacing: 8
                                                             Column {
-                                                                width: parent.width - 98
+                                                                width: parent.width - 116
                                                                 anchors.verticalCenter: parent.verticalCenter
-                                                                spacing: 1
+                                                                spacing: 2
                                                                 Row {
                                                                     spacing: 6
-                                                                    Image { anchors.verticalCenter: parent.verticalCenter; width: 15; height: 15; source: "qrc:/qml/icons/monitor-dark.svg"; smooth: true }
+                                                                    Image { anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; source: "qrc:/qml/icons/monitor-dark.svg"; smooth: true }
                                                                     Text {
                                                                         anchors.verticalCenter: parent.verticalCenter
                                                                         text: "HIDE WINDOWS TASKBAR"
-                                                                        font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
+                                                                        font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E"
                                                                     }
                                                                 }
                                                                 Text {
                                                                     text: TaskbarManager.statusText
-                                                                    font.family: "Segoe UI"; font.pixelSize: 10; font.weight: Font.DemiBold; color: "#475569"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.DemiBold; color: "#475569"
                                                                     elide: Text.ElideRight; width: parent.width
                                                                 }
                                                             }
                                                             Rectangle {
-                                                                width: 90; height: 28; radius: 11
+                                                                width: 108; height: 34; radius: 11
                                                                 anchors.verticalCenter: parent.verticalCenter
                                                                 color: restoreTbMa.containsMouse ? "#FDE68A" : "#FEF3C7"
                                                                 border.width: 2; border.color: "#1A1B2E"
                                                                 Row {
-                                                                    anchors.centerIn: parent; spacing: 4
-                                                                    Image { anchors.verticalCenter: parent.verticalCenter; width: 12; height: 12; source: "qrc:/qml/icons/restart-dark.svg"; smooth: true }
-                                                                    Text { anchors.verticalCenter: parent.verticalCenter; text: "RESTORE"; font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    anchors.centerIn: parent; spacing: 5
+                                                                    Image { anchors.verticalCenter: parent.verticalCenter; width: 14; height: 14; source: "qrc:/qml/icons/restart-dark.svg"; smooth: true }
+                                                                    Text { anchors.verticalCenter: parent.verticalCenter; text: "RESTORE"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                                 }
                                                                 MouseArea { id: restoreTbMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: TaskbarManager.restoreNow() }
                                                             }
                                                         }
                                                         Row {
-                                                            width: parent.width; height: 32; spacing: 6
+                                                            width: parent.width; height: 38; spacing: 6
                                                             Repeater {
                                                                 model: [
                                                                     { id: "primary", label: "PRIMARY ONLY" },
@@ -9023,13 +9319,13 @@ PanelWindow {
                                                                 ]
                                                                 delegate: Rectangle {
                                                                     required property var modelData
-                                                                    width: (parent.width - 12) / 3; height: 32; radius: 10
+                                                                    width: (parent.width - 12) / 3; height: 38; radius: 10
                                                                     color: themeHub.taskbarHideMode === modelData.id ? themeHub.accentB : (tbSegMa.containsMouse ? "#CBD5E1" : "#E2E8F0")
                                                                     border.width: 2; border.color: "#1A1B2E"
                                                                     Text {
                                                                         anchors.centerIn: parent
                                                                         text: modelData.label
-                                                                        font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E"
+                                                                        font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E"
                                                                     }
                                                                     MouseArea {
                                                                         id: tbSegMa
@@ -9042,70 +9338,70 @@ PanelWindow {
                                                     }
                                                 }
                                                 Rectangle {
-                                                    width: parent.width; height: 46; radius: 16
+                                                    width: parent.width; height: 54; radius: 16
                                                     color: SystemControl.launchAtStartup ? "#ECFDF5" : "#F8FAFC"
                                                     border.width: 2.5; border.color: "#1A1B2E"
                                                     Row {
                                                         anchors.fill: parent; anchors.leftMargin: 16; anchors.rightMargin: 14; spacing: 10
                                                         Row {
                                                             anchors.verticalCenter: parent.verticalCenter
-                                                            width: parent.width - 74
+                                                            width: parent.width - 82
                                                             spacing: 8
-                                                            Image { anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; source: "qrc:/qml/icons/rocket-dark.svg"; smooth: true }
+                                                            Image { anchors.verticalCenter: parent.verticalCenter; width: 17; height: 17; source: "qrc:/qml/icons/rocket-dark.svg"; smooth: true }
                                                             Text {
                                                                 anchors.verticalCenter: parent.verticalCenter
                                                                 text: "START WITH WINDOWS"
-                                                                font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E"
+                                                                font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E"
                                                             }
                                                         }
                                                         Rectangle {
                                                             anchors.verticalCenter: parent.verticalCenter
-                                                            width: 64; height: 28; radius: 14
+                                                            width: 72; height: 32; radius: 16
                                                             color: SystemControl.launchAtStartup ? themeHub.accentB : "#E2E8F0"
                                                             border.width: 2; border.color: "#1A1B2E"
                                                             Text {
                                                                 anchors.centerIn: parent
                                                                 text: SystemControl.launchAtStartup ? "ON" : "OFF"
-                                                                font.family: "Consolas"; font.pixelSize: 12; font.weight: Font.Black; color: "#1A1B2E"
+                                                                font.family: "Consolas"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E"
                                                             }
                                                         }
                                                     }
                                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: SystemControl.toggleLaunchAtStartup() }
                                                 }
                                                 Rectangle {
-                                                    width: parent.width; height: 42; radius: 16; color: "#E0F2FE"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    width: parent.width; height: 50; radius: 16; color: "#E0F2FE"; border.width: 2.5; border.color: "#1A1B2E"
                                                     Row {
-                                                        anchors.centerIn: parent; spacing: 7
-                                                        Image { anchors.verticalCenter: parent.verticalCenter; width: 15; height: 15; source: "qrc:/qml/icons/settings-dark.svg"; smooth: true }
-                                                        Text { anchors.verticalCenter: parent.verticalCenter; text: "OPEN WINDOWS SYSTEM SETTINGS"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        anchors.centerIn: parent; spacing: 8
+                                                        Image { anchors.verticalCenter: parent.verticalCenter; width: 17; height: 17; source: "qrc:/qml/icons/settings-dark.svg"; smooth: true }
+                                                        Text { anchors.verticalCenter: parent.verticalCenter; text: "OPEN WINDOWS SYSTEM SETTINGS"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
                                                     }
                                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: SystemControl.openSettings("ms-settings:") }
                                                 }
                                                 Rectangle {
-                                                    width: parent.width; height: 42; radius: 16; color: "#FEF3C7"; border.width: 2.5; border.color: "#1A1B2E"
+                                                    width: parent.width; height: 50; radius: 16; color: "#FEF3C7"; border.width: 2.5; border.color: "#1A1B2E"
                                                     Row {
-                                                        anchors.centerIn: parent; spacing: 7
-                                                        Image { anchors.verticalCenter: parent.verticalCenter; width: 15; height: 15; source: "qrc:/qml/icons/restart-dark.svg"; smooth: true }
-                                                        Text { anchors.verticalCenter: parent.verticalCenter; text: "RESET ALL WIDGET POSITIONS"; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        anchors.centerIn: parent; spacing: 8
+                                                        Image { anchors.verticalCenter: parent.verticalCenter; width: 17; height: 17; source: "qrc:/qml/icons/restart-dark.svg"; smooth: true }
+                                                        Text { anchors.verticalCenter: parent.verticalCenter; text: "RESET ALL WIDGET POSITIONS"; font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
                                                     }
                                                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: themeHub.resetWidgetPositions() }
                                                 }
                                                 Item {
-                                                    width: parent.width; height: 52
+                                                    width: parent.width; height: 58
                                                     Rectangle {
                                                         x: 3; y: 3
-                                                        width: parent.width - 3; height: 48; radius: 16; color: "#1A1B2E"
+                                                        width: parent.width - 3; height: 54; radius: 16; color: "#1A1B2E"
                                                     }
                                                     Rectangle {
                                                         x: quitSysMa.pressed ? 2 : 0
                                                         y: quitSysMa.pressed ? 2 : 0
-                                                        width: parent.width - 3; height: 48; radius: 16
+                                                        width: parent.width - 3; height: 54; radius: 16
                                                         color: quitSysMa.containsMouse ? "#FDA4AF" : "#FFE4E6"
                                                         border.width: 2.5; border.color: "#1A1B2E"
                                                         Row {
                                                             anchors.centerIn: parent; spacing: 8
-                                                            Image { anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; source: "qrc:/qml/icons/power-dark.svg"; smooth: true }
-                                                            Text { anchors.verticalCenter: parent.verticalCenter; text: "QUIT SEKAIDESK"; font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            Image { anchors.verticalCenter: parent.verticalCenter; width: 18; height: 18; source: "qrc:/qml/icons/power-dark.svg"; smooth: true }
+                                                            Text { anchors.verticalCenter: parent.verticalCenter; text: "QUIT SEKAIDESK"; font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black; color: "#1A1B2E" }
                                                         }
                                                         MouseArea {
                                                             id: quitSysMa
@@ -9141,7 +9437,7 @@ PanelWindow {
                                         // Hero SekaiPlate Banner
                                         Item {
                                             width: parent.width
-                                            height: 152
+                                            height: 158
 
                                             Rectangle {
                                                 x: 5; y: 5
@@ -9225,7 +9521,7 @@ PanelWindow {
                                                     // Center Title & Feature Chips
                                                     Column {
                                                         anchors.verticalCenter: parent.verticalCenter
-                                                        width: parent.width - 96 - 196 - 40
+                                                        width: parent.width - 96 - 216 - 40
                                                         spacing: 6
 
                                                         Row {
@@ -9238,16 +9534,16 @@ PanelWindow {
                                                             }
                                                             Rectangle {
                                                                 anchors.verticalCenter: parent.verticalCenter
-                                                                width: abtVerTxt.implicitWidth + 18; height: 26; radius: 13
+                                                                width: abtVerTxt.implicitWidth + 18; height: 28; radius: 14
                                                                 color: "#1A1B2E"
-                                                                Text { id: abtVerTxt; anchors.centerIn: parent; text: "v0.1.0 · WIN64"; font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#FFFFFF" }
+                                                                Text { id: abtVerTxt; anchors.centerIn: parent; text: "v0.3.0 · WIN64"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#FFFFFF" }
                                                             }
                                                             Rectangle {
                                                                 visible: aboutSubpage.comboCount > 0
                                                                 anchors.verticalCenter: parent.verticalCenter
-                                                                width: abtComboTxt.implicitWidth + 16; height: 26; radius: 13
+                                                                width: abtComboTxt.implicitWidth + 18; height: 28; radius: 14
                                                                 color: "#FEF3C7"; border.width: 2; border.color: "#1A1B2E"
-                                                                Text { id: abtComboTxt; anchors.centerIn: parent; text: "WONDERHOY ×" + aboutSubpage.comboCount + "!"; font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { id: abtComboTxt; anchors.centerIn: parent; text: "WONDERHOY ×" + aboutSubpage.comboCount + "!"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                             }
                                                         }
 
@@ -9255,7 +9551,7 @@ PanelWindow {
                                                             width: parent.width
                                                             elide: Text.ElideRight
                                                             text: "SekaiPop-Comic Desktop Environment for Windows · Qt 6.8.2 Quick & C++20 Win32 Layer"
-                                                            font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Bold
+                                                            font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Bold
                                                             color: Qt.rgba(26/255, 27/255, 46/255, 0.86)
                                                         }
 
@@ -9266,9 +9562,9 @@ PanelWindow {
                                                                 model: ["2.5D Phone Center", "SekaiOsd", "Live Visualizer", "Sticker Lyrics", "Weather Card"]
                                                                 delegate: Rectangle {
                                                                     required property string modelData
-                                                                    width: abtFeatTxt.implicitWidth + 16; height: 24; radius: 12
+                                                                    width: abtFeatTxt.implicitWidth + 18; height: 28; radius: 14
                                                                     color: Qt.rgba(1, 1, 1, 0.82); border.width: 2; border.color: "#1A1B2E"
-                                                                    Text { id: abtFeatTxt; anchors.centerIn: parent; text: modelData; font.family: "Segoe UI"; font.pixelSize: 11; font.weight: Font.Bold; color: "#1A1B2E" }
+                                                                    Text { id: abtFeatTxt; anchors.centerIn: parent; text: modelData; font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Bold; color: "#1A1B2E" }
                                                                 }
                                                             }
                                                         }
@@ -9277,7 +9573,7 @@ PanelWindow {
                                                     // Right Active Band Sticker Card
                                                     Rectangle {
                                                         anchors.verticalCenter: parent.verticalCenter
-                                                        width: 196; height: 86; radius: 18
+                                                        width: 216; height: 96; radius: 18
                                                         color: "#FFFDF7"; border.width: 3; border.color: "#1A1B2E"
                                                         Column {
                                                             anchors.centerIn: parent
@@ -9286,7 +9582,7 @@ PanelWindow {
                                                             Text {
                                                                 anchors.horizontalCenter: parent.horizontalCenter
                                                                 text: "ACTIVE UNIT THEME"
-                                                                font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black
+                                                                font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black
                                                                 color: "#64748B"
                                                             }
                                                             Text {
@@ -9295,14 +9591,14 @@ PanelWindow {
                                                                 horizontalAlignment: Text.AlignHCenter
                                                                 elide: Text.ElideRight
                                                                 text: themeHub.bandName.toUpperCase()
-                                                                font.family: "Segoe UI"; font.pixelSize: 16; font.weight: Font.Black
+                                                                font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black
                                                                 color: "#1A1B2E"
                                                             }
                                                             Rectangle {
                                                                 anchors.horizontalCenter: parent.horizontalCenter
-                                                                width: abtShortTxt.implicitWidth + 18; height: 22; radius: 11
+                                                                width: abtShortTxt.implicitWidth + 18; height: 26; radius: 13
                                                                 color: themeHub.accentA; border.width: 2; border.color: "#1A1B2E"
-                                                                Text { id: abtShortTxt; anchors.centerIn: parent; text: themeHub.bandShort; font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                Text { id: abtShortTxt; anchors.centerIn: parent; text: themeHub.bandShort; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                             }
                                                         }
                                                     }
@@ -9313,7 +9609,7 @@ PanelWindow {
                                         // Bottom Twin Cards: Creator Passport + Active Loadout
                                         Row {
                                             width: parent.width
-                                            height: parent.height - 170
+                                            height: parent.height - 176
                                             spacing: 20
 
                                             // Left Card: Creator Passport & Handwritten Signature
@@ -9325,120 +9621,127 @@ PanelWindow {
                                                 border.width: 3.5
                                                 border.color: "#1A1B2E"
 
-                                                Column {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 22
-                                                    spacing: 14
+                                                Flickable {
+                                                    id: abtLeftFlick
+                                                    anchors.fill: parent; anchors.margins: 22
+                                                    clip: true; boundsBehavior: Flickable.StopAtBounds
+                                                    contentWidth: width; contentHeight: abtLeftCol.implicitHeight
 
-                                                    Row {
-                                                        width: parent.width
-                                                        spacing: 10
-                                                        Rectangle {
-                                                            width: abtPassLbl.implicitWidth + 18; height: 26; radius: 13
-                                                            color: themeHub.accentA; border.width: 2; border.color: "#1A1B2E"
-                                                            Text { id: abtPassLbl; anchors.centerIn: parent; text: "CREATOR PASSPORT"; font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#1A1B2E" }
-                                                        }
-                                                        Text {
-                                                            anchors.verticalCenter: parent.verticalCenter
-                                                            text: "WINDOWS PORT & CUSTOM STUDIO"
-                                                            font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Bold; color: "#64748B"
-                                                        }
-                                                    }
+                                                    Column {
+                                                        id: abtLeftCol
+                                                        width: abtLeftFlick.width
+                                                        spacing: 12
 
-                                                    // Profile / Attribution Row
-                                                    Row {
-                                                        width: parent.width
-                                                        spacing: 14
-
-                                                        Rectangle {
-                                                            width: 64; height: 64; radius: 32
-                                                            color: "#F1F5F9"; border.width: 3; border.color: "#1A1B2E"
-                                                            clip: true
-                                                            Image {
-                                                                anchors.fill: parent
-                                                                anchors.margins: 2
-                                                                source: themeHub.profileAvatarUrl !== "" ? themeHub.profileAvatarUrl : themeHub.quickPanelAvatarUrl
-                                                                fillMode: Image.PreserveAspectCrop
-                                                                smooth: true
-                                                                visible: status === Image.Ready
+                                                        Row {
+                                                            width: parent.width
+                                                            spacing: 10
+                                                            Rectangle {
+                                                                width: abtPassLbl.implicitWidth + 18; height: 28; radius: 14
+                                                                color: themeHub.accentA; border.width: 2; border.color: "#1A1B2E"
+                                                                Text { id: abtPassLbl; anchors.centerIn: parent; text: "CREATOR PASSPORT"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
                                                             }
                                                             Text {
-                                                                anchors.centerIn: parent
-                                                                text: "✦"
-                                                                font.pixelSize: 26; font.weight: Font.Black; color: "#1A1B2E"
-                                                                visible: (themeHub.profileAvatarUrl === "" && themeHub.quickPanelAvatarUrl === "")
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                text: "WINDOWS PORT & CUSTOM STUDIO"
+                                                                font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#64748B"
                                                             }
                                                         }
 
-                                                        Column {
-                                                            anchors.verticalCenter: parent.verticalCenter
-                                                            width: parent.width - 78
-                                                            spacing: 3
-                                                            Row {
-                                                                spacing: 8
+                                                        // Profile / Attribution Row
+                                                        Row {
+                                                            width: parent.width
+                                                            spacing: 14
+
+                                                            Rectangle {
+                                                                width: 64; height: 64; radius: 32
+                                                                color: "#F1F5F9"; border.width: 3; border.color: "#1A1B2E"
+                                                                clip: true
+                                                                Image {
+                                                                    anchors.fill: parent
+                                                                    anchors.margins: 2
+                                                                    source: themeHub.profileAvatarUrl !== "" ? themeHub.profileAvatarUrl : themeHub.quickPanelAvatarUrl
+                                                                    fillMode: Image.PreserveAspectCrop
+                                                                    smooth: true
+                                                                    visible: status === Image.Ready
+                                                                }
                                                                 Text {
-                                                                    anchors.verticalCenter: parent.verticalCenter
-                                                                    text: themeHub.profileName || "Yozora"
-                                                                    font.family: "Segoe UI"; font.pixelSize: 20; font.weight: Font.Black; color: "#1A1B2E"
-                                                                }
-                                                                Rectangle {
-                                                                    anchors.verticalCenter: parent.verticalCenter
-                                                                    width: 64; height: 20; radius: 10
-                                                                    color: themeHub.accentB; border.width: 2; border.color: "#1A1B2E"
-                                                                    Text { anchors.centerIn: parent; text: "AUTHOR"; font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    anchors.centerIn: parent
+                                                                    text: "✦"
+                                                                    font.pixelSize: 26; font.weight: Font.Black; color: "#1A1B2E"
+                                                                    visible: (themeHub.profileAvatarUrl === "" && themeHub.quickPanelAvatarUrl === "")
                                                                 }
                                                             }
-                                                            Text {
-                                                                width: parent.width
-                                                                elide: Text.ElideRight
-                                                                text: "Windows Desktop Port, C++ Win32 & QML Craft"
-                                                                font.family: "Segoe UI"; font.pixelSize: 13; font.weight: Font.Bold; color: "#334155"
+
+                                                            Column {
+                                                                anchors.verticalCenter: parent.verticalCenter
+                                                                width: parent.width - 78
+                                                                spacing: 3
+                                                                Row {
+                                                                    spacing: 8
+                                                                    Text {
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        text: themeHub.profileName || "Yozora"
+                                                                        font.family: "Segoe UI"; font.pixelSize: 22; font.weight: Font.Black; color: "#1A1B2E"
+                                                                    }
+                                                                    Rectangle {
+                                                                        anchors.verticalCenter: parent.verticalCenter
+                                                                        width: 78; height: 24; radius: 12
+                                                                        color: themeHub.accentB; border.width: 2; border.color: "#1A1B2E"
+                                                                        Text { anchors.centerIn: parent; text: "AUTHOR"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    }
+                                                                }
+                                                                Text {
+                                                                    width: parent.width
+                                                                    elide: Text.ElideRight
+                                                                    text: "Windows Desktop Port, C++ Win32 & QML Craft"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 15; font.weight: Font.Bold; color: "#334155"
+                                                                }
+                                                                Text {
+                                                                    width: parent.width
+                                                                    elide: Text.ElideRight
+                                                                    text: "Inspired by SekaiPop (Hyprland) · Aesthetic Pop-Comic Shell"
+                                                                    font.family: "Segoe UI"; font.pixelSize: 14; font.weight: Font.DemiBold; color: "#64748B"
+                                                                }
                                                             }
-                                                            Text {
-                                                                width: parent.width
-                                                                elide: Text.ElideRight
-                                                                text: "Inspired by SekaiPop (Hyprland) · Aesthetic Pop-Comic Shell"
-                                                                font.family: "Segoe UI"; font.pixelSize: 12; font.weight: Font.DemiBold; color: "#64748B"
-                                                            }
-                                                        }
-                                                    }
-
-                                                    // Handwritten Signature Box
-                                                    Rectangle {
-                                                        width: parent.width
-                                                        height: Math.max(108, parent.height - 118)
-                                                        radius: 18
-                                                        color: "#FFFDF7"
-                                                        border.width: 2.5
-                                                        border.color: "#1A1B2E"
-                                                        clip: true
-
-                                                        Text {
-                                                            anchors.left: parent.left; anchors.leftMargin: 14
-                                                            anchors.top: parent.top; anchors.topMargin: 10
-                                                            text: "SIGNATURE // AUTHENTICATED"
-                                                            font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black
-                                                            color: "#94A3B8"
                                                         }
 
-                                                        Image {
-                                                            anchors.centerIn: parent
-                                                            anchors.verticalCenterOffset: 4
-                                                            width: parent.width - 48
-                                                            height: parent.height - 34
-                                                            source: "qrc:/qml/icons/handsig-yozora.png"
-                                                            fillMode: Image.PreserveAspectFit
-                                                            smooth: true
-                                                            mipmap: true
-                                                        }
-
+                                                        // Handwritten Signature Box
                                                         Rectangle {
-                                                            anchors.right: parent.right; anchors.rightMargin: 14
-                                                            anchors.bottom: parent.bottom; anchors.bottomMargin: 10
-                                                            width: abtSealTxt.implicitWidth + 14; height: 22; radius: 11
-                                                            rotation: -4
-                                                            color: themeHub.accentB; border.width: 2; border.color: "#1A1B2E"
-                                                            Text { id: abtSealTxt; anchors.centerIn: parent; text: "✦ SEKAI CERTIFIED"; font.family: "Consolas"; font.pixelSize: 9; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            width: parent.width
+                                                            height: Math.max(118, abtLeftFlick.height - 154)
+                                                            radius: 18
+                                                            color: "#FFFDF7"
+                                                            border.width: 2.5
+                                                            border.color: "#1A1B2E"
+                                                            clip: true
+
+                                                            Text {
+                                                                anchors.left: parent.left; anchors.leftMargin: 14
+                                                                anchors.top: parent.top; anchors.topMargin: 10
+                                                                text: "SIGNATURE // AUTHENTICATED"
+                                                                font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black
+                                                                color: "#94A3B8"
+                                                            }
+
+                                                            Image {
+                                                                anchors.centerIn: parent
+                                                                anchors.verticalCenterOffset: 6
+                                                                width: parent.width - 48
+                                                                height: parent.height - 38
+                                                                source: "qrc:/qml/icons/handsig-yozora.png"
+                                                                fillMode: Image.PreserveAspectFit
+                                                                smooth: true
+                                                                mipmap: true
+                                                            }
+
+                                                            Rectangle {
+                                                                anchors.right: parent.right; anchors.rightMargin: 14
+                                                                anchors.bottom: parent.bottom; anchors.bottomMargin: 10
+                                                                width: abtSealTxt.implicitWidth + 18; height: 26; radius: 13
+                                                                rotation: -4
+                                                                color: themeHub.accentB; border.width: 2; border.color: "#1A1B2E"
+                                                                Text { id: abtSealTxt; anchors.centerIn: parent; text: "✦ SEKAI CERTIFIED"; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -9453,62 +9756,69 @@ PanelWindow {
                                                 border.width: 3.5
                                                 border.color: "#1A1B2E"
 
-                                                Column {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 22
-                                                    spacing: 14
+                                                Flickable {
+                                                    id: abtRightFlick
+                                                    anchors.fill: parent; anchors.margins: 22
+                                                    clip: true; boundsBehavior: Flickable.StopAtBounds
+                                                    contentWidth: width; contentHeight: abtRightCol.implicitHeight
 
-                                                    Text {
-                                                        text: "ACTIVE SHELL & STACK"
-                                                        font.family: "Segoe UI"; font.pixelSize: 17; font.weight: Font.Black; color: "#1A1B2E"
-                                                    }
+                                                    Column {
+                                                        id: abtRightCol
+                                                        width: abtRightFlick.width
+                                                        spacing: 14
 
-                                                    Grid {
-                                                        width: parent.width
-                                                        columns: 2
-                                                        columnSpacing: 12
-                                                        rowSpacing: 12
-                                                        Repeater {
-                                                            model: [
-                                                                { k: "TOP BAR",       v: themeHub.barStyle.toUpperCase() + (themeHub.barAutoHide ? " · AUTO" : "") },
-                                                                { k: "BOTTOM DOCK",   v: themeHub.dockStyle.toUpperCase() + (themeHub.dockAutoHide ? " · DODGE" : "") },
-                                                                { k: "NOTIFICATIONS", v: themeHub.notifyStyle.toUpperCase() + (themeHub.osdEnabled ? " · OSD" : "") },
-                                                                { k: "DISPLAY",       v: themeHub.screenW + "×" + themeHub.screenH + " · " + aboutSubpage.activeWidgetCount + "/7 WGT" }
-                                                            ]
-                                                            delegate: Rectangle {
-                                                                required property var modelData
-                                                                width: (parent.width - 12) * 0.5
-                                                                height: 62
-                                                                radius: 14
-                                                                color: "#F8FAFC"
-                                                                border.width: 2.5
-                                                                border.color: "#1A1B2E"
-                                                                Column {
-                                                                    anchors.centerIn: parent
-                                                                    width: parent.width - 18
-                                                                    spacing: 2
-                                                                    Text { text: modelData.k; font.family: "Consolas"; font.pixelSize: 10; font.weight: Font.Black; color: "#64748B" }
-                                                                    Text { width: parent.width; elide: Text.ElideRight; text: modelData.v; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#1A1B2E" }
+                                                        Text {
+                                                            text: "ACTIVE SHELL & STACK"
+                                                            font.family: "Segoe UI"; font.pixelSize: 20; font.weight: Font.Black; color: "#1A1B2E"
+                                                        }
+
+                                                        Grid {
+                                                            width: parent.width
+                                                            columns: 2
+                                                            columnSpacing: 12
+                                                            rowSpacing: 12
+                                                            Repeater {
+                                                                model: [
+                                                                    { k: "TOP BAR",       v: themeHub.barStyle.toUpperCase() + (themeHub.barAutoHide ? " · AUTO" : "") },
+                                                                    { k: "BOTTOM DOCK",   v: themeHub.dockStyle.toUpperCase() + (themeHub.dockAutoHide ? " · DODGE" : "") },
+                                                                    { k: "NOTIFICATIONS", v: themeHub.notifyStyle.toUpperCase() + (themeHub.osdEnabled ? " · OSD" : "") },
+                                                                    { k: "DISPLAY",       v: themeHub.screenW + "×" + themeHub.screenH + " · " + aboutSubpage.activeWidgetCount + "/7 WGT" }
+                                                                ]
+                                                                delegate: Rectangle {
+                                                                    required property var modelData
+                                                                    width: (parent.width - 12) * 0.5
+                                                                    height: 68
+                                                                    radius: 14
+                                                                    color: "#F8FAFC"
+                                                                    border.width: 2.5
+                                                                    border.color: "#1A1B2E"
+                                                                    Column {
+                                                                        anchors.centerIn: parent
+                                                                        width: parent.width - 18
+                                                                        spacing: 2
+                                                                        Text { text: modelData.k; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#64748B" }
+                                                                        Text { width: parent.width; elide: Text.ElideRight; text: modelData.v; font.family: "Consolas"; font.pixelSize: 15; font.weight: Font.Black; color: "#1A1B2E" }
+                                                                    }
                                                                 }
                                                             }
                                                         }
-                                                    }
 
-                                                    Text {
-                                                        text: "ENGINE & TECHNOLOGIES"
-                                                        font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Black; color: "#64748B"
-                                                    }
+                                                        Text {
+                                                            text: "ENGINE & TECHNOLOGIES"
+                                                            font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Black; color: "#64748B"
+                                                        }
 
-                                                    Flow {
-                                                        width: parent.width
-                                                        spacing: 8
-                                                        Repeater {
-                                                            model: ["Qt 6.8.2 Quick", "C++20 / Win32", "D3D11 RHI", "DWM Blur", "WASAPI Peak", "SMTC Media", "LRCLIB Sync", "Open-Meteo"]
-                                                            delegate: Rectangle {
-                                                                required property string modelData
-                                                                width: abtTechTxt.implicitWidth + 18; height: 28; radius: 14
-                                                                color: "#F8FAFC"; border.width: 2; border.color: "#1A1B2E"
-                                                                Text { id: abtTechTxt; anchors.centerIn: parent; text: modelData; font.family: "Consolas"; font.pixelSize: 11; font.weight: Font.Bold; color: "#1A1B2E" }
+                                                        Flow {
+                                                            width: parent.width
+                                                            spacing: 8
+                                                            Repeater {
+                                                                model: ["Qt 6.8.2 Quick", "C++20 / Win32", "D3D11 RHI", "DWM Blur", "WASAPI Peak", "SMTC Media", "LRCLIB Sync", "Open-Meteo"]
+                                                                delegate: Rectangle {
+                                                                    required property string modelData
+                                                                    width: abtTechTxt.implicitWidth + 20; height: 30; radius: 15
+                                                                    color: "#F8FAFC"; border.width: 2; border.color: "#1A1B2E"
+                                                                    Text { id: abtTechTxt; anchors.centerIn: parent; text: modelData; font.family: "Consolas"; font.pixelSize: 13; font.weight: Font.Bold; color: "#1A1B2E" }
+                                                                }
                                                             }
                                                         }
                                                     }

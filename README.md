@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/banner.svg" alt="SekaiDesk — Project Sekai Pop-Comic Desktop Shell for Windows 10" width="90%">
+<img src="assets/banner.svg" alt="SekaiDesk — Project Sekai Pop-Comic Desktop Shell for Windows 10 & Windows 11" width="90%">
 
 <br><br>
 
@@ -10,17 +10,17 @@
 
 <div align="left">
 
-> ⚠️ **Note: SekaiDesk is currently built and tested on Windows 10 (64-bit).**
+> ✨ **Native Windows 10 & Windows 11 (64-bit) Support**
 >
-> Windows 11 compatibility is not yet verified — Windows 10 behavior and visual polish come first while Windows 11 testing is pending. Expect rough edges as features continue to be ported and refined.
+> Built and verified across both **Windows 10** and **Windows 11 (22H2 / 23H2 / 24H2+)** — including native Win11 XAML System Tray capture via `SekaiTrayHook.dll`, AppBar workarea reservation, native taskbar suppression with `--restore` failsafe, and zero-overhead Game Mode (`Hibernate` & `Zero-Footprint`).
 
 </div>
 
 <br>
 
-<img src="assets/shot-desktop-hero.png" alt="SekaiDesk running on Windows 10 with Transparent Top Bar, Capsule Dock, and Clock desktop widget" width="100%">
+<img src="assets/shot-desktop-hero.png" alt="SekaiDesk running on Windows with Transparent Top Bar, Capsule Dock, and Clock desktop widget" width="100%">
 
-<sub>Transparent Top Bar, Capsule Bottom Dock, real-time system stats (CPU / GPU / RAM), system tray integration, weather readout, and interactive desktop widgets.</sub>
+<sub>Transparent Top Bar, Capsule Bottom Dock, real-time system stats (CPU / GPU / RAM), Windows 10 &amp; 11 system tray integration, weather readout, and interactive desktop widgets.</sub>
 
 </div>
 
@@ -33,12 +33,12 @@
 <td width="50%" valign="top">
 <img src="assets/shot-quick-panel.png" alt="Quick Panel 2.5D smartphone overlay with Wi-Fi/Ethernet, Bluetooth, Volume, Brightness, Media card and Notifications" width="100%">
 <br><b>Quick Panel: a 2.5D smartphone control center</b><br>
-Slide up the portrait phone with <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd> (or click the right status pill) for Ethernet/Wi-Fi &amp; Bluetooth toggles, Keep Awake, microphone/speaker sliders, display brightness control, active SMTC media card, and notification feed. Incoming notifications also peek from the bottom-right corner.
+Slide up the portrait phone with <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd> (or click the right status pill) for Ethernet/Wi-Fi &amp; Bluetooth toggles, Game Mode &amp; Power Rail flyout (with 2-step Quit confirmation), microphone/speaker sliders, display brightness control, active SMTC media card, and notification feed. Incoming notifications also peek from the bottom-right corner.
 </td>
 <td width="50%" valign="top">
 <img src="assets/shot-settings-phone.png" alt="Landscape Settings Hub showing 01 Quick, 02 General, 03 Bar, 04 Desktop, 05 Hotkeys & System, and 06 About cards" width="100%">
 <br><b>Settings: flip the phone sideways</b><br>
-Rotates the Quick Panel into a landscape Settings Hub with quick band dots and six structured cards: <b>01 Quick</b>, <b>02 General</b> (Unit palettes, Wallpaper Match &amp; Clock/Weather), <b>03 Bar</b>, <b>04 Desktop</b>, <b>05 Hotkeys &amp; System</b>, and <b>06 About</b>.
+Rotates the Quick Panel into a landscape Settings Hub with SekaiPop slanted keycap tiles, active-band left-to-right hover gradient wipe, quick band dots, and six structured pages: <b>01 Quick</b>, <b>02 General</b> (Unit palettes, Wallpaper Match &amp; Clock/Weather), <b>03 Bar</b>, <b>04 Desktop</b>, <b>05 Hotkeys &amp; System</b> (Game Mode, RTSS Guard, Taskbar Hide), and <b>06 About</b>.
 </td>
 </tr>
 <tr>
@@ -60,7 +60,7 @@ Built from the ground up with **Qt 6.8 Quick** and a native **C++20 Win32 / WinR
 <tr>
 <td width="50%" valign="top">
 <b>Cohesive Pop-Comic Block Language</b><br>
-Every pill, toggle, phone modal, and desktop widget shares the same ink outline, inner cream border, and hard offset drop shadow that reacts cleanly on press and hover.
+Every pill, toggle, slanted keycap tile, phone modal, and desktop widget shares the same ink outline, inner white ring, left-to-right active-band hover wipe, and hard offset drop shadow that springs cleanly on press.
 </td>
 <td width="50%" valign="top">
 <b>7 Sekai Unit Themes + Live Wallpaper Match</b><br>
@@ -70,21 +70,21 @@ Switch instantly between <i>Virtual Singer</i>, <i>Leo/need</i>, <i>MORE MORE JU
 <tr>
 <td valign="top">
 <b>Interactive Multi-Monitor Desktop Widgets</b><br>
-Draggable &amp; resizable widgets across multiple displays: <b>Clock</b> (Keys, Tower, Sticker, Stack styles), <b>Weather</b> (Open-Meteo °C/°F), <b>Calendar</b>, <b>Profile Card</b>, <b>To-Do</b>, <b>Notes</b>, and real-time synced <b>Lyrics</b> (LRCLIB + Windows SMTC).
+Draggable &amp; resizable widgets across multiple displays: <b>Clock</b> (Keys, Tower, Sticker, Stack styles), <b>Weather</b> (Open-Meteo °C/°F), <b>Calendar</b>, <b>Profile Card</b>, <b>To-Do</b>, <b>Notes</b>, Polaroid <b>Photo Frames</b> with Washi Tape, and real-time synced <b>Lyrics</b> (LRCLIB + Windows SMTC).
 </td>
 <td valign="top">
-<b>Smart Top Bar &amp; Capsule Dock</b><br>
-Four styles (<i>Float, Straight, Transparent, Capsule</i>), active window &amp; media pill with seek/controls, live CPU/GPU/RAM telemetry, Win32 system tray icons, pinned app launcher, and fullscreen auto-hide.
+<b>Smart Top Bar, Capsule Dock &amp; Win10/11 Tray Hook</b><br>
+Four styles (<i>Float, Straight, Transparent, Capsule</i>), active window &amp; media pill with seek/controls, live CPU/GPU/RAM telemetry, hybrid Windows 10 &amp; Windows 11 System Tray monitor (`SekaiTrayHook.dll` passive Explorer hook + `NOTIFYICON_VERSION_4`), pinned app launcher, and AppBar workarea reservation.
 </td>
 </tr>
 <tr>
 <td valign="top">
-<b>Spotlight, Clipboard &amp; Drop Shelf</b><br>
-Built-in dock tools and global popups: <kbd>Alt</kbd> + <kbd>Space</kbd> Spotlight launcher (Win32 apps, calculator, quick theme/shell commands), <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>V</kbd> Clipboard history, and a drag-and-drop Drop Shelf.
+<b>True Zero-Overhead Game Mode</b><br>
+Auto-detects fullscreen games (or toggle via <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>G</kbd>) with <b>Hibernate</b> mode (releases GPU textures, pauses services, enables Win11 EcoQoS, unhooks keyboard/WinEvent hooks for zero input latency) and <b>Zero-Footprint</b> mode (`--wait-game` ~2 MB pure-Win32 watchdog), plus 1-click RivaTuner (`RTSS`) hook exclusion.
 </td>
 <td valign="top">
-<b>Custom Sekai OSD &amp; Audio Visualizer</b><br>
-Intercepts volume keys to replace the default Windows 10 volume box with a Pop-Comic Sekai OSD, alongside a real-time WASAPI audio spectrum visualizer (<i>Sekai, Bars, Ring, Dots, Wave</i>).
+<b>Custom Sekai OSD, GPU Shaders &amp; PowerTools</b><br>
+Intercepts volume/brightness/theme keys with a Pop-Comic Sekai OSD, alongside an 11-mode hardware-accelerated `.qsb` WASAPI audio visualizer (<i>Tide, Ribbons, Aurora, Pulse, Scope, Mirror, Ring, Dots, Sekai, Bars, Wave</i>), <kbd>Alt</kbd> + <kbd>Space</kbd> Spotlight (works even over fullscreen games), Clipboard History, and Bookshelf Drop Shelf.
 </td>
 </tr>
 </table>
@@ -95,10 +95,10 @@ Intercepts volume keys to replace the default Windows 10 volume box with a Pop-C
 
 | Component | Requirement / Notes |
 |---|---|
-| **Operating System** | **Windows 10 (64-bit)** (Tested &amp; primary target; Windows 11 support pending community/friend testing) |
-| **Graphics / Runtime** | Direct3D 11 capable GPU (Qt 6.8 Quick RHI D3D11 backend; Qt runtime DLLs bundled in portable zip) |
-| **Permissions** | Runs per-user; elevated/admin apps may require matching privilege level to observe fullscreen/tray state |
-| **Build Toolchain** *(source only)* | CMake 3.21+, C++20 compiler (MinGW-w64 GCC / LLVM-MinGW), Qt 6.8+ (`Quick`, `QuickControls2`, `Svg`, `ShaderEffect`) |
+| **Operating System** | **Windows 10 &amp; Windows 11 (64-bit)** |
+| **Graphics / Runtime** | Direct3D 11 capable GPU (Qt 6.8 Quick RHI D3D11 backend; Qt runtime DLLs bundled in installer &amp; portable zip) |
+| **Permissions** | Runs per-user (no admin UAC required); `SekaiTrayHook.dll` attaches passively to `explorer.exe` and auto-unloads on exit |
+| **Build Toolchain** *(source only)* | CMake 3.21+, C11 &amp; C++20 compiler (MinGW-w64 GCC / LLVM-MinGW), Qt 6.8+ (`Quick`, `QuickControls2`, `Svg`, `ShaderEffect`) |
 
 <img src="assets/divider.svg" alt="" width="100%">
 
@@ -106,35 +106,35 @@ Intercepts volume keys to replace the default Windows 10 volume box with a Pop-C
 
 ### Option 1 — Windows Installer (Recommended)
 
-1. Download **`SekaiDesk-Setup.exe`** from the [latest GitHub Release](https://github.com/Kyokkei/SekaiDesk/releases/latest).
-2. Run the installer — it installs cleanly per-user to `%LocalAppData%\Programs\SekaiDesk` (no admin prompt required) with Desktop &amp; Start Menu shortcuts and an uninstaller.
+1. Download **`SekaiDesk-Setup.exe`** from the [latest GitHub Release](https://github.com/Yuukitake/SekaiDesk/releases/latest).
+2. Run the setup wizard — choose your preferred installation folder (defaults to `%LocalAppData%\Programs\SekaiDesk`, no admin prompt required), optionally enable **Start with Windows**, and leave **"Launch SekaiDesk now"** checked on the final page to start immediately.
 
 ### Option 2 — Portable ZIP Build
 
-1. Download **`SekaiDesk-win64.zip`** from the [latest GitHub Release](https://github.com/Kyokkei/SekaiDesk/releases/latest).
-2. Extract the archive to any folder (e.g., `D:\Apps\SekaiDesk\`) and launch **`SekaiDesk.exe`**.
+1. Download **`SekaiDesk-win64.zip`** from the [latest GitHub Release](https://github.com/Yuukitake/SekaiDesk/releases/latest).
+2. Extract the archive to any folder (e.g., `D:\Apps\SekaiDesk\`) keeping `SekaiTrayHook.dll` beside `SekaiDesk.exe`, and launch **`SekaiDesk.exe`**.
 
 First launch starts automatically with **Peek Phone** notifications, **Capsule Bottom Dock**, and **Transparent Top Bar**, and writes your settings to `%APPDATA%\SekaiDesk\sekaidesk.json`.
 
 <details>
-<summary>CLI flags &amp; multi-instance testing</summary>
+<summary>CLI flags &amp; emergency taskbar restore</summary>
 
+- `SekaiDesk.exe --restore` — Immediately restores the native Windows 10/11 taskbar and exits.
 - `SekaiDesk.exe --instance <tag>` — Launch an isolated instance with its own mutex name for testing.
-- `SekaiDesk.exe --restore` — Emergency restore if layout/config needs a clean rescue.
 
 </details>
 
 ### Option 3 — Build from Source
 
 ```powershell
-git clone https://github.com/Kyokkei/SekaiDesk.git SekaiDesk
+git clone https://github.com/Yuukitake/SekaiDesk.git SekaiDesk
 cd SekaiDesk
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 
 # Deploy Qt 6 runtime DLLs & QML modules for standalone execution
 New-Item -ItemType Directory -Force installer/stage | Out-Null
-Copy-Item build/SekaiDesk.exe installer/stage/
+Copy-Item build/SekaiDesk.exe, build/SekaiTrayHook.dll installer/stage/
 windeployqt --release --qmldir qml installer/stage/SekaiDesk.exe
 
 # Optional: build Windows installer (requires NSIS / makensis)
@@ -142,7 +142,7 @@ makensis installer/SekaiDesk.nsi
 ```
 
 > [!TIP]
-> Ensure your Qt 6.8+ (`Core`, `Gui`, `Qml`, `Quick`, `Network`, plus QML runtime modules `Svg`, `QuickControls2`, `ShaderEffect`) bin folder and `windeployqt` are on `PATH`. Also include MinGW runtime DLLs (`libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) if distributing outside your toolchain environment.
+> Ensure your Qt 6.8+ (`Core`, `Gui`, `Qml`, `Quick`, `Network`, plus QML runtime modules `Svg`, `QuickControls2`, `ShaderEffect`) bin folder and `windeployqt` are on `PATH`. Also include MinGW runtime DLLs (`libstdc++-6.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`) for `SekaiDesk.exe` (`SekaiTrayHook.dll` is pure Win32 C with zero MinGW runtime dependencies).
 
 <img src="assets/divider.svg" alt="" width="100%">
 
@@ -150,10 +150,12 @@ makensis installer/SekaiDesk.nsi
 
 | Shortcut | Action |
 |---|---|
-| <kbd>Alt</kbd> + <kbd>Space</kbd> | Open **Spotlight** launcher, calculator &amp; quick commands |
+| <kbd>Alt</kbd> + <kbd>Space</kbd> | Open **Spotlight** launcher, calculator &amp; quick commands (works over fullscreen games) |
 | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>A</kbd> | Toggle **2.5D Quick Panel** smartphone |
 | <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>V</kbd> | Open **Clipboard History** popup |
-| <kbd>Volume Up</kbd> / <kbd>Down</kbd> / <kbd>Mute</kbd> | Show custom **Sekai Volume OSD** (suppresses stock Windows 10 OSD) |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>G</kbd> | Toggle **Game Mode** (instant Hibernate / Zero-Footprint) |
+| <kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>T</kbd> | Temporarily **Show / Hide native Windows Taskbar** |
+| <kbd>Volume Up</kbd> / <kbd>Down</kbd> / <kbd>Mute</kbd> | Show custom **Sekai Volume OSD** |
 | <kbd>Esc</kbd> | Close / back out of active phone, Settings, or tool popup |
 
 <img src="assets/divider.svg" alt="" width="100%">

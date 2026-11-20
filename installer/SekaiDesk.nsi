@@ -2,7 +2,7 @@
 Unicode True
 
 !define APP_NAME "SekaiDesk"
-!define APP_VERSION "0.1.0"
+!define APP_VERSION "0.3.0"
 !define APP_PUBLISHER "Yozora · SekaiDesk"
 !define APP_EXE "SekaiDesk.exe"
 !define UNINST_REG_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SekaiDesk"
@@ -12,6 +12,7 @@ OutFile "SekaiDesk-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\SekaiDesk"
 InstallDirRegKey HKCU "${UNINST_REG_KEY}" "InstallLocation"
 RequestExecutionLevel user
+AllowRootDirInstall false
 SetCompressor /SOLID lzma
 ShowInstDetails show
 ShowUninstDetails show
@@ -19,8 +20,8 @@ ShowUninstDetails show
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
 
-!define MUI_ICON "..\src\SekaiDesk.ico"
-!define MUI_UNICON "..\src\SekaiDesk.ico"
+!define MUI_ICON "../src/SekaiDesk.ico"
+!define MUI_UNICON "../src/SekaiDesk.ico"
 !define MUI_ABORTWARNING
 
 !insertmacro MUI_PAGE_WELCOME
@@ -28,14 +29,20 @@ ShowUninstDetails show
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 
-!define MUI_FINISHPAGE_RUN "$INSTDIR\${APP_EXE}"
+!define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Launch ${APP_NAME} now"
+!define MUI_FINISHPAGE_RUN_FUNCTION "LaunchAppFromInstaller"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
+
+Function LaunchAppFromInstaller
+    SetOutPath "$INSTDIR"
+    Exec '"$INSTDIR\${APP_EXE}"'
+FunctionEnd
 
 Section "SekaiDesk" SecMain
     SectionIn RO

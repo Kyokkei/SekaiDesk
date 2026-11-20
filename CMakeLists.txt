@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.21)
-project(SekaiDesk VERSION 0.1.0 LANGUAGES CXX)
+project(SekaiDesk VERSION 0.3.0 LANGUAGES C CXX)
 
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_AUTOMOC ON)
@@ -64,6 +66,8 @@ qt_add_resources(SekaiDesk "qml"
         qml/DropShelfBookshelf.qml
         qml/SekaiWashiTape.qml
         qml/SekaiDotField.qml
+        qml/SekaiSlant.qml
+        qml/SekaiHubTile.qml
         qml/ShelfMath.js
         qml/shaders/visualizer/aurora.frag.qsb
         qml/shaders/visualizer/dots.frag.qsb
@@ -196,9 +200,27 @@ target_link_libraries(SekaiDesk PRIVATE
 )
 
 if(WIN32)
+    add_library(SekaiTrayHook SHARED
+        src/trayhook/SekaiTrayHook.c
+        src/trayhook/TrayHookProtocol.h
+    )
+    set_target_properties(SekaiTrayHook PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "SekaiTrayHook"
+    )
+    target_include_directories(SekaiTrayHook PRIVATE src)
+    target_link_libraries(SekaiTrayHook PRIVATE user32 gdi32 kernel32)
+    if(MINGW)
+        target_link_options(SekaiTrayHook PRIVATE -static-libgcc)
+    endif()
+    add_dependencies(SekaiDesk SekaiTrayHook)
+
     target_link_libraries(SekaiDesk PRIVATE
         dwmapi user32 gdi32 shell32 ole32 oleaut32 ws2_32 winhttp iphlpapi psapi
     )
 endif()
 
 install(TARGETS SekaiDesk RUNTIME DESTINATION .)
+if(WIN32)
+    install(TARGETS SekaiTrayHook RUNTIME DESTINATION .)
+endif()
